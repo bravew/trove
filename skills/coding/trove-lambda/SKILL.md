@@ -1,0 +1,98 @@
+---
+name: trove-lambda
+description: |
+  AWS Lambda handler patterns with CDK infrastructure conventions.
+  Auto-activates when working with Lambda handler or CDK files.
+  Covers handler structure, SQS/SNS parsing, IPC patterns, Powertools logging, and CDK best practices.
+version: 1.0.0
+preamble-tier: 2
+user-invocable: false
+activation:
+  globs:
+    - "**/lambda_handler.py"
+    - "**/lambda_function.py"
+triggers:
+  - lambda handler
+  - aws lambda
+  - sqs handler
+  - sns handler
+benefits-from:
+  - trove-principle-idempotency
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# AWS Lambda Conventions
+
+## Handler Structure
+
+```python
+from aws_lambda_powertools import Logger
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+logger = Logger()
+
+@logger.inject_lambda_context(log_event=True)
+def handler(event: dict, context: LambdaContext) -> dict:
+    records = parse_event(event)
+    for record in records:
+        process_record(record)
+    return {"statusCode": 200}
+```
+
+## SQS/SNS Event Parsing
+
+```python
+def parse_sqs_event(event: dict) -> list[dict]:
+    return [json.loads(record["body"]) for record in event["Records"]]
+
+def parse_sns_via_sqs(event: dict) -> list[dict]:
+    messages = []
+    for record in event["Records"]:
+        body = json.loads(record["body"])
+        message = json.loads(body["Message"])
+        messages.append(message)
+    return messages
+```
+
+## Logging
+
+Follow the same logging rules as trove-python, plus:
+- Use `@logger.inject_lambda_context(log_event=True)` on handlers
+- Use `logger.append_keys()` for request-scoped context
+- Use `logger.exception()` in error handlers (captures stack trace for Sentry)
+
+## IPC Pattern (Backend Communication)
+
+```python
+async def call_backend(endpoint: str, payload: dict) -> dict:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{BACKEND_URL}/api/ipc/{endpoint}",
+            json=payload,
+            headers={"Authorization": f"Bearer {IPC_TOKEN}"},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+```
+
+## CDK Patterns
+
+- One construct per Lambda function
+- Use `PythonFunction` from `@aws-cdk/aws-lambda-python-alpha`
+- Environment variables via CDK `environment` prop, secrets via Secrets Manager
+- Set `memorySize`, `timeout`, and `reservedConcurrentExecutions`
+
+## AI Gotchas
+
+- **Cold starts**: Keep handler imports minimal; use lazy initialization
+- **Timeout**: Default 3s is too low — set explicitly (30s for API, 300s for batch)
+- **Event source**: Always validate event structure before processing
+- **Idempotency**: SQS may deliver messages more than once — design for at-least-once

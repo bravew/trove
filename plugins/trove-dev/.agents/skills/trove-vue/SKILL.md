@@ -1,0 +1,103 @@
+---
+name: trove-vue
+description: "Vue 3 Composition API conventions and best practices. Auto-activates when working with Vue single-file components. Covers reactivity, component patterns, Vue Router, and Pinia state management."
+paths:
+  - "**/*.vue"
+disable-model-invocation: true
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# Vue 3 Composition API Conventions
+
+## Script Setup
+
+Always use `<script setup lang="ts">` for single-file components:
+
+```vue
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+
+const count = ref(0)
+const doubled = computed(() => count.value * 2)
+
+onMounted(() => {
+  console.log('Component mounted')
+})
+</script>
+```
+
+## Reactivity (CRITICAL)
+
+- Use `ref()` for primitives, `reactive()` for objects
+- Always access `.value` on refs in script (auto-unwrapped in template)
+- Use `computed()` for derived state — never compute in template
+- Use `watchEffect()` for side effects that depend on reactive state
+
+```typescript
+// BAD — reactive object loses reactivity on destructure
+const { name, age } = reactive(user)
+
+// GOOD — use toRefs to keep reactivity
+const { name, age } = toRefs(reactive(user))
+
+// BEST — use ref for individual values
+const name = ref(user.name)
+```
+
+## Component Props & Emits
+
+```typescript
+// Type-safe props with defaults
+const props = withDefaults(defineProps<{
+  title: string
+  count?: number
+}>(), {
+  count: 0,
+})
+
+// Type-safe emits
+const emit = defineEmits<{
+  update: [value: string]
+  delete: [id: number]
+}>()
+```
+
+## API Calls
+
+Use composables for API integration:
+
+```typescript
+// composables/useUser.ts
+export function useUser(userId: Ref<string>) {
+  const user = ref<User | null>(null)
+  const loading = ref(false)
+
+  async function fetchUser() {
+    loading.value = true
+    try {
+      const { data } = await api.get(`/users/${userId.value}`)
+      user.value = data
+    } finally {
+      loading.value = false
+    }
+  }
+
+  watch(userId, fetchUser, { immediate: true })
+
+  return { user, loading, fetchUser }
+}
+```
+
+## AI Gotchas
+
+- **Template refs**: Use `ref<HTMLElement | null>(null)` for DOM element refs
+- **v-model**: Use `defineModel()` for two-way binding in custom components
+- **Async components**: Use `defineAsyncComponent()` for code splitting
+- **Provide/Inject**: Type with `InjectionKey<T>` for type safety

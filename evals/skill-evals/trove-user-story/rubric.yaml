@@ -1,0 +1,15 @@
+criteria:
+  role_value_format:
+    weight: 3
+    description: "Uses 'As a <role>, I want <capability>, so that <value>' (or equivalent)"
+  acceptance_criteria:
+    weight: 3
+    description: "Each story has 2-5 testable acceptance criteria"
+  includes_edge_cases:
+    weight: 2
+    description: "Documents at least one edge case (empty/error/concurrency) per story"
+  narrowly_scoped:
+    weight: 2
+    description: "Each story fits one increment; large scope is split rather than crammed"
+
+min_pass_score: 7.0

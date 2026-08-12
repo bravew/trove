@@ -1,0 +1,50 @@
+---
+name: trove-secret-scan
+description: |
+  Scan files for accidentally committed secrets, API keys, and credentials.
+  Flags common secret patterns and suggests remediation.
+version: 1.0.0
+preamble-tier: 2
+triggers:
+  - scan for secrets
+  - leaked credentials
+  - check for api keys
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# Secret Scanning
+
+## Patterns to Detect
+
+| Pattern | Regex | Severity |
+|---------|-------|----------|
+| AWS Access Key | `AKIA[0-9A-Z]{16}` | Critical |
+| AWS Secret Key | `[A-Za-z0-9/+=]{40}` near "secret" | Critical |
+| GitHub Token | `gh[ps]_[A-Za-z0-9_]{36,}` | Critical |
+| Slack Token | `xox[baprs]-[0-9a-zA-Z-]+` | Critical |
+| Generic API Key | `[a-zA-Z0-9]{32,}` near "api_key" | Warning |
+| Private Key | `-----BEGIN.*PRIVATE KEY-----` | Critical |
+| JWT Token | `eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+` | Warning |
+| Password in URL | `://[^:]+:[^@]+@` | Critical |
+
+## Remediation Steps
+
+1. **Immediately rotate** the exposed credential
+2. Remove the secret from code
+3. Add to `.gitignore` if it's a file
+4. Use environment variables or secret manager
+5. Check git history: `git log --all -p -- <file>` for old commits
+6. Consider BFG Repo-Cleaner if secret was ever committed
+
+## False Positive Handling
+
+- Test fixtures with dummy keys: annotate with `# noqa: secret`
+- Example/template files: use placeholder format `<YOUR_API_KEY_HERE>`
+- Hash values and UUIDs: not secrets, skip

@@ -1,0 +1,15 @@
+criteria:
+  illegal_states_unrepresentable:
+    weight: 3
+    description: "Models mutually exclusive state as a discriminated union instead of boolean + optional field pairs"
+  no_unsafe_casts:
+    weight: 3
+    description: "No `as` or `any`; uses `unknown` + narrowing or `satisfies` to keep types honest"
+  boundary_validation:
+    weight: 2
+    description: "Parses external/unknown data at the boundary into a domain type, rather than asserting it"
+  exhaustiveness:
+    weight: 2
+    description: "Handles every union member, with a `never` guard in the default branch where a switch is used"
+
+min_pass_score: 7.5

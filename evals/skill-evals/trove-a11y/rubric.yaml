@@ -1,0 +1,15 @@
+criteria:
+  semantic_html:
+    weight: 3
+    description: "Uses semantic HTML elements (button, nav, main) over generic divs"
+  aria_appropriate:
+    weight: 3
+    description: "ARIA only when semantic HTML is insufficient; no redundant aria-* on native elements"
+  keyboard_paths:
+    weight: 2
+    description: "Every interactive element is keyboard-reachable and operable"
+  contrast_called_out:
+    weight: 2
+    description: "Calls out color-contrast concerns for visible text"
+
+min_pass_score: 7.0

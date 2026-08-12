@@ -1,0 +1,3 @@
+Assistant: The applicable Trove workflow skill is `trove-brainstorm`.
+Assistant: I will use the design gate before implementation.
+Tool: Read

@@ -1,0 +1,59 @@
+---
+name: trove-a11y
+description: "Accessibility checking skill for web and mobile interfaces. Auto-activates on UI component files. Checks WCAG compliance and ARIA patterns."
+paths:
+  - "**/*.tsx"
+  - "**/*.jsx"
+  - "**/*.vue"
+  - "**/*.html"
+disable-model-invocation: true
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# Accessibility Conventions
+
+## ARIA Patterns
+
+- Use semantic HTML first (`<button>`, `<nav>`, `<main>`) before ARIA roles
+- Add `aria-label` to icon-only buttons
+- Use `aria-live="polite"` for dynamic content updates
+- Set `aria-expanded` on toggle buttons and disclosure widgets
+
+## Keyboard Navigation
+
+- All interactive elements must be keyboard accessible
+- Tab order follows visual flow (avoid `tabindex > 0`)
+- Escape closes modals and dropdowns
+- Enter/Space activates buttons and links
+
+## Color & Contrast
+
+- Text contrast: minimum 4.5:1 (AA), 7:1 (AAA)
+- Large text (18px+ or 14px+ bold): minimum 3:1
+- Don't rely on color alone to convey information
+
+## Forms
+
+```html
+<!-- Always associate labels -->
+<label for="email">Email</label>
+<input id="email" type="email" aria-describedby="email-help" required />
+<span id="email-help">We'll never share your email.</span>
+
+<!-- Error states -->
+<input id="name" aria-invalid="true" aria-errormessage="name-error" />
+<span id="name-error" role="alert">Name is required</span>
+```
+
+## AI Gotchas
+
+- **div soup**: Replace `<div onClick>` with `<button>` — divs aren't keyboard accessible
+- **Images**: Decorative images get `alt=""` not missing alt
+- **Focus trapping**: Modals must trap focus and return focus on close

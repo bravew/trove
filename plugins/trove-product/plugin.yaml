@@ -1,0 +1,67 @@
+name: trove-product
+version: "1.0.0"
+description: "PM skills: specs, user stories, release notes, triage"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [product, spec, user-story, release-notes, triage]
+category: product
+
+roles: [pm]
+
+skills:
+  - path: ./skills/trove-spec
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-user-story
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-release-notes
+    platforms: [claude, cursor, codex, agents]
+
+mcp_servers:
+  # Notion — product specs, roadmaps, and task databases (OAuth, no env vars)
+  notion:
+    type: http
+    url: https://mcp.notion.com/mcp
+    optional: true
+    description: "Notion workspace via OAuth for product specs, roadmaps, and task tracking."
+    tools:
+      - search_pages
+      - get_page
+      - create_page
+      - update_page
+      - query_database
+
+  # Linear — issue tracking for product triage (OAuth 2.1, no env vars)
+  linear:
+    type: http
+    url: https://mcp.linear.app/mcp
+    optional: true
+    description: "Linear issue tracking via OAuth for bug triage and sprint management."
+    tools:
+      - list_issues
+      - get_issue
+      - create_issue
+      - update_issue
+      - list_projects
+
+  # Slack — team communication (Confidential OAuth 2.0)
+  slack:
+    type: http
+    url: https://mcp.slack.com/mcp
+    optional: true
+    description: "Slack messaging via OAuth for release announcements and team communication."
+    tools:
+      - send_message
+      - search_messages
+      - list_channels
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []

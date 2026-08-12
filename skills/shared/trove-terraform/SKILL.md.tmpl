@@ -1,0 +1,55 @@
+---
+name: trove-terraform
+description: |
+  Terraform/OpenTofu conventions and best practices.
+  Auto-activates on .tf files.
+  Covers module structure, state management, and security patterns.
+version: 1.0.0
+preamble-tier: 2
+user-invocable: false
+activation:
+  globs:
+    - "**/*.tf"
+    - "**/*.tfvars"
+triggers:
+  - terraform module
+  - tf state
+  - opentofu
+---
+
+{{PREAMBLE}}
+
+# Terraform Conventions
+
+## File Organization
+
+```
+module/
+├── main.tf          # Primary resources
+├── variables.tf     # Input variables with descriptions
+├── outputs.tf       # Output values
+├── versions.tf      # Provider and terraform version constraints
+├── locals.tf        # Local values and computed expressions
+└── data.tf          # Data sources
+```
+
+## Naming
+
+- Resources: `snake_case` (e.g., `aws_ecs_service.backend`)
+- Variables: `snake_case` with descriptive names
+- Outputs: `snake_case`, prefixed with module purpose
+
+## Best Practices
+
+- Pin provider versions with `~>` constraint
+- Use `for_each` over `count` for resources with identity
+- Tag all resources with `Project`, `Environment`, `ManagedBy`
+- Store state in S3 with DynamoDB locking
+- Use separate state files per environment
+
+## AI Gotchas
+
+- **Destroy risks**: Always check `terraform plan` output before apply
+- **State drift**: Use `terraform import` for existing resources, never manual state edits
+- **Sensitive values**: Mark variables as `sensitive = true`, never output secrets
+- **Modules**: Pin module versions; don't use `ref = main` in production

@@ -1,0 +1,13 @@
+{
+  "name": "sentry-tools",
+  "description": "Sentry error tracking, debugging, and Seer AI analysis",
+  "source": {
+    "source": "github",
+    "repo": "getsentry/sentry-for-ai",
+    "ref": "main",
+    "sha": "72aadac7a1f4c7ae6b6c1bf8794aff2265b1f151"
+  },
+  "category": "observability",
+  "tags": ["sentry", "errors", "monitoring", "debugging"],
+  "notes": "Has .claude-plugin/ with plugin.json and marketplace.json. Previously named sentry-for-claude."
+}

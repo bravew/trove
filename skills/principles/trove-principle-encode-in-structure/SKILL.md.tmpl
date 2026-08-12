@@ -1,0 +1,27 @@
+---
+name: trove-principle-encode-in-structure
+description: |
+  Encode Lessons in Structure — when you catch yourself writing the same instruction a second time, encode it as a lint, rubric, metadata flag, runtime check, or script instead of more prose. The repeated instruction is the symptom.
+  Use when a correction recurs, or when tempted to add another "remember to…" line.
+version: 1.0.0
+preamble-tier: 1
+user-invocable: true
+triggers:
+  - encode this as a check
+  - stop repeating this instruction
+  - make this structural
+---
+
+{{PREAMBLE}}
+
+# Principle: Encode Lessons in Structure
+
+When the same instruction has to be written twice, the instruction is the symptom. Encode the lesson in structure so it enforces itself.
+
+Route by recurrence:
+
+- **One-off** → a note in the moment; no structure needed.
+- **Recurring** → a lint, a rubric criterion, a script, or a skill edit that makes the wrong thing fail loudly.
+- **Systemic** → a principle (like this one) that shapes future design.
+
+"I'll keep that in mind" doesn't persist across sessions or agents. A check does. This is the philosophy behind the marketplace's eval rubrics and `learnings.jsonl`; pairs with `trove-reflect` (mine a session for lessons and route each into a concrete edit).

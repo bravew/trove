@@ -1,0 +1,208 @@
+{
+  "plugins": [
+    {
+      "name": "trove-workflow",
+      "description": "Workflow methodology skills and session bootstrap",
+      "category": "workflow",
+      "tags": [
+        "workflow",
+        "methodology",
+        "bootstrap",
+        "planning"
+      ],
+      "roles": [
+        "dev"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-workflow",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini"
+      ],
+      "skills": [
+        "using-trove",
+        "trove-autoplan",
+        "trove-ship",
+        "trove-brainstorm",
+        "trove-debug",
+        "trove-plan",
+        "trove-execute-plan",
+        "trove-verify",
+        "trove-dispatch",
+        "trove-receive-review",
+        "trove-worktree",
+        "trove-write-skill",
+        "trove-unslop",
+        "trove-why",
+        "trove-refactor",
+        "trove-show-work",
+        "trove-reflect",
+        "trove-arena",
+        "trove-principle-laziness",
+        "trove-principle-data-shape",
+        "trove-principle-type-discipline",
+        "trove-principle-migrate-then-delete",
+        "trove-principle-idempotency",
+        "trove-principle-encode-in-structure"
+      ]
+    },
+    {
+      "name": "trove-dev",
+      "description": "Developer skills: coding patterns, code review, git workflow, debugging",
+      "category": "development",
+      "tags": [
+        "python",
+        "react",
+        "vue",
+        "swift",
+        "lambda",
+        "fastapi",
+        "typescript"
+      ],
+      "roles": [
+        "dev"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-dev",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents"
+      ],
+      "skills": [
+        "trove-python",
+        "trove-react",
+        "trove-react-best-practices",
+        "trove-react-view-transitions",
+        "trove-react-native",
+        "trove-vue",
+        "trove-swift",
+        "trove-lambda",
+        "trove-review",
+        "trove-commit",
+        "trove-explain",
+        "trove-typescript",
+        "trove-tdd",
+        "trove-architect",
+        "trove-perf"
+      ]
+    },
+    {
+      "name": "trove-design",
+      "description": "Designer skills: Figma review, accessibility, design systems",
+      "category": "design",
+      "tags": [
+        "figma",
+        "a11y",
+        "design-system",
+        "component-specs"
+      ],
+      "roles": [
+        "design"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-design",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents"
+      ],
+      "skills": [
+        "trove-design-review",
+        "trove-a11y",
+        "trove-component-spec",
+        "trove-visual-parity"
+      ]
+    },
+    {
+      "name": "trove-product",
+      "description": "PM skills: specs, user stories, release notes, triage",
+      "category": "product",
+      "tags": [
+        "spec",
+        "user-story",
+        "release",
+        "triage",
+        "roadmap"
+      ],
+      "roles": [
+        "pm"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-product",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents"
+      ],
+      "skills": [
+        "trove-spec",
+        "trove-user-story",
+        "trove-release-notes"
+      ]
+    },
+    {
+      "name": "trove-security",
+      "description": "Security review and vulnerability scanning",
+      "category": "security",
+      "tags": [
+        "owasp",
+        "secrets",
+        "audit",
+        "vulnerability"
+      ],
+      "roles": [
+        "dev",
+        "devops"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-security",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents"
+      ],
+      "skills": [
+        "trove-security-review",
+        "trove-secret-scan"
+      ]
+    },
+    {
+      "name": "trove-infra",
+      "description": "Infrastructure and DevOps automation",
+      "category": "infrastructure",
+      "tags": [
+        "aws",
+        "terraform",
+        "cdk",
+        "docker",
+        "ecs",
+        "lambda"
+      ],
+      "roles": [
+        "devops"
+      ],
+      "version": "2026.7.4",
+      "source": "./plugins/trove-infra",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents"
+      ],
+      "skills": [
+        "trove-terraform",
+        "trove-cdk",
+        "trove-docker"
+      ]
+    }
+  ]
+}

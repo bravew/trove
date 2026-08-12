@@ -1,0 +1,15 @@
+criteria:
+  uses_composition_api:
+    weight: 3
+    description: "Uses <script setup> Composition API, not Options API"
+  reactive_state:
+    weight: 3
+    description: "Uses ref/reactive correctly; no .value misuse in template"
+  props_typed:
+    weight: 2
+    description: "Props declared with TypeScript types via defineProps<{...}>"
+  no_options_api:
+    weight: 2
+    description: "Avoids data()/methods/computed Options API forms"
+
+min_pass_score: 7.0

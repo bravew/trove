@@ -1,0 +1,11 @@
+{
+  "name": "trove-bootstrap-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo fixture"
+  },
+  "dependencies": {
+    "react": "^19.0.0"
+  }
+}

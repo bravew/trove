@@ -1,0 +1,18 @@
+criteria:
+  runs_review_first:
+    weight: 3
+    description: "Runs trove-review on the diff before drafting the commit"
+  commit_via_stan_commit:
+    weight: 3
+    description: "Defers commit-message authoring to trove-commit's conventions"
+  decision_gate_before_push:
+    weight: 2
+    description: "Stops at a 'ready to push' Decision Gate before any push step"
+  no_version_bump:
+    weight: 2
+    description: "Does not bump VERSION or tag — release.yml owns those on merge"
+  prefers_small_stacked_prs:
+    weight: 2
+    description: "Favors small, reviewable, stacked PRs over one fat PR; treats each commit as a future PR"
+
+min_pass_score: 7.0

@@ -1,0 +1,15 @@
+criteria:
+  user_voice:
+    weight: 3
+    description: "Written in user-facing language, not implementation details or commit-speak"
+  what_users_can_do:
+    weight: 3
+    description: "Each entry leads with the new capability or fix from the user's perspective"
+  grouped_appropriately:
+    weight: 2
+    description: "Grouped by Added / Changed / Fixed / Removed"
+  no_internal_refs:
+    weight: 2
+    description: "No internal ticket numbers, file paths, or contributor names"
+
+min_pass_score: 7.0

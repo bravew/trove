@@ -1,0 +1,21 @@
+criteria:
+  identifies_issues:
+    weight: 3
+    description: "Correctly identifies the security/performance/correctness issues present"
+  actionable_feedback:
+    weight: 3
+    description: "Provides specific, actionable suggestions with code examples"
+  severity_assessment:
+    weight: 2
+    description: "Correctly categorizes severity (critical, major, minor, nit)"
+  no_false_positives:
+    weight: 2
+    description: "Does not flag correct code as problematic"
+  reader_load_flagged:
+    weight: 2
+    description: "Flags reader-load problems: layers to trace, mutable-state scope, one-caller wrappers to collapse"
+  findings_not_auto_applied:
+    weight: 2
+    description: "In deep/adversarial mode, synthesizes a verdict and sorts findings; does not silently rewrite the diff"
+
+min_pass_score: 7.0

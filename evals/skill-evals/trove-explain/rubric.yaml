@@ -1,0 +1,21 @@
+criteria:
+  audience_calibrated:
+    weight: 3
+    description: "Adjusts depth to the audience (junior dev vs domain expert)"
+  data_flow_traced:
+    weight: 3
+    description: "Traces input → transformations → output, not just listing functions"
+  cites_files:
+    weight: 2
+    description: "Cites file:line for every concrete claim about behavior"
+  no_filler:
+    weight: 2
+    description: "Avoids generic restatement of the question or 'Let me explain...' filler"
+  reads_real_code:
+    weight: 2
+    description: "Bases claims on the actual code, not guesses from file/symbol names"
+  scales_to_complexity:
+    weight: 2
+    description: "Explains simple subsystems in one pass; fans out parallel read-only exploration only when the subsystem warrants it"
+
+min_pass_score: 7.0

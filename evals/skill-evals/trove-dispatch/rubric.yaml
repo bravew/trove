@@ -1,0 +1,15 @@
+criteria:
+  dependency_map:
+    weight: 3
+    description: "Builds a dependency map before delegation"
+  keeps_blocker_local:
+    weight: 3
+    description: "Does not delegate the immediate next blocking task"
+  bounded_delegation:
+    weight: 2
+    description: "Delegated tasks have clear scope and outputs"
+  disjoint_writes:
+    weight: 2
+    description: "Assigns non-overlapping file ownership for code edits"
+
+min_pass_score: 7.0

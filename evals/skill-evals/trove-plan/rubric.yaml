@@ -1,0 +1,18 @@
+criteria:
+  checkpoint_sequence:
+    weight: 3
+    description: "Creates at most seven ordered checkpoints"
+  verifiable_each_step:
+    weight: 3
+    description: "Each checkpoint has concrete evidence or a command"
+  scope_mapping:
+    weight: 2
+    description: "Names likely files or subsystem ownership"
+  approval_gate:
+    weight: 2
+    description: "Stops for plan readiness before execution"
+  identifies_parallelism_and_shared_state:
+    weight: 2
+    description: "Runs the throughput checkpoint: blocking first steps, independent workstreams, shared mutable state, smallest safe decomposition"
+
+min_pass_score: 7.0

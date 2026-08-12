@@ -1,0 +1,15 @@
+criteria:
+  problem_first:
+    weight: 3
+    description: "Leads with the user/business problem, not the proposed solution"
+  acceptance_criteria:
+    weight: 3
+    description: "Lists explicit, testable acceptance criteria"
+  out_of_scope:
+    weight: 2
+    description: "Calls out what is NOT in scope to prevent drift"
+  open_questions:
+    weight: 2
+    description: "Surfaces open questions explicitly rather than papering over unknowns"
+
+min_pass_score: 7.0

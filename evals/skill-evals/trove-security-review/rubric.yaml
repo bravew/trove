@@ -1,0 +1,15 @@
+criteria:
+  vulnerability_detection:
+    weight: 4
+    description: "Identifies all OWASP Top 10 vulnerabilities present (injection, broken auth, XSS, etc.)"
+  remediation_quality:
+    weight: 3
+    description: "Provides correct, specific remediation steps with code examples"
+  severity_rating:
+    weight: 2
+    description: "Assigns appropriate severity (critical/high/medium/low) matching industry standards"
+  no_missed_issues:
+    weight: 1
+    description: "Does not miss obvious security issues in the code"
+
+min_pass_score: 7.5

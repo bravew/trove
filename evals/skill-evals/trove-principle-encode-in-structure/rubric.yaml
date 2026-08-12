@@ -1,0 +1,15 @@
+criteria:
+  encodes_recurring_lesson:
+    weight: 3
+    description: "Turns a repeated correction into a lint, rubric, check, script, or skill edit rather than another prose reminder"
+  routes_by_recurrence:
+    weight: 3
+    description: "Distinguishes one-off (note) from recurring (structure) from systemic (principle)"
+  rejects_keep_in_mind:
+    weight: 2
+    description: "Recognizes 'I'll remember' / a comment doesn't persist across sessions or agents"
+  enforcement_fails_loudly:
+    weight: 2
+    description: "Prefers a mechanism that makes the wrong thing fail visibly over advisory text"
+
+min_pass_score: 7.0

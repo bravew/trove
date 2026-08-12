@@ -1,0 +1,15 @@
+criteria:
+  visual_fidelity:
+    weight: 3
+    description: "Compares against the design spec and lists visual mismatches concretely"
+  interaction_consistency:
+    weight: 3
+    description: "Calls out interaction-pattern drift from the design system"
+  design_system_tokens:
+    weight: 2
+    description: "Flags hardcoded colors/spacing where a token exists"
+  structured_findings:
+    weight: 2
+    description: "Findings have severity (blocker / important / suggestion) and reference file:line or screen"
+
+min_pass_score: 7.0

@@ -1,0 +1,86 @@
+{
+  "name": "trove",
+  "interface": {
+    "displayName": "Open-source plugin marketplace for AI coding assistants"
+  },
+  "plugins": [
+    {
+      "name": "trove-workflow",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-workflow"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "workflow",
+      "description": "Workflow methodology skills and session bootstrap"
+    },
+    {
+      "name": "trove-dev",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-dev"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "development",
+      "description": "Developer skills: coding patterns, code review, git workflow, debugging"
+    },
+    {
+      "name": "trove-design",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-design"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "design",
+      "description": "Designer skills: Figma review, accessibility, design systems"
+    },
+    {
+      "name": "trove-product",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-product"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "product",
+      "description": "PM skills: specs, user stories, release notes, triage"
+    },
+    {
+      "name": "trove-security",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-security"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "security",
+      "description": "Security review and vulnerability scanning"
+    },
+    {
+      "name": "trove-infra",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-infra"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "infrastructure",
+      "description": "Infrastructure and DevOps automation"
+    }
+  ]
+}

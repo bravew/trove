@@ -1,0 +1,15 @@
+criteria:
+  one_row_per_decision:
+    weight: 3
+    description: "Logs one TSV row per decision with the ts/phase/decision/why/evidence/result columns, not a prose narrative"
+  evidence_populated:
+    weight: 3
+    description: "Evidence cell points at a real artifact (command output, file:line, metric), not 'looks right'"
+  append_only:
+    weight: 2
+    description: "Supersedes a wrong call with a new row rather than editing history"
+  injection_guard:
+    weight: 2
+    description: "Neutralizes a cell beginning with =,+,-,@ (formula-injection guard) via the helper"
+
+min_pass_score: 7.0

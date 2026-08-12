@@ -1,0 +1,42 @@
+{
+  "name": "trove",
+  "owner": {
+    "name": "Trove Contributors"
+  },
+  "metadata": {
+    "description": "Open-source plugin marketplace for AI coding assistants",
+    "version": "2026.7.4"
+  },
+  "plugins": [
+    {
+      "name": "trove-workflow",
+      "source": "./plugins/trove-workflow",
+      "description": "Workflow methodology skills and session bootstrap"
+    },
+    {
+      "name": "trove-dev",
+      "source": "./plugins/trove-dev",
+      "description": "Developer skills: coding patterns, code review, git workflow, debugging"
+    },
+    {
+      "name": "trove-design",
+      "source": "./plugins/trove-design",
+      "description": "Designer skills: Figma review, accessibility, design systems"
+    },
+    {
+      "name": "trove-product",
+      "source": "./plugins/trove-product",
+      "description": "PM skills: specs, user stories, release notes, triage"
+    },
+    {
+      "name": "trove-security",
+      "source": "./plugins/trove-security",
+      "description": "Security review and vulnerability scanning"
+    },
+    {
+      "name": "trove-infra",
+      "source": "./plugins/trove-infra",
+      "description": "Infrastructure and DevOps automation"
+    }
+  ]
+}

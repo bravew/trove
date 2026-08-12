@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+        name: Install dependencies
+
+      - run: bun run build
+        name: Build all stages
+
+      - run: bun run validate
+        name: Validate outputs
+
+      - run: bun run eval:gate
+        name: Quality gate
+
+      - name: Bump version
+        run: |
+          bun run bump-version
+          VERSION=$(cat VERSION)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Update CHANGELOG.md
+        # Prepend a new entry using the same auto-generated body GitHub
+        # puts in the Release below, so CHANGELOG.md and the Releases
+        # page stay in lockstep. Idempotent: skips if the entry already
+        # exists (handles same-day re-releases and reruns of partially
+        # failed workflows). Late same-day merges roll into the next
+        # day's entry, matching the GitHub Release semantics.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "CHANGELOG already contains v${VERSION}; skipping."
+            exit 0
+          fi
+          NOTES=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="v${VERSION}" \
+            -f target_commitish=main \
+            --jq .body)
+          if [ -z "$NOTES" ]; then
+            echo "::error::generate-notes returned an empty body for v${VERSION}; CHANGELOG not updated."
+            exit 1
+          fi
+          # Demote the body's headings (## What's Changed) one level so
+          # they nest under the new ## [VERSION] entry instead of sitting
+          # as siblings.
+          NOTES=$(printf '%s\n' "$NOTES" | sed 's/^## /### /')
+          INSERT_LINE=$(grep -n '^## \[' CHANGELOG.md | head -n 1 | cut -d: -f1)
+          if [ -z "$INSERT_LINE" ]; then
+            HEAD_LINES=$(wc -l < CHANGELOG.md)
+          else
+            HEAD_LINES=$((INSERT_LINE - 1))
+          fi
+          {
+            head -n "$HEAD_LINES" CHANGELOG.md
+            echo "## [${VERSION}] - $(date -u +%Y-%m-%d)"
+            echo
+            printf '%s\n' "$NOTES"
+            echo
+            if [ -n "$INSERT_LINE" ]; then
+              tail -n "+${INSERT_LINE}" CHANGELOG.md
+            fi
+          } > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
+          echo "Prepended v${VERSION} entry to CHANGELOG.md."
+
+      - name: Commit and tag
+        # CalVer (YYYY.M.D) means same-day merges share a tag. The first
+        # merge of the day creates and pushes the tag; later merges keep
+        # the tag at the first commit and only push the rebuilt outputs.
+        # The Create GitHub Release step below also no-ops on the second
+        # run, so the day's release reflects the first merge.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: release v${VERSION}"
+          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists; pushing commit only (same-day re-release)."
+            git push origin main
+          else
+            git tag "v${VERSION}"
+            git push origin main --tags
+          fi
+
+      - name: Create GitHub Release
+        # CalVer (YYYY.M.D) means same-day merges share a tag. The first run
+        # creates the release with auto-generated notes; subsequent same-day
+        # runs see the existing release and skip. The release for a busy day
+        # therefore reflects only the first merge of the day — edit the
+        # release manually after the day rolls over if richer narrative is
+        # wanted. See docs/contributing.md for the rationale.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists; skipping."
+          else
+            gh release create "v${VERSION}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "v${VERSION}" \
+              --generate-notes \
+              --target main
+          fi
+
+      - name: Deploy to canary
+        run: |
+          git push origin main:canary --force

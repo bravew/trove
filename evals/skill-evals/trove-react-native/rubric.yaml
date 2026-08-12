@@ -1,0 +1,15 @@
+criteria:
+  list_performance:
+    weight: 3
+    description: "Uses FlashList or virtualized lists correctly; memoizes items, stabilizes function refs, avoids inline objects in props"
+  animation_correctness:
+    weight: 3
+    description: "Uses Reanimated worklets, shared values, and gesture detectors correctly; animates GPU-friendly properties"
+  platform_apis:
+    weight: 2
+    description: "Reaches for platform-appropriate components (expo-image, native navigators, Pressable, native modals) over JS-only fallbacks"
+  state_discipline:
+    weight: 2
+    description: "Minimizes component state, uses dispatchers/refs for transient values, keeps scroll position out of state"
+
+min_pass_score: 7.0

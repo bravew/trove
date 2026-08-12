@@ -1,0 +1,15 @@
+criteria:
+  uses_hooks_correctly:
+    weight: 3
+    description: "Follows Rules of Hooks, uses useCallback/useMemo appropriately, no hooks in conditions"
+  tanstack_query_patterns:
+    weight: 3
+    description: "Uses useQuery/useMutation correctly with queryKey, error/loading states, invalidation"
+  typescript_types:
+    weight: 2
+    description: "Proper TypeScript types, no 'any', generic constraints where needed"
+  component_structure:
+    weight: 2
+    description: "Small focused components, proper prop types, composition over inheritance"
+
+min_pass_score: 7.0

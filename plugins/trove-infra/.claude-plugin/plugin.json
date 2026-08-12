@@ -1,0 +1,13 @@
+{
+  "name": "trove-infra",
+  "description": "Infrastructure and DevOps automation",
+  "version": "2026.7.4",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "skills": [
+    "./skills/trove-terraform",
+    "./skills/trove-cdk",
+    "./skills/trove-docker"
+  ]
+}

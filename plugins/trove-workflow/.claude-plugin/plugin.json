@@ -1,0 +1,47 @@
+{
+  "name": "trove-workflow",
+  "description": "Workflow methodology skills and session bootstrap",
+  "version": "2026.7.4",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "skills": [
+    "./skills/using-trove",
+    "./skills/trove-autoplan",
+    "./skills/trove-ship",
+    "./skills/trove-brainstorm",
+    "./skills/trove-debug",
+    "./skills/trove-plan",
+    "./skills/trove-execute-plan",
+    "./skills/trove-verify",
+    "./skills/trove-dispatch",
+    "./skills/trove-receive-review",
+    "./skills/trove-worktree",
+    "./skills/trove-write-skill",
+    "./skills/trove-unslop",
+    "./skills/trove-why",
+    "./skills/trove-refactor",
+    "./skills/trove-show-work",
+    "./skills/trove-reflect",
+    "./skills/trove-arena",
+    "./skills/trove-principle-laziness",
+    "./skills/trove-principle-data-shape",
+    "./skills/trove-principle-type-discipline",
+    "./skills/trove-principle-migrate-then-delete",
+    "./skills/trove-principle-idempotency",
+    "./skills/trove-principle-encode-in-structure"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

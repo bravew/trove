@@ -1,0 +1,15 @@
+criteria:
+  construct_composition:
+    weight: 3
+    description: "Composes constructs cleanly (one construct per concern; not god classes)"
+  iam_least_privilege:
+    weight: 3
+    description: "Grants least-privilege IAM, not '*' on resources"
+  removal_policy:
+    weight: 2
+    description: "Sets explicit removalPolicy on stateful resources (DynamoDB, S3) for prod"
+  env_aware:
+    weight: 2
+    description: "Differentiates dev vs prod (e.g., logRetention, instance sizes) via context or stage"
+
+min_pass_score: 7.0

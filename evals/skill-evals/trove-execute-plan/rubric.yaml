@@ -1,0 +1,15 @@
+criteria:
+  one_checkpoint:
+    weight: 3
+    description: "Works one checkpoint at a time"
+  verifies_before_next:
+    weight: 3
+    description: "Runs or records verification before advancing"
+  handles_failures:
+    weight: 2
+    description: "Does not skip failed checks without a clear gate"
+  final_verify:
+    weight: 2
+    description: "Routes to completion verification before done"
+
+min_pass_score: 7.0

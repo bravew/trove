@@ -1,0 +1,15 @@
+criteria:
+  module_structure:
+    weight: 3
+    description: "Resources organized into modules with clear inputs/outputs"
+  state_remote:
+    weight: 3
+    description: "Uses remote state with locking (S3+DynamoDB or equivalent), not local state"
+  least_privilege_iam:
+    weight: 2
+    description: "IAM resources use least privilege; no '*' on Resource where avoidable"
+  var_validation:
+    weight: 2
+    description: "Variables have type + description + validation where appropriate"
+
+min_pass_score: 7.0

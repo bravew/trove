@@ -1,0 +1,22 @@
+{
+  "name": "trove-security",
+  "description": "Security review and vulnerability scanning",
+  "version": "2026.7.4",
+  "skills": [
+    "./.agents/skills/trove-security-review",
+    "./.agents/skills/trove-secret-scan"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CURSOR_PLUGIN_ROOT}/hooks/security-check.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,695 @@
+#!/usr/bin/env bun
+/**
+ * Trove CLI — catalog browser + local install/state management.
+ *
+ * State lives under `~/.trove/` (or `$TROVE_HOME`). All state logic lives
+ * in `scripts/lib/trove-home.ts` and `scripts/lib/doctor.ts`; this file is
+ * a thin command dispatcher.
+ */
+
+import * as fs from "fs";
+import * as path from "path";
+import { execSync, spawnSync } from "child_process";
+import YAML from "yaml";
+import {
+  defaultConfig,
+  readConfig,
+  setConfigKey,
+  troveHome,
+  configPath,
+  snoozePath,
+  learningsPath,
+  slugFromRemote,
+  normalizeLearning,
+  appendLearning,
+  searchLearnings,
+  type TroveConfig,
+  type LearningInput,
+  type LearningType,
+} from "../scripts/lib/trove-home";
+import { runDoctor, type DoctorResult } from "../scripts/lib/doctor";
+
+const ROOT = path.resolve(import.meta.dir, "..");
+
+interface CatalogPlugin {
+  name: string;
+  description: string;
+  category?: string;
+  tags?: string[];
+  roles?: string[];
+  version?: string;
+  source: string;
+  platforms: string[];
+  skills: string[];
+  curated?: boolean;
+}
+
+interface Catalog {
+  plugins: CatalogPlugin[];
+}
+
+interface DepsArtifact {
+  benefitsFrom: Record<string, string[]>;
+  benefitsOf: Record<string, string[]>;
+  cycles: string[][];
+  unknownReferences: Array<{ skill: string; missing: string }>;
+}
+
+// ─── Load artifacts ─────────────────────────────────────────
+
+function loadCatalog(): Catalog {
+  const catalogPath = path.join(ROOT, "catalog.json");
+  if (!fs.existsSync(catalogPath)) {
+    console.error("catalog.json not found. Run 'bun run build' first.");
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
+}
+
+/**
+ * Load the skill-dependency artifact. Missing file is non-fatal — pre-P3
+ * builds don't have it; the CLI just won't show relationships in that case.
+ */
+function loadDeps(): DepsArtifact | null {
+  const depsPath = path.join(ROOT, "deps.json");
+  if (!fs.existsSync(depsPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(depsPath, "utf-8")) as DepsArtifact;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Catalog commands ────────────────────────────────────────
+
+function cmdSearch(query: string): void {
+  const catalog = loadCatalog();
+  const q = query.toLowerCase();
+
+  const matches = catalog.plugins.filter((p) => {
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.description.toLowerCase().includes(q) ||
+      p.tags?.some((t) => t.toLowerCase().includes(q)) ||
+      p.category?.toLowerCase().includes(q)
+    );
+  });
+
+  if (matches.length === 0) {
+    console.log(`No plugins found for "${query}".`);
+    return;
+  }
+
+  console.log(`Found ${matches.length} plugin(s) matching "${query}":\n`);
+  for (const p of matches) {
+    printPluginSummary(p);
+  }
+}
+
+function cmdList(options: { category?: string; role?: string; platform?: string }): void {
+  const catalog = loadCatalog();
+  let plugins = catalog.plugins;
+
+  if (options.category) {
+    plugins = plugins.filter((p) => p.category === options.category);
+  }
+  if (options.role) {
+    plugins = plugins.filter((p) => p.roles?.includes(options.role!));
+  }
+  if (options.platform) {
+    plugins = plugins.filter((p) => p.platforms.includes(options.platform!));
+  }
+
+  if (plugins.length === 0) {
+    console.log("No plugins found matching the filters.");
+    return;
+  }
+
+  console.log(`${plugins.length} plugin(s):\n`);
+  for (const p of plugins) {
+    printPluginSummary(p);
+  }
+}
+
+function cmdInfo(name: string): void {
+  const catalog = loadCatalog();
+  if (name.includes(":")) {
+    const [pluginName, skillName, ...rest] = name.split(":");
+    if (!pluginName || !skillName || rest.length > 0) {
+      console.error("Usage: trove info <plugin-name[:skill-name]>");
+      process.exit(1);
+    }
+    cmdSkillInfo(catalog, pluginName, skillName);
+    return;
+  }
+
+  const plugin = catalog.plugins.find((p) => p.name === name);
+
+  if (!plugin) {
+    console.error(`Plugin '${name}' not found.`);
+    console.log("\nAvailable plugins:");
+    for (const p of catalog.plugins) {
+      console.log(`  - ${p.name}`);
+    }
+    process.exit(1);
+  }
+
+  console.log(`\n${plugin.name} v${plugin.version || "?"}`);
+  console.log("─".repeat(40));
+  console.log(`Description: ${plugin.description}`);
+  console.log(`Category:    ${plugin.category || "—"}`);
+  console.log(`Roles:       ${plugin.roles?.join(", ") || "all"}`);
+  console.log(`Platforms:   ${plugin.platforms.join(", ") || "—"}`);
+  console.log(`Tags:        ${plugin.tags?.join(", ") || "—"}`);
+  console.log(`Source:      ${plugin.source}`);
+  console.log(`Curated:     ${plugin.curated ? "yes" : "no"}`);
+
+  if (plugin.skills.length > 0) {
+    const deps = loadDeps();
+    console.log(`\nSkills (${plugin.skills.length}):`);
+    for (const s of plugin.skills) {
+      console.log(`  • ${s}`);
+      if (deps) {
+        const benefitsFrom = deps.benefitsFrom[s] ?? [];
+        const benefitsOf = deps.benefitsOf[s] ?? [];
+        if (benefitsFrom.length > 0) {
+          console.log(`      benefits from: ${benefitsFrom.join(", ")}`);
+        }
+        if (benefitsOf.length > 0) {
+          console.log(`      benefits of:   ${benefitsOf.join(", ")}`);
+        }
+      }
+    }
+  }
+
+  console.log("\nInstall:");
+  console.log(`  Claude Code: /plugin install ${name}@trove`);
+  console.log(`  Cursor:      cursor plugin install ${name}@trove`);
+}
+
+function cmdSkillInfo(catalog: Catalog, pluginName: string, skillName: string): void {
+  const plugin = catalog.plugins.find((p) => p.name === pluginName);
+  if (!plugin) {
+    console.error(`Plugin '${pluginName}' not found.`);
+    process.exit(1);
+  }
+  if (!plugin.skills.includes(skillName)) {
+    console.error(`Skill '${skillName}' not found in plugin '${pluginName}'.`);
+    if (plugin.skills.length > 0) {
+      console.log("\nAvailable skills:");
+      for (const s of plugin.skills) console.log(`  - ${s}`);
+    }
+    process.exit(1);
+  }
+
+  const skillFile = findSkillFile(plugin, skillName);
+  const parsed = skillFile ? readSkillFile(skillFile) : null;
+  const deps = loadDeps();
+
+  console.log(`\n${plugin.name}:${skillName} v${plugin.version || "?"}`);
+  console.log("─".repeat(40));
+  console.log(`Plugin:      ${plugin.name}`);
+  console.log(`Description: ${parsed?.description || "—"}`);
+  console.log(`Source:      ${skillFile ? path.relative(ROOT, skillFile) : "—"}`);
+
+  if (deps) {
+    const benefitsFrom = deps.benefitsFrom[skillName] ?? [];
+    const benefitsOf = deps.benefitsOf[skillName] ?? [];
+    if (benefitsFrom.length > 0) console.log(`Benefits from: ${benefitsFrom.join(", ")}`);
+    if (benefitsOf.length > 0) console.log(`Benefits of:   ${benefitsOf.join(", ")}`);
+  }
+
+  if (parsed?.body) {
+    console.log("\nPreview:");
+    console.log(firstParagraph(parsed.body));
+  }
+}
+
+function cmdHealth(): void {
+  const catalog = loadCatalog();
+  const version = fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim();
+
+  console.log(`\nTrove Health`);
+  console.log("─".repeat(40));
+  console.log(`Version:     ${version}`);
+  console.log(`Plugins:     ${catalog.plugins.length}`);
+
+  const totalSkills = catalog.plugins.reduce((s, p) => s + p.skills.length, 0);
+  console.log(`Skills:      ${totalSkills}`);
+
+  const categories = new Set(catalog.plugins.map((p) => p.category).filter(Boolean));
+  console.log(`Categories:  ${categories.size} (${Array.from(categories).join(", ")})`);
+
+  const platforms = new Set(catalog.plugins.flatMap((p) => p.platforms));
+  console.log(`Platforms:   ${platforms.size} (${Array.from(platforms).join(", ")})`);
+
+  // Check for marketplace.json files
+  const marketplaceFiles = [
+    ".claude-plugin/marketplace.json",
+    ".cursor-plugin/marketplace.json",
+    ".agents/plugins/marketplace.json",
+  ];
+
+  console.log("\nMarketplace catalogs:");
+  for (const f of marketplaceFiles) {
+    const exists = fs.existsSync(path.join(ROOT, f));
+    console.log(`  ${exists ? "✓" : "✗"} ${f}`);
+  }
+
+  console.log("");
+}
+
+// ─── Catalog helpers ────────────────────────────────────────
+
+function printPluginSummary(p: CatalogPlugin): void {
+  const version = p.version ? ` v${p.version}` : "";
+  const curated = p.curated ? " [curated]" : "";
+  const platforms = p.platforms.length > 0 ? ` (${p.platforms.join(", ")})` : "";
+
+  console.log(`  ${p.name}${version}${curated}`);
+  console.log(`    ${p.description}`);
+  if (p.tags?.length) console.log(`    tags: ${p.tags.join(", ")}`);
+  console.log(`    roles: ${p.roles?.join(", ") || "all"}${platforms}`);
+  if (p.skills.length > 0) console.log(`    skills (${p.skills.length}): ${p.skills.join(", ")}`);
+  console.log("");
+}
+
+function findSkillFile(plugin: CatalogPlugin, skillName: string): string | null {
+  if (plugin.source.startsWith("./plugins/")) {
+    const pluginRoot = path.resolve(ROOT, plugin.source);
+    const local = path.join(pluginRoot, "skills", skillName);
+    for (const file of ["SKILL.md", "SKILL.md.tmpl"]) {
+      const candidate = path.join(local, file);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  const skillsRoot = path.join(ROOT, "skills");
+  if (!fs.existsSync(skillsRoot)) return null;
+  for (const category of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+    if (!category.isDirectory() || category.name.startsWith(".")) continue;
+    const dir = path.join(skillsRoot, category.name, skillName);
+    for (const file of ["SKILL.md", "SKILL.md.tmpl"]) {
+      const candidate = path.join(dir, file);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function readSkillFile(file: string): { description: string; body: string } | null {
+  const content = fs.readFileSync(file, "utf-8");
+  if (!content.startsWith("---\n")) return { description: "", body: content.trim() };
+  const fmEnd = content.indexOf("\n---", 4);
+  if (fmEnd === -1) return { description: "", body: content.trim() };
+  const raw = content.slice(4, fmEnd);
+  const body = content.slice(fmEnd + 4).trim();
+  try {
+    const parsed = (YAML.parse(raw) as Record<string, unknown>) ?? {};
+    return {
+      description: typeof parsed.description === "string" ? parsed.description.trim() : "",
+      body,
+    };
+  } catch {
+    return { description: "", body };
+  }
+}
+
+function firstParagraph(body: string): string {
+  const cleaned = body
+    .split("\n")
+    .filter((line) => !line.startsWith("<!-- AUTO-GENERATED") && !line.startsWith("<!-- Regenerate:"))
+    .join("\n")
+    .trim();
+  const [paragraph] = cleaned.split(/\n\s*\n/);
+  return paragraph.trim();
+}
+
+// ─── Slug resolution for current cwd ────────────────────────
+
+function currentProjectSlug(cwd: string = process.cwd()): string {
+  let remote: string | null = null;
+  try {
+    remote = execSync("git remote get-url origin", { cwd, stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    remote = null;
+  }
+  return slugFromRemote(remote, path.basename(cwd));
+}
+
+// ─── Config commands ────────────────────────────────────────
+
+function cmdConfigList(): void {
+  const cfg = readConfig();
+  console.log(`config: ${configPath()}`);
+  for (const key of Object.keys(defaultConfig()) as Array<keyof TroveConfig>) {
+    const value = (cfg as unknown as Record<string, unknown>)[key];
+    console.log(`  ${key}: ${formatValue(value)}`);
+  }
+}
+
+function cmdConfigGet(args: string[]): void {
+  if (!args[0]) usageExit("Usage: trove config get <key>");
+  const cfg = readConfig();
+  const value = (cfg as unknown as Record<string, unknown>)[args[0]];
+  if (value === undefined) {
+    console.error(`Unknown key '${args[0]}'.`);
+    process.exit(1);
+  }
+  console.log(formatValue(value));
+}
+
+function cmdConfigSet(args: string[]): void {
+  if (args.length < 2) usageExit("Usage: trove config set <key> <value>");
+  try {
+    const updated = setConfigKey(args[0], args.slice(1).join(" "));
+    const value = (updated as unknown as Record<string, unknown>)[args[0]];
+    console.log(`set ${args[0]} = ${formatValue(value)}`);
+  } catch (e) {
+    console.error(`✗ ${(e as Error).message}`);
+    process.exit(1);
+  }
+}
+
+function formatValue(v: unknown): string {
+  if (Array.isArray(v)) return v.length === 0 ? "[]" : v.join(", ");
+  return String(v);
+}
+
+// ─── Learnings commands ─────────────────────────────────────
+
+function cmdLearningsLog(args: string[]): void {
+  if (!args[0]) usageExit("Usage: trove learnings log '<json>'");
+  let input: LearningInput;
+  try {
+    input = JSON.parse(args[0]) as LearningInput;
+  } catch (e) {
+    console.error(`✗ Input is not valid JSON: ${(e as Error).message}`);
+    process.exit(1);
+  }
+  try {
+    const entry = normalizeLearning(input);
+    const slug = currentProjectSlug();
+    appendLearning(slug, entry);
+    console.log(`logged → ${learningsPath(slug)}`);
+  } catch (e) {
+    console.error(`✗ ${(e as Error).message}`);
+    process.exit(1);
+  }
+}
+
+function cmdLearningsSearch(args: string[]): void {
+  // Honor `learnings_enabled: false` short-circuit.
+  const cfg = readConfig();
+  if (!cfg.learnings_enabled) {
+    console.log("(learnings_enabled is false; nothing returned)");
+    return;
+  }
+
+  let skill: string | undefined;
+  let type: LearningType | undefined;
+  let query: string | undefined;
+  let limit: number | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const next = args[i + 1];
+    if (a === "--skill" && next) {
+      skill = next;
+      i++;
+    } else if (a === "--type" && next) {
+      type = next as LearningType;
+      i++;
+    } else if (a === "--query" && next) {
+      query = next;
+      i++;
+    } else if (a === "--limit" && next) {
+      limit = Number(next);
+      i++;
+    }
+  }
+
+  const cap = cfg.learnings_max_results;
+  const effectiveLimit = Math.min(limit ?? cap, cap);
+  const slug = currentProjectSlug();
+  const results = searchLearnings(slug, { skill, type, query, limit: effectiveLimit });
+
+  if (results.length === 0) {
+    console.log(`(no learnings for ${slug}${skill ? ` skill=${skill}` : ""}${type ? ` type=${type}` : ""}${query ? ` query=${query}` : ""})`);
+    return;
+  }
+
+  for (const r of results) {
+    console.log(`[${r.ts}] (${r.skill}, ${r.type}, conf ${r.confidence}) ${r.key}: ${r.insight}`);
+  }
+}
+
+// ─── Doctor ─────────────────────────────────────────────────
+
+function cmdDoctor(): void {
+  const result = runDoctor(ROOT);
+  printDoctorResult(result);
+  process.exit(result.errors > 0 ? 1 : 0);
+}
+
+function printDoctorResult(r: DoctorResult): void {
+  console.log(`Trove doctor — ${r.checks.length} checks`);
+  for (const c of r.checks) {
+    const sigil = c.severity === "ok" ? "✓" : c.severity === "warn" ? "⚠" : "✗";
+    console.log(`  ${sigil} ${c.name}: ${c.message}`);
+  }
+  console.log("");
+  if (r.errors > 0) console.log(`✗ ${r.errors} error(s), ${r.warnings} warning(s)`);
+  else if (r.warnings > 0) console.log(`✓ Passed with ${r.warnings} warning(s)`);
+  else console.log(`✓ All checks passed`);
+}
+
+// ─── Upgrade ────────────────────────────────────────────────
+
+interface UpgradeOpts {
+  check: boolean;
+  force: boolean;
+}
+
+function detectInstallType(workspace: string): "git-backed" | "vendored" | "unclear" {
+  const hasGit = fs.existsSync(path.join(workspace, ".git"));
+  const hasVersion = fs.existsSync(path.join(workspace, "VERSION"));
+  if (hasGit) return "git-backed";
+  if (hasVersion) return "vendored";
+  return "unclear";
+}
+
+function snoozeIsActive(): boolean {
+  const sp = snoozePath();
+  if (!fs.existsSync(sp)) return false;
+  const ageMs = Date.now() - fs.statSync(sp).mtimeMs;
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  return ageMs < sevenDays;
+}
+
+function queryRemoteHead(): string | null {
+  const result = spawnSync("git", ["ls-remote", "origin", "HEAD"], {
+    cwd: ROOT,
+    encoding: "utf-8",
+    timeout: 3000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0 || result.error) return null;
+  return result.stdout.trim().split(/\s+/)[0] || null;
+}
+
+function cmdUpgrade(args: string[]): void {
+  const opts: UpgradeOpts = {
+    check: args.includes("--check"),
+    force: args.includes("--force"),
+  };
+  const cfg = readConfig();
+  const installType = detectInstallType(ROOT);
+
+  console.log(`Trove upgrade — install type: ${installType}`);
+
+  if (installType === "vendored") {
+    console.log("");
+    console.log("This is a vendored install (no .git directory).");
+    console.log("Re-pull through the parent project's package manager rather than running trove upgrade here.");
+    process.exit(0);
+  }
+
+  if (installType === "unclear") {
+    console.log("");
+    console.log("Could not determine install type:");
+    console.log(`  .git present:    ${fs.existsSync(path.join(ROOT, ".git"))}`);
+    console.log(`  VERSION present: ${fs.existsSync(path.join(ROOT, "VERSION"))}`);
+    console.log("");
+    console.log("Refusing to act. Re-install or run from a known-good checkout.");
+    process.exit(1);
+  }
+
+  // git-backed path
+
+  // --check is detect-and-report only, so it must run BEFORE the snooze
+  // gate. A user investigating "is there an update?" should always get an
+  // answer; the snooze guard only protects against unintended mutation.
+  if (opts.check) {
+    console.log("(check mode — no changes will be made)");
+    try {
+      const local = execSync("git rev-parse HEAD", { cwd: ROOT }).toString().trim();
+      const remoteHead = queryRemoteHead();
+      console.log(`  local HEAD:   ${local}`);
+      console.log(`  remote HEAD:  ${remoteHead ?? "unavailable"}`);
+      if (!remoteHead) console.log("  status:       remote unavailable; retry later");
+      else if (local === remoteHead) console.log("  status:       up to date");
+      else console.log("  status:       upgrade available (run without --check to apply)");
+    } catch (e) {
+      console.error(`✗ git query failed: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (snoozeIsActive() && !opts.force && !cfg.auto_upgrade) {
+    console.log("(upgrade snoozed — `rm ~/.trove/update-snoozed` or pass --force to override)");
+    process.exit(0);
+  }
+
+  // Apply.
+  if (!opts.force && !cfg.auto_upgrade) {
+    console.log("Pass --force or set `auto_upgrade: true` in config to apply.");
+    process.exit(0);
+  }
+
+  const result = spawnSync("git", ["pull", "--ff-only"], { cwd: ROOT, stdio: "inherit" });
+  if (result.status !== 0) {
+    console.error("");
+    console.error("✗ git pull --ff-only failed. Resolve manually (uncommitted changes? diverged history?).");
+    process.exit(1);
+  }
+
+  // The pull may have changed package.json — sync deps before declaring
+  // success. Without this, the workspace can be left with stale node_modules
+  // / lockfile mismatches that surface as cryptic build errors later.
+  console.log("");
+  console.log("Syncing dependencies (bun install)...");
+  const installResult = spawnSync("bun", ["install"], { cwd: ROOT, stdio: "inherit" });
+  if (installResult.status !== 0) {
+    console.error("");
+    console.error("⚠ git pull succeeded but `bun install` failed. Resolve manually before next build.");
+    process.exit(1);
+  }
+
+  console.log("");
+  console.log("✓ Upgrade applied. Run `trove doctor` to verify.");
+}
+
+// ─── Help ───────────────────────────────────────────────────
+
+function usage(): void {
+  const version = fs.existsSync(path.join(ROOT, "VERSION"))
+    ? fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim()
+    : "unknown";
+  console.log(`Trove CLI v${version}`);
+  console.log("");
+  console.log("Catalog commands:");
+  console.log("  search <query>              Search plugins by keyword");
+  console.log("  list [--category=X]         List plugins (filter by category, role, platform)");
+  console.log("  info <plugin[:skill]>       Show plugin or skill details");
+  console.log("  health                      Check marketplace health");
+  console.log("");
+  console.log("Local install commands:");
+  console.log("  config list                 Show effective config");
+  console.log("  config get <key>            Read a single value");
+  console.log("  config set <key> <value>    Persist a value");
+  console.log("  learnings log <json>        Append a learning entry");
+  console.log("  learnings search [...]      Search project learnings");
+  console.log("    --skill <name>            Filter by skill");
+  console.log("    --type <type>             Filter by type");
+  console.log("    --query <text>            Substring match on insight + key");
+  console.log("    --limit <n>               Cap results (capped by learnings_max_results)");
+  console.log("  doctor                      Read-only health checks");
+  console.log("  upgrade [--check|--force]   Upgrade the local install");
+  console.log("");
+  console.log("Examples:");
+  console.log('  trove search "security"');
+  console.log("  trove list --role=design");
+  console.log("  trove info trove-dev");
+  console.log("");
+  console.log(`State: ${troveHome()}  (override with TROVE_HOME)`);
+}
+
+function usageExit(msg: string): never {
+  console.error(msg);
+  process.exit(1);
+}
+
+// ─── Dispatch ───────────────────────────────────────────────
+
+const [command, ...commandArgs] = process.argv.slice(2);
+const [sub, ...rest] = commandArgs;
+
+switch (command) {
+  case "search":
+    if (!commandArgs[0]) {
+      console.error("Usage: trove search <query>");
+      process.exit(1);
+    }
+    cmdSearch(commandArgs.join(" "));
+    break;
+
+  case "list": {
+    const options: { category?: string; role?: string; platform?: string } = {};
+    for (const arg of commandArgs) {
+      if (arg.startsWith("--category=")) options.category = arg.split("=")[1];
+      if (arg.startsWith("--role=")) options.role = arg.split("=")[1];
+      if (arg.startsWith("--platform=")) options.platform = arg.split("=")[1];
+    }
+    cmdList(options);
+    break;
+  }
+
+  case "info":
+    if (!commandArgs[0]) {
+      console.error("Usage: trove info <plugin-name>");
+      process.exit(1);
+    }
+    cmdInfo(commandArgs[0]);
+    break;
+
+  case "health":
+    cmdHealth();
+    break;
+
+  case "config":
+    if (sub === "list") cmdConfigList();
+    else if (sub === "get") cmdConfigGet(rest);
+    else if (sub === "set") cmdConfigSet(rest);
+    else usageExit("Usage: trove config <list|get|set>");
+    break;
+
+  case "learnings":
+    if (sub === "log") cmdLearningsLog(rest);
+    else if (sub === "search") cmdLearningsSearch(rest);
+    else usageExit("Usage: trove learnings <log|search>");
+    break;
+
+  case "doctor":
+    cmdDoctor();
+    break;
+
+  case "upgrade":
+    cmdUpgrade(commandArgs);
+    break;
+
+  case undefined:
+  case "help":
+  case "--help":
+  case "-h":
+    usage();
+    break;
+
+  default:
+    console.error(`Unknown command: ${command}`);
+    usage();
+    process.exit(1);
+}

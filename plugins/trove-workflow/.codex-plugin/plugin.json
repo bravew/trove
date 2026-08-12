@@ -1,0 +1,11 @@
+{
+  "name": "trove-workflow",
+  "description": "Workflow methodology skills and session bootstrap",
+  "version": "2026.7.4",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "trove-workflow",
+    "category": "workflow",
+    "shortDescription": "Workflow methodology skills and session bootstrap"
+  }
+}

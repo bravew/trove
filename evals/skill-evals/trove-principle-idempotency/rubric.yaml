@@ -1,0 +1,15 @@
+criteria:
+  converges_on_repeat:
+    weight: 3
+    description: "Designs the operation so running it twice yields the same end state (dedupe/idempotency key, upsert)"
+  survives_partial_failure:
+    weight: 3
+    description: "Handles a crash halfway through and re-run without corrupting state"
+  applies_three_question_test:
+    weight: 2
+    description: "Reasons through runs-twice / crashed-halfway / converges before declaring it safe"
+  robust_locks_and_cleanup:
+    weight: 2
+    description: "Detects stale locks by PID/content and reconciles rather than assuming a fresh start"
+
+min_pass_score: 7.0

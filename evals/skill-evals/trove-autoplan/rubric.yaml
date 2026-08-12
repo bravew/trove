@@ -1,0 +1,15 @@
+criteria:
+  delegates_to_leaves:
+    weight: 3
+    description: "Calls out to trove-spec/trove-user-story/trove-release-notes by name; doesn't inline their detail"
+  stages_in_order:
+    weight: 3
+    description: "Runs spec → stories → release-note preview, in that sequence"
+  decision_gate_present:
+    weight: 2
+    description: "Surfaces a Decision Gate when scope or depth is ambiguous"
+  output_shape:
+    weight: 2
+    description: "Final output is a consolidated planning packet (spec / stories / release framing / open questions)"
+
+min_pass_score: 7.0

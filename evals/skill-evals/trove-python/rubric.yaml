@@ -1,0 +1,18 @@
+criteria:
+  follows_async_patterns:
+    weight: 3
+    description: "Uses httpx.AsyncClient, asyncio.sleep, async with — never blocking calls in async"
+  uses_type_hints:
+    weight: 2
+    description: "All function signatures have type hints (params + return)"
+  proper_logging:
+    weight: 2
+    description: "Uses logger.exception in except blocks, static messages for warning/error"
+  error_handling:
+    weight: 2
+    description: "Specific exceptions, no bare except, proper FastAPI HTTPException usage"
+  pydantic_v2:
+    weight: 1
+    description: "Uses ConfigDict, not class Config. Uses model_validate, not parse_obj"
+
+min_pass_score: 7.0

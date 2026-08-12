@@ -1,0 +1,88 @@
+---
+description: "React 19 coding conventions and performance patterns. Auto-activates when working with React/TypeScript files. Covers hooks, state management, TanStack Query, Zustand, immutable updates, and component conventions."
+globs: **/*.tsx, **/*.jsx
+alwaysApply: false
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# React 19 Conventions
+
+## Immutable State Updates (CRITICAL)
+
+React StrictMode double-invokes state updaters. Mutating objects causes duplicated side effects.
+
+```typescript
+// BAD — mutation causes bugs in StrictMode
+setMessages(prev => {
+  prev[prev.length - 1].text += content; // MUTATION!
+  return [...prev];
+});
+
+// GOOD — immutable update
+setMessages(prev => {
+  const updated = [...prev];
+  const lastIndex = updated.length - 1;
+  updated[lastIndex] = { ...updated[lastIndex], text: updated[lastIndex].text + content };
+  return updated;
+});
+```
+
+## Zustand Selectors (CRITICAL)
+
+Always use selectors — never destructure the store directly:
+
+```typescript
+// BAD — subscribes to entire store, re-renders on ANY change
+const { darkMode } = useGlobalStore();
+
+// GOOD — subscribes only to darkMode
+const darkMode = useGlobalStore(state => state.darkMode);
+
+// GOOD — multiple values with useShallow
+import { useShallow } from 'zustand/shallow';
+const { username, email } = useUserStore(
+  useShallow(state => ({ username: state.username, email: state.email }))
+);
+```
+
+## Component Patterns
+
+- Prefer function components with hooks
+- Use `React.memo()` only when profiling shows re-render cost
+- Extract custom hooks for reusable logic
+- Keep components under 200 lines — split into sub-components
+
+## TanStack Query
+
+```typescript
+// Queries — always provide staleTime
+const { data, isLoading } = useQuery({
+  queryKey: ['users', userId],
+  queryFn: () => fetchUser(userId),
+  staleTime: 5 * 60 * 1000,
+});
+
+// Mutations — invalidate related queries on success
+const mutation = useMutation({
+  mutationFn: updateUser,
+  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+});
+```
+
+## Error Boundaries
+
+Wrap route-level components with error boundaries. Never let errors crash the full app.
+
+## AI Gotchas
+
+- **useEffect dependencies**: Always include all referenced values in the dependency array
+- **Ref vs State**: Use `useRef` for values that don't trigger re-renders (timers, DOM refs)
+- **Key prop**: Use stable, unique IDs — never use array index as key for dynamic lists
+- **Event handlers**: Define inline only for simple logic; extract for complex handlers

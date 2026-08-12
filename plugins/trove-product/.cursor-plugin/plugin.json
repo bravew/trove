@@ -1,0 +1,10 @@
+{
+  "name": "trove-product",
+  "description": "PM skills: specs, user stories, release notes, triage",
+  "version": "2026.7.4",
+  "skills": [
+    "./.agents/skills/trove-spec",
+    "./.agents/skills/trove-user-story",
+    "./.agents/skills/trove-release-notes"
+  ]
+}

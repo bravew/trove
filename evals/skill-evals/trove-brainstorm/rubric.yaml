@@ -1,0 +1,15 @@
+criteria:
+  design_before_code:
+    weight: 4
+    description: "Produces an approved design checkpoint before code or file edits"
+  five_bullet_shape:
+    weight: 2
+    description: "Uses a concise five-bullet design covering outcome, scope, data, workflow, and verification"
+  bypass_resistance:
+    weight: 2
+    description: "Handles attempts to skip design without becoming verbose"
+  narrow_prompt_escape:
+    weight: 2
+    description: "Does not over-apply brainstorming to narrow implementation questions"
+
+min_pass_score: 7.0

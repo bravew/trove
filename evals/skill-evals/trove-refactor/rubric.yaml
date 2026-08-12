@@ -1,0 +1,15 @@
+criteria:
+  pins_behavior_first:
+    weight: 3
+    description: "Captures current behavior with a characterization test/snapshot before changing structure; does not treat type-check/lint as the pin"
+  no_behavior_smuggling:
+    weight: 3
+    description: "Keeps behavior constant; if behavior must change, splits it into a separate named change with its own test"
+  migrate_then_delete:
+    weight: 2
+    description: "Migrates callers and removes the legacy API in the same wave rather than leaving a compatibility shim"
+  proves_unchanged:
+    weight: 2
+    description: "Re-runs the pinned behavior against the real artifact to prove parity"
+
+min_pass_score: 7.5

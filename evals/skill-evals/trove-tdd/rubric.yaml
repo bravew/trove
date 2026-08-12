@@ -1,0 +1,15 @@
+criteria:
+  test_before_fix:
+    weight: 4
+    description: "Writes or identifies a test that fails before the change, for the expected reason, before touching the fix"
+  narrowest_target:
+    weight: 2
+    description: "Picks the narrowest viable check (unit over integration over E2E)"
+  escape_hatch_when_costly:
+    weight: 2
+    description: "Declines to force a test and states why when the path is expensive, brittle-mock-heavy, or unclear"
+  reports_evidence:
+    weight: 2
+    description: "Names the failing-before and passing-after run results, not just 'done'"
+
+min_pass_score: 7.0

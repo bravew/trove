@@ -1,0 +1,81 @@
+name: trove
+owner:
+  name: Trove Contributors
+metadata:
+  description: Open-source plugin marketplace for AI coding assistants
+  version: 2026.7.4
+  pluginRoot: ./plugins
+plugins:
+  - name: trove-workflow
+    source: trove-workflow
+    description: Workflow methodology skills and session bootstrap
+    category: workflow
+    tags:
+      - workflow
+      - methodology
+      - bootstrap
+      - planning
+    roles:
+      - dev
+  - name: trove-dev
+    source: trove-dev
+    description: "Developer skills: coding patterns, code review, git workflow, debugging"
+    category: development
+    tags:
+      - python
+      - react
+      - vue
+      - swift
+      - lambda
+      - fastapi
+      - typescript
+    roles:
+      - dev
+  - name: trove-design
+    source: trove-design
+    description: "Designer skills: Figma review, accessibility, design systems"
+    category: design
+    tags:
+      - figma
+      - a11y
+      - design-system
+      - component-specs
+    roles:
+      - design
+  - name: trove-product
+    source: trove-product
+    description: "PM skills: specs, user stories, release notes, triage"
+    category: product
+    tags:
+      - spec
+      - user-story
+      - release
+      - triage
+      - roadmap
+    roles:
+      - pm
+  - name: trove-security
+    source: trove-security
+    description: Security review and vulnerability scanning
+    category: security
+    tags:
+      - owasp
+      - secrets
+      - audit
+      - vulnerability
+    roles:
+      - dev
+      - devops
+  - name: trove-infra
+    source: trove-infra
+    description: Infrastructure and DevOps automation
+    category: infrastructure
+    tags:
+      - aws
+      - terraform
+      - cdk
+      - docker
+      - ecs
+      - lambda
+    roles:
+      - devops

@@ -1,0 +1,41 @@
+---
+name: trove-architect
+description: "Design the shape before the code: sketch types, signatures, and module structure with not-implemented bodies, agree, then fill in. Scrap the sketch when implementation proves it wrong. Use for non-trivial work where jumping straight to code would lock in the wrong shape."
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+If a sibling skill in this plugin matches the request more directly, defer to it. See `AGENTS.md` (or `docs/routing.md` in the marketplace) for the per-plugin routing index.
+
+# trove-architect
+
+Design the shape before writing the code. The shape is the types, the signatures, and the module boundaries — with `not implemented` bodies. Get the data shape right first (`trove-principle-data-shape`) and make it honest (`trove-principle-type-discipline`).
+
+## Phases
+
+1. **Ground.** Understand the existing code via `trove-explain` (read the real code, don't guess). Skip for greenfield.
+2. **Sketch.** Write the types, function signatures, and module map with stubbed (`throw new Error('not implemented')`) bodies. This is the artifact to review — it's cheap to change now.
+3. **Agree (optional gate).** For contested or high-blast-radius shapes, confirm the sketch before filling in. For routine work, proceed.
+4. **Implement.** Fill in the bodies. Ship the synthesis (the sketch) as its own commit so later commits read as filling in bodies.
+5. **Scrap when wrong.** Watch for the tells that the shape is wrong and rewrite the sketch rather than forcing it.
+
+## Scrap tells
+
+Rewrite the shape — don't paper over it — when you see a **pattern** (not a single case) of:
+
+- The same workaround repeated to fit the types.
+- Escape hatches creeping in (`any`, casts, optional fields that "shouldn't" be optional).
+- The "we need a lock / a flag / a side channel" reflex to make the shape work.
+
+One awkward spot is normal. A pattern of them means the foundation is wrong; redesign as if you'd known on day one.
+
+## Anti-patterns
+
+- Don't sketch a trivial one-liner — that's over-process. This is for work where the wrong shape is expensive.
+- Don't keep filling in a sketch that keeps fighting you. Scrapping early is cheaper than a built-out wrong shape.

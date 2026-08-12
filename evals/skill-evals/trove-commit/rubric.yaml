@@ -1,0 +1,15 @@
+criteria:
+  conventional_format:
+    weight: 3
+    description: "Follows conventional commits format (type(scope): description)"
+  describes_why:
+    weight: 3
+    description: "Message explains WHY the change was made, not just WHAT changed"
+  appropriate_type:
+    weight: 2
+    description: "Uses correct type (feat, fix, refactor, docs, test, chore)"
+  concise_subject:
+    weight: 2
+    description: "Subject line under 72 chars, imperative mood, no period"
+
+min_pass_score: 7.0

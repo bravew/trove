@@ -1,0 +1,15 @@
+criteria:
+  baseline_before_fix:
+    weight: 3
+    description: "Captures a baseline measurement (and saves the artifact) before changing anything"
+  measures_not_guesses:
+    weight: 3
+    description: "Locates the cost by measurement/profile, not by reading source and assuming where the time goes"
+  cites_delta:
+    weight: 2
+    description: "Reports baseline, post-fix, and delta with an artifact path"
+  no_unmeasured_optimization:
+    weight: 2
+    description: "Does not optimize a path the baseline didn't show to be hot"
+
+min_pass_score: 7.0

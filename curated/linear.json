@@ -1,0 +1,11 @@
+{
+  "name": "linear-tools",
+  "description": "Linear issue tracking and project management",
+  "source": {
+    "type": "hosted-mcp",
+    "url": "https://mcp.linear.app/mcp"
+  },
+  "category": "productivity",
+  "tags": ["linear", "issues", "project-management"],
+  "notes": "Linear has no standalone plugin repo. Hosted MCP server only (Streamable HTTP + OAuth 2.1). Integrated as mcp_servers in trove-dev and trove-product plugins."
+}

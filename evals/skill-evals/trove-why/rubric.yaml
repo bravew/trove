@@ -1,0 +1,15 @@
+criteria:
+  cites_direct_evidence:
+    weight: 3
+    description: "Backs rationale claims with cited primary evidence (commit/PR, issue, doc, thread), not the code's current shape"
+  separates_inference_from_evidence:
+    weight: 3
+    description: "Clearly labels what is direct evidence vs reasonable inference vs competing hypotheses"
+  null_results_reported:
+    weight: 2
+    description: "States which sources were available, queried, and returned nothing instead of silently skipping"
+  no_fabricated_rationale:
+    weight: 2
+    description: "Does not invent a confident rationale to fill an evidence gap; says so honestly with low confidence"
+
+min_pass_score: 7.0

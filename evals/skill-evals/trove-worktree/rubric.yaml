@@ -1,0 +1,15 @@
+criteria:
+  detects_risk:
+    weight: 3
+    description: "Recognizes spike, experiment, or risky refactor prompts"
+  proposes_worktree:
+    weight: 3
+    description: "Creates or proposes a worktree before edits"
+  preserves_branch:
+    weight: 2
+    description: "Avoids dirtying or resetting the user's current branch"
+  cleanup_confirmed:
+    weight: 2
+    description: "Does not remove worktrees without explicit confirmation"
+
+min_pass_score: 7.0

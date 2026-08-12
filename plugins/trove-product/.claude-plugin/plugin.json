@@ -1,0 +1,13 @@
+{
+  "name": "trove-product",
+  "description": "PM skills: specs, user stories, release notes, triage",
+  "version": "2026.7.4",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "skills": [
+    "./skills/trove-spec",
+    "./skills/trove-user-story",
+    "./skills/trove-release-notes"
+  ]
+}

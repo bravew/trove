@@ -1,0 +1,108 @@
+name: trove-dev
+version: "1.0.0"
+description: "Developer skills: coding patterns, code review, git workflow, debugging"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [developer, coding, review, git, workflow, debugging]
+category: development
+
+roles: [dev]
+
+skills:
+  - path: ./skills/trove-python
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/*.py"]
+
+  - path: ./skills/trove-react
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/*.tsx", "**/*.jsx"]
+
+  - path: ./skills/trove-react-best-practices
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-react-view-transitions
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-react-native
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-vue
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/*.vue"]
+
+  - path: ./skills/trove-swift
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/*.swift"]
+
+  - path: ./skills/trove-lambda
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/lambda_handler.py", "**/lambda_function.py"]
+
+  - path: ./skills/trove-review
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-commit
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-explain
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-typescript
+    platforms: [claude, cursor, codex, agents]
+    auto_attach:
+      globs: ["**/*.ts", "**/*.tsx"]
+
+  - path: ./skills/trove-tdd
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-architect
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-perf
+    platforms: [claude, cursor, codex, agents]
+
+commands:
+  # User-invocable workflow commands (namespaced as /trove-dev:<name> in Claude Code)
+  # No prefix needed — plugin namespacing prevents conflicts automatically
+  - path: ./commands/commit.md
+    platforms: [claude]
+  - path: ./commands/ship.md
+    platforms: [claude]
+  - path: ./commands/review.md
+    platforms: [claude]
+  - path: ./commands/pr.md
+    platforms: [claude]
+  - path: ./commands/new-branch.md
+    platforms: [claude]
+  - path: ./commands/changelog.md
+    platforms: [claude]
+  - path: ./commands/doc.md
+    platforms: [claude]
+  - path: ./commands/prp-create.md
+    platforms: [claude]
+  - path: ./commands/prp-execute.md
+    platforms: [claude]
+
+agents:
+  - path: ./agents/code-reviewer.md
+
+hooks:
+  PostToolUse:
+    - matcher: "Edit|Write"
+      command: "${PLUGIN_ROOT}/hooks/auto-lint.sh"
+      description: "Opt-in auto-lint after file writes"
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []

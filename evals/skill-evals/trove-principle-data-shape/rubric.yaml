@@ -1,0 +1,15 @@
+criteria:
+  shape_before_logic:
+    weight: 3
+    description: "Settles the core data types/structures before writing behavior"
+  values_early_structural_choice:
+    weight: 3
+    description: "Recognizes a data-structure choice is cheap now and a rewrite later; makes it deliberately"
+  scaffold_first_test:
+    weight: 2
+    description: "Asks whether subsequent work benefits from a structure existing first"
+  considers_shared_state:
+    weight: 2
+    description: "Asks what concurrent actors share before letting them share it"
+
+min_pass_score: 7.0

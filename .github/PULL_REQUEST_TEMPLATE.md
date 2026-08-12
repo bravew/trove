@@ -1,0 +1,1 @@
+- [ ] **Host adapter change?** Paste the acceptance transcript from `bun run test:acceptance <host>` or a manual transcript proving the bootstrap loads before tool use.

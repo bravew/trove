@@ -1,0 +1,52 @@
+{
+  "name": "trove-dev",
+  "description": "Developer skills: coding patterns, code review, git workflow, debugging",
+  "version": "2026.7.4",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "skills": [
+    "./skills/trove-python",
+    "./skills/trove-react",
+    "./skills/trove-react-best-practices",
+    "./skills/trove-react-view-transitions",
+    "./skills/trove-react-native",
+    "./skills/trove-vue",
+    "./skills/trove-swift",
+    "./skills/trove-lambda",
+    "./skills/trove-review",
+    "./skills/trove-commit",
+    "./skills/trove-explain",
+    "./skills/trove-typescript",
+    "./skills/trove-tdd",
+    "./skills/trove-architect",
+    "./skills/trove-perf"
+  ],
+  "commands": [
+    "./commands/commit.md",
+    "./commands/ship.md",
+    "./commands/review.md",
+    "./commands/pr.md",
+    "./commands/new-branch.md",
+    "./commands/changelog.md",
+    "./commands/doc.md",
+    "./commands/prp-create.md",
+    "./commands/prp-execute.md"
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-lint.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "agents": [
+    "./agents/code-reviewer.md"
+  ]
+}

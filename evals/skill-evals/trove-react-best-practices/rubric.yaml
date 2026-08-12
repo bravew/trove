@@ -1,0 +1,15 @@
+criteria:
+  avoids_waterfalls:
+    weight: 3
+    description: "Identifies and removes data-fetching waterfalls; uses parallel fetching, Promise.all, or preload patterns where appropriate"
+  bundle_discipline:
+    weight: 3
+    description: "Flags bundle-size hazards (barrel imports, unconditional third-party loads) and applies dynamic-import or analyzable-path fixes"
+  rerender_minimization:
+    weight: 2
+    description: "Prevents unnecessary re-renders via memoization, derived state, transitions, or moving effects to events"
+  server_client_correctness:
+    weight: 2
+    description: "Respects the server/client split — no shared module state, hoists static IO, uses React cache and serialization correctly"
+
+min_pass_score: 7.0

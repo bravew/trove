@@ -1,0 +1,15 @@
+criteria:
+  props_states_interactions:
+    weight: 3
+    description: "Spec covers props, states, and interactions explicitly"
+  a11y_requirements:
+    weight: 2
+    description: "Calls out accessibility requirements (roles, keyboard, focus)"
+  edge_cases:
+    weight: 2
+    description: "Documents empty/loading/error states"
+  design_token_refs:
+    weight: 2
+    description: "References design tokens (color/typography/spacing) by name where applicable"
+
+min_pass_score: 7.0

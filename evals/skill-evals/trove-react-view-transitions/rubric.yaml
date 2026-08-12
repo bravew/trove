@@ -1,0 +1,15 @@
+criteria:
+  api_usage_correctness:
+    weight: 3
+    description: "Uses ViewTransition / startViewTransition / addTransitionType correctly; respects browser support and falls back gracefully"
+  transition_naming:
+    weight: 3
+    description: "Applies stable view-transition-name values for shared element morphs; avoids name collisions across simultaneous transitions"
+  css_pseudo_elements:
+    weight: 2
+    description: "Targets ::view-transition-old(*) / ::view-transition-new(*) correctly; uses proper z-index and animation timing"
+  framework_integration:
+    weight: 2
+    description: "Integrates cleanly with Next.js / React Router transitions; handles directional (forward/back) navigation animations"
+
+min_pass_score: 7.0

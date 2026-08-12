@@ -1,0 +1,15 @@
+criteria:
+  removes_ai_tells:
+    weight: 3
+    description: "Cuts AI tells: manufactured significance, hedging stacks, empty openers, 'it's not just X' constructions"
+  preserves_meaning:
+    weight: 3
+    description: "No information dropped while cutting; every concrete fact in the original survives"
+  applies_specific_bans:
+    weight: 2
+    description: "No em dash (or its parenthetical substitute), no mid-sentence colon connector"
+  adds_voice:
+    weight: 2
+    description: "Result reads as direct human prose, not sterile/voiceless filler"
+
+min_pass_score: 7.0

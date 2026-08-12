@@ -1,0 +1,13 @@
+{
+  "name": "figma-tools",
+  "description": "Figma design integration, code generation, and Code Connect",
+  "source": {
+    "source": "github",
+    "repo": "figma/mcp-server-guide",
+    "ref": "main",
+    "sha": "131e141b1f91fa4b4b6bc4b453fee1574d9f6e57"
+  },
+  "category": "design",
+  "tags": ["figma", "design", "code-connect"],
+  "notes": "Has .claude-plugin/ with plugin.json. Official Figma MCP server guide repo."
+}

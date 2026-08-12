@@ -1,0 +1,18 @@
+criteria:
+  reproduction_first:
+    weight: 4
+    description: "Requires or creates a concrete reproduction before proposing a fix"
+  narrows_cause:
+    weight: 2
+    description: "Narrows the failing layer before changing code"
+  one_hypothesis:
+    weight: 2
+    description: "States and tests one hypothesis at a time"
+  verifies_fix:
+    weight: 2
+    description: "Re-runs the reproduction or nearby regression test"
+  roots_not_symptoms:
+    weight: 2
+    description: "Traces to and fixes the root cause; does not add a guard (nil-check/try-except) that masks the symptom"
+
+min_pass_score: 7.0

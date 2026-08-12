@@ -1,0 +1,15 @@
+criteria:
+  migrates_all_callers:
+    weight: 3
+    description: "Inventories and migrates every caller of the old internal API"
+  deletes_in_same_wave:
+    weight: 3
+    description: "Removes the old API in the same change rather than leaving a compatibility shim"
+  removes_stale_tests:
+    weight: 2
+    description: "Deletes tests that protected the old API's pre-refactor implementation details"
+  scopes_external_apis:
+    weight: 2
+    description: "Recognizes external/published APIs need normal deprecation, not same-wave deletion"
+
+min_pass_score: 7.0

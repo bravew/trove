@@ -1,0 +1,15 @@
+criteria:
+  rubric_before_spawn:
+    weight: 3
+    description: "Writes the gradeable rubric before spawning candidates; candidates don't see it"
+  isolated_candidate_paths:
+    weight: 3
+    description: "Each candidate writes to its own worktree/tmp path — no shared state between parallel attempts"
+  grafts_and_records_rejections:
+    weight: 2
+    description: "Picks a base, grafts the best losing ideas in, and records why each rejected candidate lost"
+  declines_when_trivial:
+    weight: 2
+    description: "Declines the arena for mechanical/single-approach work and routes to trove-architect or a direct change"
+
+min_pass_score: 7.0

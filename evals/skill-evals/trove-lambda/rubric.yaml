@@ -1,0 +1,15 @@
+criteria:
+  handler_signature:
+    weight: 3
+    description: "Handler is `def handler(event, context)` returning a dict"
+  sqs_sns_parsing:
+    weight: 3
+    description: "Parses SQS/SNS event records correctly (Records[].body, decodes JSON)"
+  structured_logging:
+    weight: 2
+    description: "Uses Powertools logger with static messages + extra={} for warning/error"
+  ipc_token_check:
+    weight: 2
+    description: "Validates BACKEND_IPC_TOKEN before trusting incoming IPC events"
+
+min_pass_score: 7.0

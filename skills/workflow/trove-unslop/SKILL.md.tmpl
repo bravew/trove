@@ -1,0 +1,41 @@
+---
+name: trove-unslop
+description: |
+  Cut AI tells from writing — PR descriptions, release notes, specs, commit bodies, and replies.
+  Use before finalizing prose, or when the user asks to clean up, de-slop, or make text sound human.
+version: 1.0.0
+preamble-tier: 2
+user-invocable: true
+triggers:
+  - clean up this writing
+  - de-slop this
+  - make this sound human
+---
+
+{{PREAMBLE}}
+
+# trove-unslop
+
+Cut the tells that mark writing as AI-generated, without dropping content. Write it clean the first time; a cleanup pass after the fact reliably misses things.
+
+## Process
+
+1. **Scan** for the patterns below.
+2. **Rewrite** each into plain, direct prose. Short declarative sentences, one thought each.
+3. **Add voice.** Sterile, voiceless writing is just as obvious a tell as purple prose. Say the real thing.
+4. **Self-audit.** Ask: "What in this still reads as obviously AI-generated?" Fix that.
+
+## The bans we keep catching
+
+- **No em dash**, and no parentheses used as its substitute. Make it two sentences, or use a colon before a list.
+- **No colon as a mid-sentence connector.** A colon before a list is fine; a colon joining two clauses is not.
+- **No "It's not just X, it's Y" / "X isn't about Y" constructions.** State the thing.
+- **No hedging stacks** ("it's worth noting that", "generally", "in many cases") when you can just say it.
+- **No empty openers** ("In today's fast-paced world", "When it comes to").
+- **No section-header-plus-dash** one-liners. Write the header as its own sentence.
+
+The full catalogue of patterns with fixes is in [references/patterns.md](references/patterns.md).
+
+## Scope
+
+This applies to any prose surface you produce: the reply to the user, PR descriptions, release notes, specs, commit bodies, and docs. It does not rewrite quoted source material, code identifiers, or a user's own words.

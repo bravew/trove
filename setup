@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# ─── Trove — Universal Installer ───────────
+#
+# Detects installed AI coding assistants and sets up marketplace integration.
+#
+# Usage:
+#   ./setup                    # Auto-detect hosts
+#   ./setup --host claude      # Claude Code only
+#   ./setup --host cursor      # Cursor only
+#   ./setup --host codex       # Codex only
+#   ./setup --host copilot     # Copilot CLI AGENTS fallback
+#   ./setup --host cursor --host codex
+#   ./setup --host all         # All detected hosts
+#   ./setup --role dev         # Developer plugins only
+#   ./setup --role design      # Designer plugins only
+#   ./setup --role all         # All roles (default)
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")
+
+# ── Colors ───────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}ℹ${NC} $*"; }
+ok()    { echo -e "${GREEN}✓${NC} $*"; }
+warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
+err()   { echo -e "${RED}✗${NC} $*" >&2; }
+header(){ echo -e "\n${BOLD}── $* ──${NC}"; }
+
+# ── Arg parsing ──────────────────────────────────────────────
+HOST_ARGS=()
+ROLE_ARG="all"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host) HOST_ARGS+=("$2"); shift 2 ;;
+    --role) ROLE_ARG="$2"; shift 2 ;;
+    --help|-h)
+      echo "Usage: ./setup [--host claude|cursor|codex|copilot|agents|all]... [--role dev|design|pm|devops|all]"
+      exit 0
+      ;;
+    *) err "Unknown argument: $1"; exit 1 ;;
+  esac
+done
+
+# ── Host detection ───────────────────────────────────────────
+detect_hosts() {
+  local hosts=()
+
+  if command -v claude &>/dev/null; then
+    hosts+=("claude")
+  fi
+
+  if command -v cursor &>/dev/null || [[ -d "$HOME/.cursor" ]]; then
+    hosts+=("cursor")
+  fi
+
+  if command -v codex &>/dev/null; then
+    hosts+=("codex")
+  fi
+
+  if command -v copilot &>/dev/null; then
+    hosts+=("copilot")
+  fi
+
+  # Always include "agents" (generic AGENTS.md)
+  hosts+=("agents")
+
+  echo "${hosts[@]}"
+}
+
+# Read preferred hosts from `~/.trove/config.yaml` (or $TROVE_HOME).
+# Returns empty when no config is present, so the caller falls back to
+# auto-detection. We delegate to `bin/trove` so YAML parsing lives in
+# one place (TypeScript) instead of hand-rolled bash.
+hosts_from_config() {
+  if ! command -v bun &>/dev/null; then
+    echo ""
+    return
+  fi
+  if [[ ! -x "$SCRIPT_DIR/bin/trove" ]]; then
+    echo ""
+    return
+  fi
+  # Only treat config as authoritative if a config file actually exists —
+  # otherwise `config get hosts` returns the default `claude, cursor`,
+  # which would mask real auto-detection.
+  local cfg_dir="${TROVE_HOME:-$HOME/.trove}"
+  if [[ ! -f "$cfg_dir/config.yaml" ]]; then
+    echo ""
+    return
+  fi
+  "$SCRIPT_DIR/bin/trove" config get hosts 2>/dev/null | tr ',' ' ' | xargs || echo ""
+}
+
+if [[ "${#HOST_ARGS[@]}" -gt 0 ]]; then
+  if [[ " ${HOST_ARGS[*]} " == *" all "* ]]; then
+    HOSTS=$(detect_hosts)
+  else
+    HOSTS="${HOST_ARGS[*]}"
+  fi
+else
+  CONFIG_HOSTS=$(hosts_from_config)
+  if [[ -n "$CONFIG_HOSTS" ]]; then
+    info "Using hosts from ~/.trove/config.yaml"
+    HOSTS="$CONFIG_HOSTS"
+  else
+    HOSTS=$(detect_hosts)
+  fi
+fi
+
+# ── Prerequisites ────────────────────────────────────────────
+header "Trove v${VERSION}"
+info "Hosts: ${HOSTS}"
+info "Role: ${ROLE_ARG}"
+
+# Check for bun
+if ! command -v bun &>/dev/null; then
+  err "bun is required. Install: https://bun.sh"
+  exit 1
+fi
+
+# ── Install dependencies ────────────────────────────────────
+header "Installing dependencies"
+cd "$SCRIPT_DIR"
+bun install --frozen-lockfile 2>/dev/null || bun install
+ok "Dependencies installed"
+
+# ── Build ────────────────────────────────────────────────────
+header "Building marketplace"
+bun run build
+ok "Build complete"
+
+# ── Claude Code setup ────────────────────────────────────────
+setup_claude() {
+  header "Claude Code"
+
+  local marketplace_json="$SCRIPT_DIR/.claude-plugin/marketplace.json"
+  if [[ ! -f "$marketplace_json" ]]; then
+    err "marketplace.json not found. Build may have failed."
+    return 1
+  fi
+
+  # Check if Claude CLI supports marketplace commands
+  if claude plugin marketplace list &>/dev/null 2>&1; then
+    info "Adding marketplace to Claude Code..."
+    claude plugin marketplace add "$SCRIPT_DIR" 2>/dev/null && \
+      ok "Marketplace registered" || \
+      warn "Could not register marketplace (may already be registered)"
+  else
+    # Fallback: symlink skills directly
+    info "Setting up skills via symlinks..."
+    local skills_dir="$HOME/.claude/skills/trove"
+    mkdir -p "$skills_dir"
+
+    for plugin_dir in "$SCRIPT_DIR"/plugins/*/; do
+      local plugin_name
+      plugin_name=$(basename "$plugin_dir")
+      local skills_path="$plugin_dir/skills"
+
+      if [[ -d "$skills_path" ]]; then
+        for skill_dir in "$skills_path"/*/; do
+          [[ -d "$skill_dir" ]] || continue
+          local skill_name
+          skill_name=$(basename "$skill_dir")
+          local target="$skills_dir/$skill_name"
+
+          if [[ -L "$target" ]]; then
+            rm "$target"
+          fi
+
+          if [[ -d "$skill_dir" ]] && [[ -f "$skill_dir/SKILL.md" ]]; then
+            ln -sf "$skill_dir" "$target"
+          fi
+        done
+      fi
+    done
+
+    ok "Skills symlinked to ~/.claude/skills/trove/"
+  fi
+}
+
+# ── Cursor setup ─────────────────────────────────────────────
+setup_cursor() {
+  header "Cursor"
+
+  local marketplace_json="$SCRIPT_DIR/.cursor-plugin/marketplace.json"
+  if [[ ! -f "$marketplace_json" ]]; then
+    warn "Cursor marketplace.json not found. Skipping."
+    return 0
+  fi
+
+  # Symlink skills for Cursor
+  local skills_dir="$HOME/.cursor/skills/trove"
+  mkdir -p "$skills_dir"
+
+  for plugin_dir in "$SCRIPT_DIR"/plugins/*/; do
+    local skills_path="$plugin_dir/skills"
+    if [[ -d "$skills_path" ]]; then
+      for skill_dir in "$skills_path"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        local skill_name
+        skill_name=$(basename "$skill_dir")
+        local target="$skills_dir/$skill_name"
+
+        if [[ -L "$target" ]]; then
+          rm "$target"
+        fi
+
+        if [[ -d "$skill_dir" ]] && [[ -f "$skill_dir/SKILL.md" ]]; then
+          ln -sf "$skill_dir" "$target"
+        fi
+      done
+    fi
+  done
+
+  ok "Skills linked to ~/.cursor/skills/trove/"
+}
+
+# ── Codex setup ──────────────────────────────────────────────
+setup_codex() {
+  header "Codex"
+
+  # Codex's canonical user-scope skill directory is $HOME/.agents/skills.
+  # Source: https://developers.openai.com/codex/skills (USER scope row).
+  local skills_dir="$HOME/.agents/skills/trove"
+  mkdir -p "$skills_dir"
+
+  # Build emits Codex skills under output/codex/.agents/skills/<skill>/SKILL.md
+  # (matches hosts/codex.ts skillOutputDir). The bare output/codex/*/ glob
+  # used previously skipped this entirely because bash globs ignore
+  # dot-prefixed directories by default.
+  local codex_output="$SCRIPT_DIR/output/codex/.agents/skills"
+  if [[ -d "$codex_output" ]]; then
+    for skill_dir in "$codex_output"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      local skill_name
+      skill_name=$(basename "$skill_dir")
+      local target="$skills_dir/$skill_name"
+
+      if [[ -L "$target" ]]; then
+        rm "$target"
+      fi
+
+      if [[ -f "$skill_dir/SKILL.md" ]]; then
+        ln -sf "$skill_dir" "$target"
+      fi
+    done
+  fi
+
+  ok "Skills linked to ~/.agents/skills/trove/"
+}
+
+# ── Copilot CLI setup ────────────────────────────────────────
+setup_copilot() {
+  header "Copilot CLI"
+
+  warn "Copilot CLI sessionStart command output is not processed by current GitHub docs; using AGENTS.md fallback."
+
+  if ! command -v copilot &>/dev/null; then
+    warn "copilot CLI not found. Skipping."
+    return 0
+  fi
+
+  setup_agents
+}
+
+# ── Generic (AGENTS.md) setup ────────────────────────────────
+setup_agents() {
+  header "Generic (AGENTS.md)"
+  info "Generated AGENTS.md available in output/agents/"
+  ok "Copy to project roots as needed"
+}
+
+# ── Run host setups ──────────────────────────────────────────
+for host in $HOSTS; do
+  case "$host" in
+    claude)  setup_claude  ;;
+    cursor)  setup_cursor  ;;
+    codex)   setup_codex   ;;
+    copilot) setup_copilot ;;
+    agents)  setup_agents  ;;
+    *)       warn "Unknown host: $host" ;;
+  esac
+done
+
+# ── Summary ──────────────────────────────────────────────────
+header "Setup Complete"
+echo ""
+info "Marketplace version: ${VERSION}"
+info "Update: cd $(basename "$SCRIPT_DIR") && git pull && ./setup"
+echo ""
+ok "Trove is ready!"

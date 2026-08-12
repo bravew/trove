@@ -1,0 +1,15 @@
+criteria:
+  prefers_deletion:
+    weight: 3
+    description: "Reaches for removing/simplifying code before adding; proposes the smallest change that solves the problem"
+  no_premature_abstraction:
+    weight: 3
+    description: "Does not add abstractions, layers, or config for a single caller or a hypothetical future"
+  flattens_indirection:
+    weight: 2
+    description: "Flags or collapses indirection that forces tracing through many files/layers"
+  keeps_maintainer_load_low:
+    weight: 2
+    description: "Justifies the choice by maintainer cognitive load, not generic 'best practice'"
+
+min_pass_score: 7.0

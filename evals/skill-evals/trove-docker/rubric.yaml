@@ -1,0 +1,15 @@
+criteria:
+  multi_stage:
+    weight: 3
+    description: "Uses multi-stage builds where it shrinks final image"
+  no_root:
+    weight: 3
+    description: "Runs as a non-root user"
+  cache_friendly:
+    weight: 2
+    description: "Orders COPY/RUN to maximize layer caching"
+  no_secrets_in_layers:
+    weight: 2
+    description: "Does not COPY .env or bake credentials into layers"
+
+min_pass_score: 7.0

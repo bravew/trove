@@ -1,0 +1,15 @@
+criteria:
+  tests_first:
+    weight: 4
+    description: "Requires rubric and tasks before writing the skill body"
+  trigger_examples:
+    weight: 2
+    description: "Defines trigger and non-trigger behavior"
+  concise_body:
+    weight: 2
+    description: "Keeps SKILL.md focused and avoids auxiliary docs"
+  validates:
+    weight: 2
+    description: "Runs validation or eval structure checks"
+
+min_pass_score: 7.0

@@ -1,0 +1,44 @@
+---
+name: trove-brainstorm
+description: "Feature and design brainstorming gate. Use before implementing a new feature, UI, refactor, or product change when no approved design exists."
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+If a sibling skill in this plugin matches the request more directly, defer to it. See `AGENTS.md` (or `docs/routing.md` in the marketplace) for the per-plugin routing index.
+
+# trove-brainstorm
+
+Do not write code until the design is approved.
+
+Use this skill when the user asks for new product behavior, a UI surface, a feature, or a broad refactor and there is no existing spec or accepted plan in the transcript.
+
+Start the first response with `Skill: trove-brainstorm` so transcript-based acceptance can prove this gate fired before any edits.
+
+## Workflow
+
+1. Restate the goal in one sentence.
+2. Identify constraints, affected users, and the smallest useful version.
+3. Offer a design in exactly five bullets: user outcome, scope, data/contracts, UI or workflow, and verification.
+4. Ask for approval or corrections before any file edits.
+5. After approval, route to `trove-plan` for multi-step work or proceed directly for narrow changes.
+
+## Decision Gate: design approval
+
+Context: Implementation before agreement can bake in the wrong product shape.
+Question: Is the five-bullet design approved for implementation?
+Options:
+- A. Approve and proceed.
+- B. Revise the design first.
+- C. Stop and gather missing information.
+Default: B, because design correction is cheaper before code exists.
+
+## Bypass Handling
+
+If the user says to skip brainstorming, state the discipline rule once and ask whether they approve the current design shape. If the prompt is genuinely narrow, such as "write a regex" or "fix this typo", this skill should stay out of the way.

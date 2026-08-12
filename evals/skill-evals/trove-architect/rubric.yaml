@@ -1,0 +1,15 @@
+criteria:
+  shape_before_code:
+    weight: 3
+    description: "Produces types/signatures/module map with stubbed bodies before implementing"
+  names_data_shape:
+    weight: 3
+    description: "Settles the core data shape and keeps it honest (illegal states unrepresentable) before logic"
+  scrap_discipline:
+    weight: 2
+    description: "Rewrites the sketch on a pattern of friction (repeated workarounds, escape hatches), not after one awkward spot"
+  right_sized:
+    weight: 2
+    description: "Skips the ceremony for trivial changes; applies it where the wrong shape is expensive"
+
+min_pass_score: 7.0

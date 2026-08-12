@@ -1,0 +1,62 @@
+---
+name: trove-design-review
+description: |
+  Design review skill for evaluating UI/UX implementations against design specs.
+  Checks visual fidelity, interaction patterns, and design system compliance.
+version: 1.0.0
+preamble-tier: 2
+triggers:
+  - design review
+  - review the design
+  - visual fidelity check
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# Design Review Guidelines
+
+## Review Dimensions
+
+### 1. Visual Fidelity
+- Does the implementation match the Figma design?
+- Are spacing, colors, and typography consistent with the design system?
+- Are responsive breakpoints handled correctly?
+
+### 2. Interaction Design
+- Do hover/focus/active states match specs?
+- Are transitions and animations smooth and purposeful?
+- Is loading state handled gracefully?
+
+### 3. Accessibility
+- Color contrast meets WCAG 2.1 AA (4.5:1 for text, 3:1 for large text)
+- Interactive elements have visible focus indicators
+- Images have meaningful alt text
+- Form fields have associated labels
+
+### 4. Design System Compliance
+- Using design system components (not custom implementations)
+- Following spacing scale (4px grid)
+- Using design tokens for colors, typography, shadows
+
+## Output Format
+
+```markdown
+## Design Review: [Component/Page Name]
+
+### Match Score: X/10
+
+### Discrepancies
+- [screenshot/description] Expected vs Actual
+
+### Accessibility Issues
+- [WCAG criterion] Description
+
+### Recommendations
+- Suggested improvements
+```

@@ -1,0 +1,15 @@
+criteria:
+  uses_observable:
+    weight: 3
+    description: "Uses @Observable (Swift 6) for view-model state, not @ObservableObject"
+  structured_concurrency:
+    weight: 3
+    description: "Async work uses async/await and structured concurrency"
+  navigation_stack:
+    weight: 2
+    description: "Uses NavigationStack with typed paths, not legacy NavigationView"
+  accessibility_labels:
+    weight: 2
+    description: "Sets accessibilityLabel/Hint where appropriate for non-decorative views"
+
+min_pass_score: 7.0

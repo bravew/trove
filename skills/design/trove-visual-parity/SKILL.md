@@ -1,0 +1,43 @@
+---
+name: trove-visual-parity
+description: |
+  Achieve pixel-exact UI equivalence between two implementations via image diff. Establish a baseline harness first, migrate one component at a time, verify each with a screenshot diff within a tuned threshold.
+  Use when migrating a styling system or matching a new implementation (e.g. React) to an existing one (e.g. Vue).
+version: 1.0.0
+preamble-tier: 2
+user-invocable: true
+triggers:
+  - match this design exactly
+  - visual parity
+  - pixel-perfect migration
+benefits-from:
+  - trove-component-spec
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# trove-visual-parity
+
+Prove two implementations render the same, by image diff — not by eyeballing. The baseline is the spec; the new implementation moves to meet it.
+
+## Workflow
+
+1. **Establish the baseline first (blocking).** Capture the reference rendering with Playwright `toHaveScreenshot()`. **Generate baselines in CI, not locally** — local renders (fonts, DPI) drift from CI and create false diffs.
+2. **Migrate shared primitives first.** Tokens, base components, and shared styles before the components that compose them.
+3. **One component at a time.** Migrate, then diff against its baseline. Parallel components go in separate worktrees (`trove-worktree`).
+4. **Verify by diff, within a tuned threshold.** Use `toHaveScreenshot()` with `maxDiffPixels` / `maxDiffPixelRatio` / `threshold` tuned to absorb anti-aliasing and font noise without hiding real regressions. It auto-retries until the page stabilizes. A diff above threshold from a real layout/spacing change is a fail.
+5. **One PR per component or small batch.**
+
+## Run the visual suite in isolation
+
+Tag visual tests (`@visual`) and run them as a dedicated stage, not inside the normal unit run — they need a consistent rendering environment.
+
+## The anti-tampering rule
+
+When a diff exceeds threshold, fix the **implementation** to match the baseline. Never edit the baseline, mask the diffing region, or loosen `maxDiffPixels` to make a real regression pass. The baseline is the contract; raising the threshold to hide a regression defeats the whole exercise.

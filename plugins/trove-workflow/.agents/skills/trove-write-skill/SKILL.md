@@ -1,0 +1,41 @@
+---
+name: trove-write-skill
+description: "Skill authoring workflow. Use when creating or updating a Codex or Trove skill, including rubrics, tasks, metadata, and validation."
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+If a sibling skill in this plugin matches the request more directly, defer to it. See `AGENTS.md` (or `docs/routing.md` in the marketplace) for the per-plugin routing index.
+
+# trove-write-skill
+
+Author the rubric and tasks before the SKILL body. Skills are tested code.
+
+## Workflow
+
+1. Define the trigger examples and non-trigger examples.
+2. Write `rubric.yaml` with the behavior the skill must enforce.
+3. Write at least three task prompts, including one bypass or edge-case prompt.
+4. Draft the `SKILL.md.tmpl` body with only essential procedural guidance.
+5. Keep the body concise and use references only when detail is needed later.
+6. Run validation and the relevant eval structure check.
+
+## Decision Gate: skill test readiness
+
+Context: Untested skills become prose that cannot be trusted during routing.
+Question: Does this skill have a rubric and at least three tasks?
+Options:
+- A. Yes - implement or update the skill body.
+- B. No - write tests first.
+- C. Scope is unclear - ask for examples.
+Default: B, because tests define the behavior contract.
+
+## Guardrails
+
+Do not add auxiliary README-style files unless the runtime skill needs them. Keep metadata accurate enough for automatic routing.

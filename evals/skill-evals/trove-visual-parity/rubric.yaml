@@ -1,0 +1,15 @@
+criteria:
+  baseline_first:
+    weight: 3
+    description: "Establishes the reference baseline (in CI) before migrating, treating it as the spec"
+  image_diff_gate:
+    weight: 3
+    description: "Verifies via toHaveScreenshot with a tuned threshold (maxDiffPixels/threshold), not visual eyeballing"
+  no_baseline_tampering:
+    weight: 2
+    description: "Fixes the implementation to meet the baseline; never edits the baseline or loosens the threshold to pass a real regression"
+  primitives_first:
+    weight: 2
+    description: "Migrates shared tokens/primitives before the components that compose them"
+
+min_pass_score: 7.5

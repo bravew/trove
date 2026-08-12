@@ -1,0 +1,15 @@
+criteria:
+  mines_concrete_learnings:
+    weight: 3
+    description: "Surfaces durable learnings (recurring corrections, non-obvious quirks, validated approaches), not one-shot fixes or obvious facts"
+  routes_to_edit_or_learning:
+    weight: 3
+    description: "Routes each learning to the right home: a learnings.jsonl entry, a skill edit, or a structural check"
+  human_approval_gate:
+    weight: 2
+    description: "Presents proposed skill edits for approval; never auto-applies them"
+  structural_over_textual:
+    weight: 2
+    description: "Prefers encoding a learning as a lint/rubric/check over adding more prose when that fits better"
+
+min_pass_score: 7.0

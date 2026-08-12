@@ -1,0 +1,48 @@
+name: trove-security
+version: "1.0.0"
+description: "Security review and vulnerability scanning"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [security, owasp, secrets, vulnerability, audit]
+category: security
+
+roles: [dev, devops]
+
+skills:
+  - path: ./skills/trove-security-review
+    platforms: [claude, cursor, codex, agents]
+
+  - path: ./skills/trove-secret-scan
+    platforms: [claude, cursor, codex, agents]
+
+agents:
+  - path: ./agents/security-reviewer.md
+
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      command: "${PLUGIN_ROOT}/hooks/security-check.sh"
+      description: "Check for destructive commands before execution"
+
+mcp_servers:
+  # Sentry — error tracking and debugging (Streamable HTTP + OAuth, no env vars)
+  sentry:
+    type: http
+    url: https://mcp.sentry.dev/mcp
+    optional: true
+    description: "Sentry error tracking via OAuth. Issues, events, releases, and Seer AI analysis."
+    tools:
+      - search_issues
+      - get_issue
+      - search_events
+      - analyze_issue_with_seer
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []

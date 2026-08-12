@@ -1,0 +1,15 @@
+criteria:
+  illegal_states_unrepresentable:
+    weight: 3
+    description: "Models state so contradictory combinations cannot be constructed (tagged unions over boolean+optional)"
+  parses_at_boundary:
+    weight: 2
+    description: "Parses external/unknown data into domain types at the boundary rather than threading raw values inward"
+  exhausts_variants:
+    weight: 2
+    description: "Ensures all variants are handled, flagging a new case at compile time"
+  no_lying_to_compiler:
+    weight: 3
+    description: "Avoids casts that suppress real type errors; keeps the types honest"
+
+min_pass_score: 7.0

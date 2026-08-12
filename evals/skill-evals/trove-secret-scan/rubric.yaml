@@ -1,0 +1,15 @@
+criteria:
+  pattern_coverage:
+    weight: 3
+    description: "Matches AWS keys, GitHub tokens, Slack tokens, generic API keys, private keys"
+  false_positive_handling:
+    weight: 2
+    description: "Avoids matching examples in code blocks or test fixtures"
+  remediation_clear:
+    weight: 2
+    description: "For each finding, suggests rotation + scrubbing steps, not just 'fix it'"
+  severity_tiered:
+    weight: 2
+    description: "Differentiates high-severity (production secrets) from low (test fixtures)"
+
+min_pass_score: 7.0

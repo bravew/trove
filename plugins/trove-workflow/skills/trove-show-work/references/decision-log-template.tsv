@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-05-28T10:00:00Z	setup	pin behavior with snapshot before refactor	parity must be provable	tests/pricing.snap created	baseline captured
+2026-05-28T10:12:00Z	migrate	move callers off buildPrompt to composePrompt	migrate-then-delete, no shim	8 callers updated; grep shows 0 left	done
+2026-05-28T10:20:00Z	verify	re-ran pinned snapshot	prove behavior unchanged	pnpm test pricing 14/0 green	parity confirmed

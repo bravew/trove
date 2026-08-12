@@ -1,0 +1,60 @@
+---
+name: trove-debug
+description: Systematic debugging workflow. Use for bug reports, failing tests, broken behavior, red CI, regressions, or unexplained production symptoms.
+version: 1.0.0
+preamble-tier: 3
+user-invocable: true
+triggers:
+  - bug report
+  - test failure
+  - this is broken
+  - red ci
+  - debug
+benefits-from:
+  - trove-tdd
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+If a sibling skill in this plugin matches the request more directly, defer to it. See `AGENTS.md` (or `docs/routing.md` in the marketplace) for the per-plugin routing index.
+
+# trove-debug
+
+Reproduce, narrow, hypothesize, verify - in that order.
+
+## Workflow
+
+1. Capture the observed failure and expected behavior.
+2. Reproduce it with the smallest command, test, fixture, or manual path available.
+3. Narrow the failing layer by reading code and adding temporary inspection only when needed.
+4. State one hypothesis at a time.
+5. Apply the smallest fix that addresses the verified cause.
+6. Re-run the reproduction and any nearby regression tests.
+
+## Root cause, not symptom
+
+Every step from symptom to cause should trace to runtime evidence (a log line, a value, a failing assertion) — not a guess. When a hypothesis is refuted, revert the probe and try the next one; don't stack guards.
+
+- **Resist the masking guard.** A nil-check or `try/except` that silences a crash without explaining why it was nil is a hidden root cause, not a fix.
+- **Restart bugs: suspect state before code.** If a bug only appears after a restart, suspect state, not logic — code doesn't change between runs, state does. If clearing a state file restores behavior, the bug is in how that state is written or validated.
+- **Cheap test target?** Hand off to `trove-tdd` to pin the bug with a failing-test-first cadence before fixing.
+
+## Decision Gate: reproduction
+
+Context: A fix without reproduction can mask the bug or create a second one.
+Question: Do we have a concrete reproduction?
+Options:
+- A. Yes - proceed to narrow and fix.
+- B. No - create or request a reproduction first.
+- C. The issue is intermittent - collect logs or add targeted instrumentation.
+Default: B, because verified bugs beat guessed fixes.
+
+## Output
+
+Report the reproduction, root cause, fix, and verification. If verification is partial, say exactly what is still unproven.

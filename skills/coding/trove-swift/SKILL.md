@@ -1,0 +1,85 @@
+---
+name: trove-swift
+description: |
+  Swift 6 and SwiftUI coding conventions for iOS development.
+  Auto-activates when working with Swift files.
+  Covers @Observable, async/await, NavigationStack, Swift Testing, and accessibility.
+version: 1.0.0
+preamble-tier: 2
+user-invocable: false
+activation:
+  globs:
+    - "**/*.swift"
+triggers:
+  - swift conventions
+  - swiftui view
+  - swift testing
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# Swift 6 / SwiftUI Conventions
+
+## @Observable (Preferred over ObservableObject)
+
+```swift
+@Observable
+final class UserViewModel {
+    var name = ""
+    var isLoading = false
+
+    func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        name = try await fetchUserName()
+    }
+}
+```
+
+Use `@Observable` instead of `ObservableObject` + `@Published` in new code.
+
+## Async/Await
+
+- Use structured concurrency (`async let`, `TaskGroup`)
+- Annotate main-actor-bound code with `@MainActor`
+- Use `Task { }` only at boundaries (view lifecycle, button actions)
+
+```swift
+// Parallel fetching
+async let user = fetchUser(id)
+async let posts = fetchPosts(userId: id)
+let (userData, postsData) = try await (user, posts)
+```
+
+## NavigationStack
+
+```swift
+NavigationStack(path: $router.path) {
+    ContentView()
+        .navigationDestination(for: Route.self) { route in
+            switch route {
+            case .detail(let id): DetailView(id: id)
+            case .settings: SettingsView()
+            }
+        }
+}
+```
+
+## Error Handling
+
+- Use typed `throws` where possible
+- Define domain-specific error enums conforming to `LocalizedError`
+- Never force-unwrap (`!`) outside of tests
+
+## AI Gotchas
+
+- **Sendable**: Mark types shared across concurrency domains as `Sendable`
+- **MainActor**: UI updates must happen on `@MainActor`
+- **Observation**: `@Observable` replaces `ObservableObject` in Swift 5.9+
+- **SwiftUI previews**: Use `#Preview` macro instead of `PreviewProvider`

@@ -1,0 +1,149 @@
+---
+name: trove-react-best-practices
+description: |
+  React and Next.js performance optimization guidelines (Vercel Engineering, 70 rules across 8 categories).
+  Use when writing, reviewing, or refactoring React code specifically for performance:
+  eliminating waterfalls, bundle size, re-render optimization, or server/client data fetching.
+  Complements trove-react, which carries project-specific conventions.
+version: 1.0.0
+preamble-tier: 2
+user-invocable: true
+triggers:
+  - react performance
+  - bundle size
+  - re-render optimization
+  - data fetching waterfall
+license: MIT
+metadata:
+  source: vercel-labs/agent-skills
+  upstream-version: "1.0.0"
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+> Trove · v2026.7.4
+
+## Session Init
+
+This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.
+
+# React Performance Best Practices
+
+70 prioritized rules covering React 19 and Next.js performance. This is an
+intent-triggered performance skill, not a file-glob convention. Do not load it
+for ordinary React edits unless the task is about performance, bundle size,
+waterfalls, or render behavior. Each rule has a detailed reference file under
+`references/` with incorrect/correct code examples.
+
+## Stack Notes (read first)
+
+Many of these rules assume a Next.js App Router project (`server-*` RSC rules, `async-api-routes`). If your app is a client-rendered SPA (Vite, CRA, plain React Router) without server components, treat the Next.js-specific rules as reference material and apply the rest directly — re-render, JS perf, bundle size, and client-side fetching rules are framework-agnostic.
+
+## When to Apply
+
+- Writing new components, hooks, or routes
+- Reviewing PRs for performance regressions
+- Refactoring slow renders, large bundles, or waterfall fetches
+- Optimizing TanStack Query usage and Zustand selectors
+
+## Rule Categories by Priority
+
+| Priority | Category | Impact | Prefix |
+|----------|----------|--------|--------|
+| 1 | Eliminating Waterfalls | CRITICAL | `async-` |
+| 2 | Bundle Size Optimization | CRITICAL | `bundle-` |
+| 3 | Server-Side Performance | HIGH | `server-` |
+| 4 | Client-Side Data Fetching | MEDIUM-HIGH | `client-` |
+| 5 | Re-render Optimization | MEDIUM | `rerender-` |
+| 6 | Rendering Performance | MEDIUM | `rendering-` |
+| 7 | JavaScript Performance | LOW-MEDIUM | `js-` |
+| 8 | Advanced Patterns | LOW | `advanced-` |
+
+## Quick Reference
+
+### 1. Eliminating Waterfalls (CRITICAL)
+
+- `async-cheap-condition-before-await` — Check cheap sync conditions before awaiting flags or remote values
+- `async-defer-await` — Move await into branches where actually used
+- `async-parallel` — Use `Promise.all()` for independent operations
+- `async-dependencies` — Use partial-dependency utilities for mixed sync/async deps
+- `async-api-routes` — Start promises early, await late (Next.js API routes; same idea applies in route loaders)
+- `async-suspense-boundaries` — Use Suspense to stream content
+
+### 2. Bundle Size Optimization (CRITICAL)
+
+- `bundle-barrel-imports` — Import directly, avoid barrel files
+- `bundle-analyzable-paths` — Prefer statically analyzable import paths
+- `bundle-dynamic-imports` — Use dynamic `import()` for heavy components (Vite-friendly)
+- `bundle-defer-third-party` — Load analytics/logging after hydration
+- `bundle-conditional` — Load modules only when feature is activated
+- `bundle-preload` — Preload on hover/focus for perceived speed
+
+### 3. Server-Side Performance (HIGH — Next.js / future reference)
+
+- `server-auth-actions`, `server-cache-react`, `server-cache-lru`, `server-dedup-props`,
+  `server-hoist-static-io`, `server-no-shared-module-state`, `server-serialization`,
+  `server-parallel-fetching`, `server-parallel-nested-fetching`, `server-after-nonblocking`
+
+### 4. Client-Side Data Fetching (MEDIUM-HIGH)
+
+- `client-swr-dedup` — Use SWR for automatic dedup (we use TanStack Query — same principle: dedup via stable `queryKey`)
+- `client-event-listeners` — Deduplicate global event listeners
+- `client-passive-event-listeners` — Use passive listeners for scroll
+- `client-localstorage-schema` — Version and minimize localStorage data (Zustand `persist` lives here)
+
+### 5. Re-render Optimization (MEDIUM — high signal with Zustand)
+
+- `rerender-defer-reads` — Don't subscribe to state only used in callbacks
+- `rerender-memo` — Extract expensive work into memoized components
+- `rerender-memo-with-default-value` — Hoist default non-primitive props
+- `rerender-dependencies` — Use primitive dependencies in effects
+- `rerender-derived-state` — Subscribe to derived booleans, not raw values
+- `rerender-derived-state-no-effect` — Derive state during render, not effects
+- `rerender-functional-setstate` — Use functional `setState` for stable callbacks
+- `rerender-lazy-state-init` — Pass function to `useState` for expensive values
+- `rerender-simple-expression-in-memo` — Avoid memo for simple primitives
+- `rerender-split-combined-hooks` — Split hooks with independent dependencies
+- `rerender-move-effect-to-event` — Put interaction logic in event handlers
+- `rerender-transitions` — Use `startTransition` for non-urgent updates
+- `rerender-use-deferred-value` — Defer expensive renders to keep input responsive
+- `rerender-use-ref-transient-values` — Use refs for transient frequent values
+- `rerender-no-inline-components` — Don't define components inside components
+
+### 6. Rendering Performance (MEDIUM)
+
+- `rendering-animate-svg-wrapper`, `rendering-content-visibility`, `rendering-hoist-jsx`,
+  `rendering-svg-precision`, `rendering-hydration-no-flicker`, `rendering-hydration-suppress-warning`,
+  `rendering-activity`, `rendering-conditional-render`, `rendering-usetransition-loading`,
+  `rendering-resource-hints`, `rendering-script-defer-async`
+
+### 7. JavaScript Performance (LOW-MEDIUM)
+
+- `js-batch-dom-css`, `js-index-maps`, `js-cache-property-access`, `js-cache-function-results`,
+  `js-cache-storage`, `js-combine-iterations`, `js-length-check-first`, `js-early-exit`,
+  `js-hoist-regexp`, `js-min-max-loop`, `js-set-map-lookups`, `js-tosorted-immutable`,
+  `js-flatmap-filter`, `js-request-idle-callback`
+
+### 8. Advanced Patterns (LOW)
+
+- `advanced-effect-event-deps`, `advanced-event-handler-refs`, `advanced-init-once`, `advanced-use-latest`
+
+## How to Use
+
+Read individual rule files for code examples and rationale:
+
+```
+references/async-parallel.md
+references/bundle-barrel-imports.md
+references/rerender-derived-state.md
+```
+
+Each rule contains: brief explanation, incorrect example, correct example, references.
+
+## Relationship to `trove-react`
+
+`trove-react` carries **project-specific conventions** (immutable updates for StrictMode, state-management selector patterns, data-fetching setup). This skill carries **general performance rules** maintained by Vercel Engineering. Both can fire on the same file — they don't conflict.
+
+## Source
+
+Upstream: [vercel-labs/agent-skills · react-best-practices](https://github.com/vercel-labs/agent-skills) (MIT). Adapted for the Trove marketplace.

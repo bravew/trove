@@ -1,0 +1,47 @@
+{
+  "name": "trove-workflow",
+  "description": "Workflow methodology skills and session bootstrap",
+  "version": "2026.7.4",
+  "skills": [
+    "./.agents/skills/using-trove",
+    "./.agents/skills/trove-autoplan",
+    "./.agents/skills/trove-ship",
+    "./.agents/skills/trove-brainstorm",
+    "./.agents/skills/trove-debug",
+    "./.agents/skills/trove-plan",
+    "./.agents/skills/trove-execute-plan",
+    "./.agents/skills/trove-verify",
+    "./.agents/skills/trove-dispatch",
+    "./.agents/skills/trove-receive-review",
+    "./.agents/skills/trove-worktree",
+    "./.agents/skills/trove-write-skill",
+    "./.agents/skills/trove-unslop",
+    "./.agents/skills/trove-why",
+    "./.agents/skills/trove-refactor",
+    "./.agents/skills/trove-show-work",
+    "./.agents/skills/trove-reflect",
+    "./.agents/skills/trove-arena",
+    "./.agents/skills/trove-principle-laziness",
+    "./.agents/skills/trove-principle-data-shape",
+    "./.agents/skills/trove-principle-type-discipline",
+    "./.agents/skills/trove-principle-migrate-then-delete",
+    "./.agents/skills/trove-principle-idempotency",
+    "./.agents/skills/trove-principle-encode-in-structure"
+  ],
+  "rules": [
+    "./rules/"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CURSOR_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

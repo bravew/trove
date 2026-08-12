@@ -1,0 +1,18 @@
+criteria:
+  runs_relevant_check:
+    weight: 3
+    description: "Runs or identifies the most relevant verification"
+  rereads_diff:
+    weight: 2
+    description: "Inspects touched files or diff for unintended changes"
+  generated_freshness:
+    weight: 2
+    description: "Checks generated artifacts when generators were involved"
+  states_gaps:
+    weight: 3
+    description: "Clearly states unverified assumptions instead of claiming full completion"
+  verifies_real_artifact:
+    weight: 3
+    description: "Checks the actual output (running endpoint, rendered result, migrated data) — not a proxy like 'it compiles' or a self-report"
+
+min_pass_score: 7.0

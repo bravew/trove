@@ -1,0 +1,15 @@
+criteria:
+  per_comment_map:
+    weight: 3
+    description: "Maps every review item explicitly"
+  disposition:
+    weight: 3
+    description: "Marks each item accepted, clarified, or declined"
+  verifies_changes:
+    weight: 2
+    description: "Verifies accepted changes"
+  explains_declines:
+    weight: 2
+    description: "Gives technical reasons for declined comments"
+
+min_pass_score: 7.0

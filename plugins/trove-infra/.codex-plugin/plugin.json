@@ -1,0 +1,11 @@
+{
+  "name": "trove-infra",
+  "description": "Infrastructure and DevOps automation",
+  "version": "2026.7.4",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "trove-infra",
+    "category": "infrastructure",
+    "shortDescription": "Infrastructure and DevOps automation"
+  }
+}
