@@ -30,7 +30,7 @@
     "promote-stable": "bun run scripts/promote-stable.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
+    "@anthropic-ai/sdk": "^0.122.0",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
