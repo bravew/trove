@@ -8,6 +8,7 @@ const claude: HostConfig = {
   marketplaceSubdir: ".claude-plugin",
 
   projections: ["skill"],
+  skillProjection: "claude",
 
   features: {
     skills: true,
@@ -28,11 +29,6 @@ const claude: HostConfig = {
     supportsToolAllowlistMetadata: true,
   },
 
-  frontmatter: {
-    mode: "keep",
-    stripFields: [],
-    renameFields: {},
-  },
 
   contentRewrites: [],
 

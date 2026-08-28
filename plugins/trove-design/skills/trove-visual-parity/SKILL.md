@@ -1,17 +1,8 @@
 ---
 name: trove-visual-parity
-description: |
-  Achieve pixel-exact UI equivalence between two implementations via image diff. Establish a baseline harness first, migrate one component at a time, verify each with a screenshot diff within a tuned threshold.
-  Use when migrating a styling system or matching a new implementation (e.g. React) to an existing one (e.g. Vue).
-version: 1.0.0
-preamble-tier: 2
+description: "Achieve pixel-exact UI equivalence between two implementations via image diff. Establish a baseline harness first, migrate one component at a time, verify each with a screenshot diff within a tuned threshold. Use when migrating a styling system or matching a new implementation (e.g. React) to an existing one (e.g. Vue)."
+when_to_use: "match this design exactly; visual parity; pixel-perfect migration"
 user-invocable: true
-triggers:
-  - match this design exactly
-  - visual parity
-  - pixel-perfect migration
-benefits-from:
-  - trove-component-spec
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

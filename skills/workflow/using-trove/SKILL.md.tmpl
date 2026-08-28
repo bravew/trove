@@ -1,9 +1,13 @@
 ---
 name: using-trove
 description: Skill discipline anchor for the Trove marketplace. Loaded once per session; routes the agent to the right trove-* skill before code, planning, review, or git actions.
-version: 1.0.0
 user-invocable: false
-disable-model-invocation: false
+host-overrides:
+  # Cursor receives this anchor as an always-on `.mdc` rule, so the skill copy
+  # must not also be model-invocable or the same text loads twice. This is an
+  # explicit manual-only declaration, not a translation of `user-invocable`.
+  cursor:
+    disable-model-invocation: true
 triggers:
   - session start
   - skill routing

@@ -1,15 +1,8 @@
 ---
 name: trove-principle-idempotency
-description: |
-  Make Operations Idempotent — design commands, lifecycle steps, and processing loops to converge to the same end state regardless of how many times they run or where they start from.
-  Use when designing operations that run amid crashes, restarts, and retries (jobs, deploys, lifecycle steps, queues).
-version: 1.0.0
-preamble-tier: 1
+description: "Make Operations Idempotent — design commands, lifecycle steps, and processing loops to converge to the same end state regardless of how many times they run or where they start from. Use when designing operations that run amid crashes, restarts, and retries (jobs, deploys, lifecycle steps, queues)."
+when_to_use: "make this idempotent; safe to retry; converge to the same state"
 user-invocable: true
-triggers:
-  - make this idempotent
-  - safe to retry
-  - converge to the same state
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

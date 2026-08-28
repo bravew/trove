@@ -1,14 +1,8 @@
 ---
 name: trove-worktree
-description: Git worktree workflow for spikes, risky experiments, and broad refactors that should not disturb the user's current branch.
-version: 1.0.0
-preamble-tier: 3
+description: "Git worktree workflow for spikes, risky experiments, and broad refactors that should not disturb the user's current branch."
+when_to_use: "spike this; experiment; risky refactor; use a worktree"
 user-invocable: true
-triggers:
-  - spike this
-  - experiment
-  - risky refactor
-  - use a worktree
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

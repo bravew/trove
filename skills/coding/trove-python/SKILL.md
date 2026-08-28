@@ -1,20 +1,10 @@
 ---
 name: trove-python
-description: |
-  Python/FastAPI coding conventions and best practices.
-  Auto-activates when working with Python files.
-  Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling.
-version: 1.0.0
-preamble-tier: 2
+description: "Python/FastAPI coding conventions and best practices. Auto-activates when working with Python files. Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling."
+paths:
+  - "**/*.py"
+when_to_use: "python conventions; fastapi patterns; async python; pydantic models"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.py"
-triggers:
-  - python conventions
-  - fastapi patterns
-  - async python
-  - pydantic models
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

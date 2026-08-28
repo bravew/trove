@@ -22,7 +22,6 @@ import {
   loadPlugins,
   buildSkillToPlugins,
   applyContentRewrites,
-  flattenDescription,
   type ParsedTemplate,
   type PluginInfo,
   type PluginAttachment,
@@ -60,6 +59,21 @@ function loadPluginYaml(pluginName: string): PluginYaml | null {
 // Anthropic's own claude-plugins-official marketplace omits this field
 // for the same reason — plugin.json is the canonical skill manifest.
 
+/**
+ * Discovery metadata Trove already curates in `marketplace.yaml`.
+ *
+ * `category` and `keywords` are documented marketplace fields Claude Code uses
+ * to organize and search plugins, and Trove has real values for both — they
+ * were simply being dropped. `roles` stays out: it is a Trove concept the CLI
+ * reads from catalog.json, and no host acts on it.
+ */
+function discoveryMetadata(entry: MarketplaceYaml["plugins"][number]): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+  if (entry.category) meta.category = entry.category;
+  if (entry.tags && entry.tags.length > 0) meta.keywords = entry.tags;
+  return meta;
+}
+
 function generateClaudeMarketplace(marketplace: MarketplaceYaml): MarketplaceJson {
   const plugins = marketplace.plugins.map((entry) => {
     const isLocal = typeof entry.source === "string" && !entry.source.startsWith("http");
@@ -69,6 +83,7 @@ function generateClaudeMarketplace(marketplace: MarketplaceYaml): MarketplaceJso
         name: entry.name,
         source: `./plugins/${entry.source}`,
         description: entry.description,
+        ...discoveryMetadata(entry),
         strict: true,
       };
     }
@@ -78,6 +93,7 @@ function generateClaudeMarketplace(marketplace: MarketplaceYaml): MarketplaceJso
       name: entry.name,
       source: entry.source as Record<string, unknown>,
       description: entry.description,
+      ...discoveryMetadata(entry),
     };
   });
 
@@ -116,6 +132,7 @@ function generatePlatformMarketplace(
           name: entry.name,
           source: `./plugins/${entry.source}`,
           description: entry.description,
+          ...discoveryMetadata(entry),
         };
       }
 
@@ -123,6 +140,7 @@ function generatePlatformMarketplace(
         name: entry.name,
         source: entry.source as Record<string, unknown>,
         description: entry.description,
+        ...discoveryMetadata(entry),
       };
     });
 
@@ -335,7 +353,7 @@ function buildAgentsSection(template: TemplateFile, parsed: ParsedTemplate, host
     .trim();
   return {
     skillName: template.skillName,
-    description: flattenDescription(parsed.description),
+    description: parsed.authoring.description,
     body,
   };
 }

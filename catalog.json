@@ -72,7 +72,8 @@
         "claude",
         "cursor",
         "codex",
-        "agents"
+        "agents",
+        "gemini"
       ],
       "skills": [
         "trove-python",
@@ -111,7 +112,8 @@
         "claude",
         "cursor",
         "codex",
-        "agents"
+        "agents",
+        "gemini"
       ],
       "skills": [
         "trove-design-review",
@@ -140,7 +142,8 @@
         "claude",
         "cursor",
         "codex",
-        "agents"
+        "agents",
+        "gemini"
       ],
       "skills": [
         "trove-spec",
@@ -168,7 +171,8 @@
         "claude",
         "cursor",
         "codex",
-        "agents"
+        "agents",
+        "gemini"
       ],
       "skills": [
         "trove-security-review",
@@ -196,7 +200,8 @@
         "claude",
         "cursor",
         "codex",
-        "agents"
+        "agents",
+        "gemini"
       ],
       "skills": [
         "trove-terraform",

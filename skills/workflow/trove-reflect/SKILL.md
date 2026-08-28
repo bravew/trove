@@ -1,18 +1,8 @@
 ---
 name: trove-reflect
-description: |
-  Mine the current session for durable learnings and route each into a concrete edit — a skill change or a learnings entry — never auto-applied.
-  Use when the user says "reflect", or after a session that surfaced a recurring correction or a non-obvious project quirk.
-version: 1.0.0
-preamble-tier: 3
+description: "Mine the current session for durable learnings and route each into a concrete edit — a skill change or a learnings entry — never auto-applied. Use when the user says \"reflect\", or after a session that surfaced a recurring correction or a non-obvious project quirk."
+when_to_use: "reflect on this session; what did we learn; capture learnings"
 user-invocable: true
-triggers:
-  - reflect on this session
-  - what did we learn
-  - capture learnings
-benefits-from:
-  - trove-write-skill
-  - trove-principle-encode-in-structure
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

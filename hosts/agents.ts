@@ -18,6 +18,7 @@ const agents: HostConfig = {
   marketplaceSubdir: "",
 
   projections: ["agents-section"],
+  skillProjection: "strict",
   agentsScope: "scoped",
 
   features: {
@@ -39,18 +40,6 @@ const agents: HostConfig = {
     supportsToolAllowlistMetadata: false,
   },
 
-  frontmatter: {
-    mode: "strip-platform",
-    stripFields: [
-      "allowed-tools",
-      "context",
-      "effort",
-      "disable-model-invocation",
-      "paths",
-      "user-invocable",
-    ],
-    renameFields: {},
-  },
 
   contentRewrites: [
     { from: "${CLAUDE_SKILL_DIR}", to: "" },

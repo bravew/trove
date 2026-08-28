@@ -1,6 +1,9 @@
 ---
 name: trove-react-best-practices
 description: "React and Next.js performance optimization guidelines (Vercel Engineering, 70 rules across 8 categories). Use when writing, reviewing, or refactoring React code specifically for performance: eliminating waterfalls, bundle size, re-render optimization, or server/client data fetching. Complements trove-react, which carries project-specific conventions."
+metadata:
+  source: vercel-labs/agent-skills
+  upstream-version: 1.0.0
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

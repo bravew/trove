@@ -157,7 +157,7 @@ case "$HOST" in
     ;;
   opencode)
     assert_file_contains "$ROOT/output/opencode/plugins/trove-workflow/index.ts" \
-      '../../skills/using-trove/SKILL\.md' \
+      '\.\./\.\./\.agents/skills/using-trove/SKILL\.md' \
       "OpenCode plugin must read the generated using-trove skill"
     assert_file_contains "$ROOT/output/opencode/plugins/trove-workflow/index.ts" \
       'systemPrompt' \
@@ -175,6 +175,14 @@ case "$HOST" in
     assert_file_contains "$ROOT/output/gemini/plugins/trove-workflow/gemini-extension.json" \
       '"contextFileName": "GEMINI\.md"' \
       "Gemini extension must point at GEMINI.md"
+    for field in name version description; do
+      assert_file_contains "$ROOT/output/gemini/plugins/trove-workflow/gemini-extension.json" \
+        "\"$field\": \".+\"" \
+        "Gemini extension manifest must declare a non-empty $field"
+    done
+    assert_file_contains "$ROOT/output/gemini/plugins/trove-workflow/skills/trove-brainstorm/SKILL.md" \
+      '^name: trove-brainstorm$' \
+      "Gemini extension must bundle the plugin's on-demand skills, not just GEMINI.md"
     assert_file_contains "$ROOT/output/gemini/plugins/trove-workflow/GEMINI.md" \
       '^# using-trove$' \
       "Gemini context file must contain the using-trove body"

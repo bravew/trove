@@ -3,7 +3,6 @@ name: trove-swift
 description: "Swift 6 and SwiftUI coding conventions for iOS development. Auto-activates when working with Swift files. Covers @Observable, async/await, NavigationStack, Swift Testing, and accessibility."
 paths:
   - "**/*.swift"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

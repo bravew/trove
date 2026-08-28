@@ -1,19 +1,10 @@
 ---
 name: trove-swift
-description: |
-  Swift 6 and SwiftUI coding conventions for iOS development.
-  Auto-activates when working with Swift files.
-  Covers @Observable, async/await, NavigationStack, Swift Testing, and accessibility.
-version: 1.0.0
-preamble-tier: 2
+description: "Swift 6 and SwiftUI coding conventions for iOS development. Auto-activates when working with Swift files. Covers @Observable, async/await, NavigationStack, Swift Testing, and accessibility."
+paths:
+  - "**/*.swift"
+when_to_use: "swift conventions; swiftui view; swift testing"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.swift"
-triggers:
-  - swift conventions
-  - swiftui view
-  - swift testing
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

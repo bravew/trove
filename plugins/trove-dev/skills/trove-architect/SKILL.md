@@ -1,20 +1,8 @@
 ---
 name: trove-architect
-description: |
-  Design the shape before the code: sketch types, signatures, and module structure with not-implemented bodies, agree, then fill in. Scrap the sketch when implementation proves it wrong.
-  Use for non-trivial work where jumping straight to code would lock in the wrong shape.
-version: 1.0.0
-preamble-tier: 3
+description: "Design the shape before the code: sketch types, signatures, and module structure with not-implemented bodies, agree, then fill in. Scrap the sketch when implementation proves it wrong. Use for non-trivial work where jumping straight to code would lock in the wrong shape."
+when_to_use: "architect this; design this before coding; sketch the types first"
 user-invocable: true
-triggers:
-  - architect this
-  - design this before coding
-  - sketch the types first
-benefits-from:
-  - trove-explain
-  - trove-plan
-  - trove-principle-data-shape
-  - trove-principle-type-discipline
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

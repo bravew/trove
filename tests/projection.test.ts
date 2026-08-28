@@ -102,7 +102,8 @@ test("host skill outputs include support references beside SKILL.md", () => {
   for (const hostSkillRoot of [
     path.join(OUTPUT, "cursor", ".agents", "skills"),
     path.join(OUTPUT, "codex", ".agents", "skills"),
-    path.join(OUTPUT, "opencode", "skills"),
+    path.join(OUTPUT, "opencode", ".agents", "skills"),
+    path.join(OUTPUT, "gemini", ".agents", "skills"),
   ]) {
     expect(
       fs.existsSync(
@@ -134,8 +135,22 @@ test("cursor: explicit non-invocable anchor emits alwaysApply true", () => {
     path.join(OUTPUT, "cursor", ".agents", "skills", "using-trove", "SKILL.md"),
     "utf-8",
   );
+  // Cursor already receives this anchor as an always-on rule, so the skill
+  // copy declares manual-only explicitly via `host-overrides.cursor`. It is
+  // NOT derived from `user-invocable: false`, which means the opposite.
   const skillFm = skill.slice(4, skill.indexOf("\n---", 4));
   expect(skillFm).toMatch(/^disable-model-invocation: true$/m);
+});
+
+test("cursor: `user-invocable: false` alone never becomes manual-only", () => {
+  // Regression guard for F2. trove-python is model-only (user-invocable:
+  // false) with no manual-only declaration; translating one into the other
+  // inverts the skill's meaning in Cursor.
+  const skill = fs.readFileSync(
+    path.join(OUTPUT, "cursor", ".agents", "skills", "trove-python", "SKILL.md"),
+    "utf-8",
+  );
+  expect(skill.slice(4, skill.indexOf("\n---", 4))).not.toMatch(/^disable-model-invocation:/m);
 });
 
 test("plugin manifests: Claude and Cursor hook commands use their own root env vars", () => {
@@ -261,4 +276,74 @@ test("agents: scoped file contains only its own skills", () => {
   // Skills owned by other plugins must be absent.
   expect(devFile).not.toContain("## trove-a11y");
   expect(devFile).not.toContain("## trove-spec");
+});
+
+// ─── Auto-attach glob inventory (F1) ───────────────────────
+//
+// Before the fix, Claude dropped `paths` entirely: a skill could declare
+// `auto_attach.globs` in plugin.yaml and never auto-attach. These assertions
+// tie the emitted `paths` to the declared inventory in both directions, so
+// neither a silently dropped glob nor a silently widened one can ship.
+
+function claudePaths(skillMdPath: string): string[] {
+  const content = fs.readFileSync(skillMdPath, "utf-8");
+  const fm = content.slice(4, content.indexOf("\n---", 4));
+  const match = fm.match(/^paths:\n((?:\s+- .*\n?)+)/m);
+  if (!match) return [];
+  return [...match[1].matchAll(/^\s+- "(.+)"$/gm)].map((m) => m[1]);
+}
+
+test("claude: every declared auto_attach glob is emitted as `paths`", () => {
+  const YAML = require("yaml");
+  const pluginsDir = path.join(ROOT, "plugins");
+  let checked = 0;
+
+  for (const plugin of fs.readdirSync(pluginsDir)) {
+    const yamlPath = path.join(pluginsDir, plugin, "plugin.yaml");
+    if (!fs.existsSync(yamlPath)) continue;
+    const manifest = YAML.parse(fs.readFileSync(yamlPath, "utf-8"));
+
+    for (const entry of manifest.skills ?? []) {
+      const globs: string[] = entry.auto_attach?.globs ?? [];
+      const name = path.basename(entry.path);
+      const skillMd = path.join(pluginsDir, plugin, "skills", name, "SKILL.md");
+      if (!fs.existsSync(skillMd)) continue;
+
+      // Both directions: declared globs are emitted, and nothing else is.
+      expect({ name, paths: claudePaths(skillMd) }).toEqual({ name, paths: globs });
+      checked++;
+    }
+  }
+
+  expect(checked).toBeGreaterThan(0);
+});
+
+test("claude: skills with no declared globs emit no `paths`", () => {
+  // A skill that never auto-attached must not start auto-attaching.
+  for (const name of ["trove-commit", "trove-review", "using-trove"]) {
+    const matches = [
+      path.join(ROOT, "plugins", "trove-dev", "skills", name, "SKILL.md"),
+      path.join(ROOT, "plugins", "trove-workflow", "skills", name, "SKILL.md"),
+    ].filter((p) => fs.existsSync(p));
+    expect(matches.length).toBeGreaterThan(0);
+    for (const skillMd of matches) expect(claudePaths(skillMd)).toEqual([]);
+  }
+});
+
+test("cursor: skill `paths` and rule `globs` carry the same inventory", () => {
+  for (const name of ["trove-python", "trove-react", "trove-typescript", "trove-a11y"]) {
+    const skill = fs.readFileSync(
+      path.join(OUTPUT, "cursor", ".agents", "skills", name, "SKILL.md"),
+      "utf-8",
+    );
+    const skillFm = skill.slice(4, skill.indexOf("\n---", 4));
+    const skillGlobs = [...skillFm.matchAll(/^\s+- "(.+)"$/gm)].map((m) => m[1]);
+
+    const rule = fs.readFileSync(path.join(OUTPUT, "cursor", "rules", `${name}.mdc`), "utf-8");
+    const ruleFm = rule.slice(4, rule.indexOf("\n---", 4));
+    const ruleGlobs = (ruleFm.match(/^globs: (.+)$/m)?.[1] ?? "").split(", ").filter(Boolean);
+
+    expect(ruleGlobs).toEqual(skillGlobs);
+    expect(skillGlobs.length).toBeGreaterThan(0);
+  }
 });

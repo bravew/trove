@@ -42,6 +42,13 @@ check_fixtures() {
       echo "$skill expected.yaml missing boolean before_first_edit"
       failures=$((failures + 1))
     fi
+    # The live runner looks for the fixture directory name in the transcript, so
+    # a fixture named after a skill that no longer exists can never pass. These
+    # sat under the project's former name until the 2026-08 refresh.
+    if [[ ! -d "$ROOT/plugins/trove-workflow/skills/$skill" ]]; then
+      echo "$skill does not name a skill in trove-workflow; rename the fixture"
+      failures=$((failures + 1))
+    fi
   done
   return "$failures"
 }

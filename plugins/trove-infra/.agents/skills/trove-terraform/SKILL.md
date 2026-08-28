@@ -4,7 +4,6 @@ description: "Terraform/OpenTofu conventions and best practices. Auto-activates 
 paths:
   - "**/*.tf"
   - "**/*.tfvars"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -6,7 +6,6 @@ paths:
   - "**/*.jsx"
   - "**/*.vue"
   - "**/*.html"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

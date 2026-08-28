@@ -1,23 +1,11 @@
 ---
 name: trove-lambda
-description: |
-  AWS Lambda handler patterns with CDK infrastructure conventions.
-  Auto-activates when working with Lambda handler or CDK files.
-  Covers handler structure, SQS/SNS parsing, IPC patterns, Powertools logging, and CDK best practices.
-version: 1.0.0
-preamble-tier: 2
+description: "AWS Lambda handler patterns with CDK infrastructure conventions. Auto-activates when working with Lambda handler or CDK files. Covers handler structure, SQS/SNS parsing, IPC patterns, Powertools logging, and CDK best practices."
+paths:
+  - "**/lambda_handler.py"
+  - "**/lambda_function.py"
+when_to_use: "lambda handler; aws lambda; sqs handler; sns handler"
 user-invocable: false
-activation:
-  globs:
-    - "**/lambda_handler.py"
-    - "**/lambda_function.py"
-triggers:
-  - lambda handler
-  - aws lambda
-  - sqs handler
-  - sns handler
-benefits-from:
-  - trove-principle-idempotency
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

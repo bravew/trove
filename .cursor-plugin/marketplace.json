@@ -11,32 +11,80 @@
     {
       "name": "trove-workflow",
       "source": "./plugins/trove-workflow",
-      "description": "Workflow methodology skills and session bootstrap"
+      "description": "Workflow methodology skills and session bootstrap",
+      "category": "workflow",
+      "keywords": [
+        "workflow",
+        "methodology",
+        "bootstrap",
+        "planning"
+      ]
     },
     {
       "name": "trove-dev",
       "source": "./plugins/trove-dev",
-      "description": "Developer skills: coding patterns, code review, git workflow, debugging"
+      "description": "Developer skills: coding patterns, code review, git workflow, debugging",
+      "category": "development",
+      "keywords": [
+        "python",
+        "react",
+        "vue",
+        "swift",
+        "lambda",
+        "fastapi",
+        "typescript"
+      ]
     },
     {
       "name": "trove-design",
       "source": "./plugins/trove-design",
-      "description": "Designer skills: Figma review, accessibility, design systems"
+      "description": "Designer skills: Figma review, accessibility, design systems",
+      "category": "design",
+      "keywords": [
+        "figma",
+        "a11y",
+        "design-system",
+        "component-specs"
+      ]
     },
     {
       "name": "trove-product",
       "source": "./plugins/trove-product",
-      "description": "PM skills: specs, user stories, release notes, triage"
+      "description": "PM skills: specs, user stories, release notes, triage",
+      "category": "product",
+      "keywords": [
+        "spec",
+        "user-story",
+        "release",
+        "triage",
+        "roadmap"
+      ]
     },
     {
       "name": "trove-security",
       "source": "./plugins/trove-security",
-      "description": "Security review and vulnerability scanning"
+      "description": "Security review and vulnerability scanning",
+      "category": "security",
+      "keywords": [
+        "owasp",
+        "secrets",
+        "audit",
+        "vulnerability"
+      ]
     },
     {
       "name": "trove-infra",
       "source": "./plugins/trove-infra",
-      "description": "Infrastructure and DevOps automation"
+      "description": "Infrastructure and DevOps automation",
+      "category": "infrastructure",
+      "keywords": [
+        "aws",
+        "terraform",
+        "cdk",
+        "docker",
+        "ecs",
+        "lambda"
+      ]
     }
   ]
 }

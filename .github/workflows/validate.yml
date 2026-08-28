@@ -21,8 +21,8 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install
-        name: Install dependencies
+      - run: bun ci
+        name: Install dependencies (frozen lockfile)
 
       - run: bun run build
         name: Build all stages
@@ -45,6 +45,15 @@ jobs:
       - run: bun run test:acceptance:artifacts
         name: Bootstrap acceptance artifact checks
 
+      - run: tests/acceptance/setup-links.sh
+        name: Installer link layout in a disposable HOME
+
+      - run: npm install -g @anthropic-ai/claude-code
+        name: Install Claude Code for strict manifest validation
+
+      - run: bun run validate:claude-manifests
+        name: claude plugin validate --strict (all plugins + marketplace)
+
       - run: bun run eval:changed
         name: Changed-skill evals (structure-only without API key)
         env:
@@ -63,12 +72,36 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install
+      - run: bun ci
 
       - run: bun run build
 
       - run: bun run eval:gate
         name: Quality gate evaluation
+
+  # Advisory only. The blocking Agent Skills gate is scripts/lib/agent-skills-spec.ts,
+  # written in-repo from the published spec. The reference implementation declares
+  # itself demonstration-only and the same-named npm package publishes no repository
+  # link, so it is a second opinion, never an authority (see the plan's F14). A
+  # disagreement is a signal to re-read the spec, not an automatic failure.
+  skills-ref-crosscheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - run: bun ci
+
+      - run: bun run build
+
+      - run: scripts/crosscheck-skills-ref.sh
+        name: Advisory skills-ref cross-check
 
   skill-triggering:
     runs-on: ubuntu-latest
@@ -82,7 +115,7 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install
+      - run: bun ci
 
       - run: bun run build
 

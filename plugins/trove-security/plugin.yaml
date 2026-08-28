@@ -1,5 +1,4 @@
 name: trove-security
-version: "1.0.0"
 description: "Security review and vulnerability scanning"
 author:
   name: Trove Contributors
@@ -12,10 +11,10 @@ roles: [dev, devops]
 
 skills:
   - path: ./skills/trove-security-review
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-secret-scan
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
 agents:
   - path: ./agents/security-reviewer.md

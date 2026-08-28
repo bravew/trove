@@ -1,14 +1,8 @@
 ---
 name: trove-receive-review
-description: Review-feedback handling workflow. Use when the user provides PR comments, code review feedback, or requested changes.
-version: 1.0.0
-preamble-tier: 3
+description: "Review-feedback handling workflow. Use when the user provides PR comments, code review feedback, or requested changes."
+when_to_use: "address review; pr comments; code review feedback; requested changes"
 user-invocable: true
-triggers:
-  - address review
-  - pr comments
-  - code review feedback
-  - requested changes
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

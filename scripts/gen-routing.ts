@@ -20,7 +20,6 @@ import {
   loadAndParseTemplate,
   loadPlugins,
   buildSkillToPlugins,
-  flattenDescription,
 } from "./lib/skill-parser";
 import YAML from "yaml";
 
@@ -80,10 +79,10 @@ function buildRouting(): RoutingBuild {
   for (const t of templates) {
     const parsed = loadAndParseTemplate(t);
     const row: SkillRow = {
-      name: parsed.name || t.skillName,
-      description: flattenDescription(parsed.description),
+      name: parsed.authoring.name || t.skillName,
+      description: parsed.authoring.description,
       triggers: readTriggers(parsed.rawFrontmatter),
-      paths: parsed.paths,
+      paths: parsed.authoring.globs,
     };
     const owners = skillToPlugins.get(t.skillName);
     if (!owners || owners.length === 0) {

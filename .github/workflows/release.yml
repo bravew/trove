@@ -22,7 +22,7 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install
+      - run: bun ci
         name: Install dependencies
 
       - run: bun run build

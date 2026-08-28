@@ -1,19 +1,11 @@
 ---
 name: trove-docker
-description: |
-  Dockerfile and Docker Compose best practices.
-  Auto-activates on Docker files.
-version: 1.0.0
-preamble-tier: 2
+description: "Dockerfile and Docker Compose best practices. Auto-activates on Docker files."
+paths:
+  - "**/Dockerfile*"
+  - "**/docker-compose*.yml"
+when_to_use: "dockerfile; docker compose; containerize"
 user-invocable: false
-activation:
-  globs:
-    - "**/Dockerfile*"
-    - "**/docker-compose*.yml"
-triggers:
-  - dockerfile
-  - docker compose
-  - containerize
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

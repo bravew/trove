@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const anchorPath = join(__dirname, {{ANCHOR_PATH}});
-const skillsDir = join(__dirname, "../../skills");
+const skillsDir = join(__dirname, "../../.agents/skills");
 const skillNames = {{SKILLS_JSON}};
 
 let cachedAnchor: string | undefined;

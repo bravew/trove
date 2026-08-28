@@ -1,5 +1,4 @@
 name: trove-infra
-version: "1.0.0"
 description: "Infrastructure and DevOps automation"
 author:
   name: Trove Contributors
@@ -12,17 +11,17 @@ roles: [devops]
 
 skills:
   - path: ./skills/trove-terraform
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.tf", "**/*.tfvars"]
 
   - path: ./skills/trove-cdk
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/cdk.json", "**/cdk/**/*.ts"]
 
   - path: ./skills/trove-docker
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/Dockerfile*", "**/docker-compose*.yml"]
 

@@ -3,9 +3,21 @@ import type { HostConfig } from "./types";
 /**
  * OpenCode host.
  *
- * OpenCode does not consume Claude-style bash hooks. The generated bundle
- * includes normal SKILL.md files plus a small TypeScript plugin that prepends
- * the workflow anchor to the system prompt through OpenCode's plugin surface.
+ * Skills land in `.agents/skills/<skill>/SKILL.md`, one of OpenCode's three
+ * documented project discovery roots (the others being `.opencode/skills` and
+ * `.claude/skills`). `.agents/skills` is the one Codex and Gemini also read,
+ * so a single tree serves all three. The previous `output/opencode/skills`
+ * location was not a discovery root at all.
+ *
+ * OpenCode recognizes only name, description, license, compatibility, and
+ * metadata, and ignores everything else — the strict projection emits exactly
+ * that set.
+ *
+ * OpenCode does not consume Claude-style bash hooks, so the bundle also ships
+ * a small TypeScript plugin that prepends the workflow anchor to the system
+ * prompt through OpenCode's plugin surface.
+ *
+ * Verified against opencode.ai/docs/skills — see docs/host-matrix.md.
  */
 const opencode: HostConfig = {
   name: "opencode",
@@ -15,7 +27,8 @@ const opencode: HostConfig = {
   marketplaceSubdir: "output/opencode/plugins",
 
   projections: ["skill"],
-  skillOutputDir: "skills",
+  skillProjection: "strict",
+  skillOutputDir: ".agents/skills",
 
   features: {
     skills: true,
@@ -29,24 +42,13 @@ const opencode: HostConfig = {
   },
 
   capabilities: {
-    supportsInlineSkill: false,
+    supportsInlineSkill: true,
     supportsRuleFiles: false,
     supportsImportedMemory: false,
     supportsAgentsMd: false,
     supportsToolAllowlistMetadata: false,
   },
 
-  frontmatter: {
-    mode: "strip-platform",
-    stripFields: [
-      "allowed-tools",
-      "context",
-      "effort",
-      "disable-model-invocation",
-      "paths",
-    ],
-    renameFields: {},
-  },
 
   contentRewrites: [
     { from: "${CLAUDE_SKILL_DIR}", to: "[skill-dir]" },

@@ -12,36 +12,84 @@
       "name": "trove-workflow",
       "source": "./plugins/trove-workflow",
       "description": "Workflow methodology skills and session bootstrap",
+      "category": "workflow",
+      "keywords": [
+        "workflow",
+        "methodology",
+        "bootstrap",
+        "planning"
+      ],
       "strict": true
     },
     {
       "name": "trove-dev",
       "source": "./plugins/trove-dev",
       "description": "Developer skills: coding patterns, code review, git workflow, debugging",
+      "category": "development",
+      "keywords": [
+        "python",
+        "react",
+        "vue",
+        "swift",
+        "lambda",
+        "fastapi",
+        "typescript"
+      ],
       "strict": true
     },
     {
       "name": "trove-design",
       "source": "./plugins/trove-design",
       "description": "Designer skills: Figma review, accessibility, design systems",
+      "category": "design",
+      "keywords": [
+        "figma",
+        "a11y",
+        "design-system",
+        "component-specs"
+      ],
       "strict": true
     },
     {
       "name": "trove-product",
       "source": "./plugins/trove-product",
       "description": "PM skills: specs, user stories, release notes, triage",
+      "category": "product",
+      "keywords": [
+        "spec",
+        "user-story",
+        "release",
+        "triage",
+        "roadmap"
+      ],
       "strict": true
     },
     {
       "name": "trove-security",
       "source": "./plugins/trove-security",
       "description": "Security review and vulnerability scanning",
+      "category": "security",
+      "keywords": [
+        "owasp",
+        "secrets",
+        "audit",
+        "vulnerability"
+      ],
       "strict": true
     },
     {
       "name": "trove-infra",
       "source": "./plugins/trove-infra",
       "description": "Infrastructure and DevOps automation",
+      "category": "infrastructure",
+      "keywords": [
+        "aws",
+        "terraform",
+        "cdk",
+        "docker",
+        "ecs",
+        "lambda"
+      ],
       "strict": true
     }
   ]
