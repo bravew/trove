@@ -5,6 +5,13 @@ import { ALL_HOSTS } from "../../hosts/index";
 import type { MarketplaceYaml, PluginYaml } from "../../hosts/types";
 import { ROOT, findTemplates, loadPlugins } from "./skill-parser";
 
+/**
+ * The version plugins actually ship with. `gen-plugins` stamps every generated
+ * manifest from this file, so reporting anything else here would show users a
+ * version no installed plugin has.
+ */
+const SHIPPED_VERSION = fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim();
+
 const DEFAULT_SKILL_PLATFORMS = ["claude", "cursor", "codex", "agents"];
 
 export interface SkillDeprecationWindow {
@@ -262,7 +269,7 @@ function collectPlugins(
     return {
       name: plugin.name,
       path: `plugins/${plugin.name}`,
-      version: plugin.yaml.version,
+      version: SHIPPED_VERSION,
       roles: plugin.yaml.roles ?? [],
       platforms: Object.keys(plugin.yaml.platforms ?? {}).sort(),
       skills,

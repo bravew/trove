@@ -1,15 +1,8 @@
 ---
 name: trove-show-work
-description: |
-  Keep a reviewable decision trail for long-running or unattended work: an append-only TSV log with one row per decision (what, why, evidence, result).
-  Use for autonomous or multi-phase runs, or work a human reviews after stepping away.
-version: 1.0.0
-preamble-tier: 2
+description: "Keep a reviewable decision trail for long-running or unattended work: an append-only TSV log with one row per decision (what, why, evidence, result). Use for autonomous or multi-phase runs, or work a human reviews after stepping away."
+when_to_use: "keep a decision log; show your work; audit trail for this run"
 user-invocable: true
-triggers:
-  - keep a decision log
-  - show your work
-  - audit trail for this run
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

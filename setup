@@ -9,11 +9,14 @@
 #   ./setup --host cursor      # Cursor only
 #   ./setup --host codex       # Codex only
 #   ./setup --host copilot     # Copilot CLI AGENTS fallback
+#   ./setup --host opencode    # OpenCode only
+#   ./setup --host gemini      # Gemini CLI only
 #   ./setup --host cursor --host codex
 #   ./setup --host all         # All detected hosts
 #   ./setup --role dev         # Developer plugins only
 #   ./setup --role design      # Designer plugins only
 #   ./setup --role all         # All roles (default)
+#   ./setup --uninstall        # Remove every link this installer created
 #
 set -euo pipefail
 
@@ -37,18 +40,120 @@ header(){ echo -e "\n${BOLD}── $* ──${NC}"; }
 # ── Arg parsing ──────────────────────────────────────────────
 HOST_ARGS=()
 ROLE_ARG="all"
+UNINSTALL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST_ARGS+=("$2"); shift 2 ;;
     --role) ROLE_ARG="$2"; shift 2 ;;
+    --uninstall) UNINSTALL=1; shift ;;
     --help|-h)
-      echo "Usage: ./setup [--host claude|cursor|codex|copilot|agents|all]... [--role dev|design|pm|devops|all]"
+      echo "Usage: ./setup [--host claude|cursor|codex|opencode|gemini|copilot|agents|all]... [--role dev|design|pm|devops|all]"
+      echo "       ./setup --uninstall"
       exit 0
       ;;
     *) err "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+# ── Link bookkeeping ─────────────────────────────────────────
+#
+# Every symlink this installer creates is recorded, so `--uninstall` can undo
+# exactly what was installed and nothing else. A target that is not one of our
+# links is never touched: a user skill that happens to share a name with a
+# Trove skill wins, and we say so.
+TROVE_STATE_DIR="${TROVE_HOME:-$HOME/.trove}"
+LINK_MANIFEST="$TROVE_STATE_DIR/installed-links.tsv"
+LINK_HOST=""
+
+owned_by_trove() {
+  # $1: an existing symlink path. True when it resolves inside this checkout.
+  local resolved
+  resolved=$(readlink "$1" 2>/dev/null || echo "")
+  [[ -n "$resolved" && "$resolved" == "$SCRIPT_DIR"/* ]]
+}
+
+# forget_host_links <host> — drop this host'"'"'s rows from the manifest.
+forget_host_links() {
+  [[ -f "$LINK_MANIFEST" ]] || return 0
+  local tmp
+  tmp=$(mktemp)
+  grep -v "^$1	" "$LINK_MANIFEST" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$LINK_MANIFEST"
+}
+
+# link_skill <source-skill-dir> <target-path>
+link_skill() {
+  local src="$1" target="$2"
+  [[ -f "$src/SKILL.md" ]] || return 0
+
+  if [[ -L "$target" ]]; then
+    if owned_by_trove "$target"; then
+      rm "$target"
+    else
+      warn "Skipping $(basename "$target"): $target is a symlink we did not create"
+      return 0
+    fi
+  elif [[ -e "$target" ]]; then
+    warn "Skipping $(basename "$target"): $target already exists and is not a Trove link"
+    return 0
+  fi
+
+  ln -sfn "$src" "$target"
+  mkdir -p "$TROVE_STATE_DIR"
+  printf '%s\t%s\n' "$LINK_HOST" "$target" >> "$LINK_MANIFEST"
+}
+
+# link_skill_tree <host> <source-root> <target-root>
+#
+# Hosts discover a skill at `<root>/<skill-name>/SKILL.md`. A grouping folder
+# such as `<root>/trove/<skill>` is read as a skill directory with no
+# SKILL.md, so the links are flat. Cursor is the exception — it documents
+# recursive grouping — and passes its own grouped target root.
+link_skill_tree() {
+  LINK_HOST="$1"
+  local source_root="$2" target_root="$3"
+  forget_host_links "$LINK_HOST"
+
+  if [[ ! -d "$source_root" ]]; then
+    warn "No generated skills at $source_root. Did the build run?"
+    return 0
+  fi
+
+  mkdir -p "$target_root"
+  local count=0
+  for skill_dir in "$source_root"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    link_skill "${skill_dir%/}" "$target_root/$(basename "$skill_dir")"
+    count=$((count + 1))
+  done
+  ok "$count skill(s) linked into $target_root"
+}
+
+uninstall_links() {
+  header "Uninstall"
+  if [[ ! -f "$LINK_MANIFEST" ]]; then
+    info "No installed-link manifest at $LINK_MANIFEST — nothing to remove."
+    return 0
+  fi
+  local removed=0 kept=0
+  while IFS=$'\t' read -r host target; do
+    [[ -n "${target:-}" ]] || continue
+    if [[ -L "$target" ]] && owned_by_trove "$target"; then
+      rm "$target"
+      removed=$((removed + 1))
+    else
+      kept=$((kept + 1))
+    fi
+  done < "$LINK_MANIFEST"
+  rm -f "$LINK_MANIFEST"
+  ok "Removed $removed link(s); left $kept entry/entries that were no longer ours"
+}
+
+if [[ "$UNINSTALL" -eq 1 ]]; then
+  uninstall_links
+  exit 0
+fi
 
 # ── Host detection ───────────────────────────────────────────
 detect_hosts() {
@@ -68,6 +173,14 @@ detect_hosts() {
 
   if command -v copilot &>/dev/null; then
     hosts+=("copilot")
+  fi
+
+  if command -v opencode &>/dev/null || [[ -d "$HOME/.config/opencode" ]]; then
+    hosts+=("opencode")
+  fi
+
+  if command -v gemini &>/dev/null || [[ -d "$HOME/.gemini" ]]; then
+    hosts+=("gemini")
   fi
 
   # Always include "agents" (generic AGENTS.md)
@@ -155,35 +268,29 @@ setup_claude() {
       ok "Marketplace registered" || \
       warn "Could not register marketplace (may already be registered)"
   else
-    # Fallback: symlink skills directly
+    # Fallback: link skills directly.
+    #
+    # Personal skills are discovered at `~/.claude/skills/<skill-name>/SKILL.md`
+    # only. The previous `~/.claude/skills/trove/<skill>` layout put a grouping
+    # directory where Claude expects a skill directory, so nothing under it was
+    # found. Source: code.claude.com/docs/en/skills ("Where skills live").
     info "Setting up skills via symlinks..."
-    local skills_dir="$HOME/.claude/skills/trove"
-    mkdir -p "$skills_dir"
+    LINK_HOST="claude"
+    forget_host_links "claude"
+    mkdir -p "$HOME/.claude/skills"
 
+    local linked=0
     for plugin_dir in "$SCRIPT_DIR"/plugins/*/; do
-      local plugin_name
-      plugin_name=$(basename "$plugin_dir")
       local skills_path="$plugin_dir/skills"
-
-      if [[ -d "$skills_path" ]]; then
-        for skill_dir in "$skills_path"/*/; do
-          [[ -d "$skill_dir" ]] || continue
-          local skill_name
-          skill_name=$(basename "$skill_dir")
-          local target="$skills_dir/$skill_name"
-
-          if [[ -L "$target" ]]; then
-            rm "$target"
-          fi
-
-          if [[ -d "$skill_dir" ]] && [[ -f "$skill_dir/SKILL.md" ]]; then
-            ln -sf "$skill_dir" "$target"
-          fi
-        done
-      fi
+      [[ -d "$skills_path" ]] || continue
+      for skill_dir in "$skills_path"/*/; do
+        [[ -d "$skill_dir" ]] || continue
+        link_skill "${skill_dir%/}" "$HOME/.claude/skills/$(basename "$skill_dir")"
+        linked=$((linked + 1))
+      done
     done
 
-    ok "Skills symlinked to ~/.claude/skills/trove/"
+    ok "$linked skill(s) linked into ~/.claude/skills/"
   fi
 }
 
@@ -197,65 +304,99 @@ setup_cursor() {
     return 0
   fi
 
-  # Symlink skills for Cursor
+  # Cursor documents recursive grouping under its skills root, so the `trove/`
+  # folder here is supported and keeps Trove skills separable from a user's own.
+  LINK_HOST="cursor"
+  forget_host_links "cursor"
   local skills_dir="$HOME/.cursor/skills/trove"
   mkdir -p "$skills_dir"
 
+  local linked=0
   for plugin_dir in "$SCRIPT_DIR"/plugins/*/; do
     local skills_path="$plugin_dir/skills"
-    if [[ -d "$skills_path" ]]; then
-      for skill_dir in "$skills_path"/*/; do
-        [[ -d "$skill_dir" ]] || continue
-        local skill_name
-        skill_name=$(basename "$skill_dir")
-        local target="$skills_dir/$skill_name"
-
-        if [[ -L "$target" ]]; then
-          rm "$target"
-        fi
-
-        if [[ -d "$skill_dir" ]] && [[ -f "$skill_dir/SKILL.md" ]]; then
-          ln -sf "$skill_dir" "$target"
-        fi
-      done
-    fi
+    [[ -d "$skills_path" ]] || continue
+    for skill_dir in "$skills_path"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      link_skill "${skill_dir%/}" "$skills_dir/$(basename "$skill_dir")"
+      linked=$((linked + 1))
+    done
   done
 
-  ok "Skills linked to ~/.cursor/skills/trove/"
+  ok "$linked skill(s) linked into ~/.cursor/skills/trove/"
 }
 
 # ── Codex setup ──────────────────────────────────────────────
 setup_codex() {
   header "Codex"
 
-  # Codex's canonical user-scope skill directory is $HOME/.agents/skills.
-  # Source: https://developers.openai.com/codex/skills (USER scope row).
-  local skills_dir="$HOME/.agents/skills/trove"
-  mkdir -p "$skills_dir"
+  # Codex's user scope is `$HOME/.agents/skills/<skill>/SKILL.md`; the previous
+  # `.../trove/<skill>` nesting shifted every skill one level too deep.
+  # Source: developers.openai.com/codex/skills (USER scope row).
+  link_skill_tree "codex" "$SCRIPT_DIR/output/codex/.agents/skills" "$HOME/.agents/skills"
+}
 
-  # Build emits Codex skills under output/codex/.agents/skills/<skill>/SKILL.md
-  # (matches hosts/codex.ts skillOutputDir). The bare output/codex/*/ glob
-  # used previously skipped this entirely because bash globs ignore
-  # dot-prefixed directories by default.
-  local codex_output="$SCRIPT_DIR/output/codex/.agents/skills"
-  if [[ -d "$codex_output" ]]; then
-    for skill_dir in "$codex_output"/*/; do
-      [[ -d "$skill_dir" ]] || continue
-      local skill_name
-      skill_name=$(basename "$skill_dir")
-      local target="$skills_dir/$skill_name"
+# ── OpenCode setup ───────────────────────────────────────────
+setup_opencode() {
+  header "OpenCode"
 
-      if [[ -L "$target" ]]; then
-        rm "$target"
-      fi
+  # `~/.config/opencode/skills` is OpenCode's documented global root. Its
+  # project roots (`.opencode/skills`, `.agents/skills`, `.claude/skills`) are
+  # per-repository and are not an installer's business.
+  # Source: opencode.ai/docs/skills.
+  link_skill_tree "opencode" "$SCRIPT_DIR/output/opencode/.agents/skills" \
+    "$HOME/.config/opencode/skills"
 
-      if [[ -f "$skill_dir/SKILL.md" ]]; then
-        ln -sf "$skill_dir" "$target"
-      fi
-    done
+  local plugin_root="$SCRIPT_DIR/output/opencode/plugins"
+  if [[ -d "$plugin_root" ]]; then
+    info "OpenCode plugins generated in $plugin_root — copy one into your project's .opencode/plugin/"
+  fi
+}
+
+# ── Gemini CLI setup ─────────────────────────────────────────
+setup_gemini() {
+  header "Gemini CLI"
+
+  # Gemini loads extensions from <home>/.gemini/extensions, and each generated
+  # extension carries its plugin's bundled skills plus GEMINI.md context.
+  # `gemini extensions link` is the documented way to point at a working
+  # directory, so use it when the CLI is present and fall back to symlinks.
+  # Source: geminicli.com/docs/extensions/reference.
+  local ext_source="$SCRIPT_DIR/output/gemini/plugins"
+  if [[ ! -d "$ext_source" ]]; then
+    warn "No generated Gemini extensions at $ext_source. Did the build run?"
+    return 0
   fi
 
-  ok "Skills linked to ~/.agents/skills/trove/"
+  LINK_HOST="gemini"
+  forget_host_links "gemini"
+  mkdir -p "$HOME/.gemini/extensions"
+
+  local linked=0
+  for ext_dir in "$ext_source"/*/; do
+    [[ -f "$ext_dir/gemini-extension.json" ]] || continue
+    local name
+    name=$(basename "$ext_dir")
+    if command -v gemini &>/dev/null && gemini extensions link "${ext_dir%/}" &>/dev/null; then
+      linked=$((linked + 1))
+      continue
+    fi
+    local target="$HOME/.gemini/extensions/$name"
+    if [[ -L "$target" ]]; then
+      if owned_by_trove "$target"; then rm "$target"; else
+        warn "Skipping $name: $target is a symlink we did not create"
+        continue
+      fi
+    elif [[ -e "$target" ]]; then
+      warn "Skipping $name: $target already exists and is not a Trove link"
+      continue
+    fi
+    ln -sfn "${ext_dir%/}" "$target"
+    mkdir -p "$TROVE_STATE_DIR"
+    printf '%s\t%s\n' "gemini" "$target" >> "$LINK_MANIFEST"
+    linked=$((linked + 1))
+  done
+
+  ok "$linked Gemini extension(s) installed"
 }
 
 # ── Copilot CLI setup ────────────────────────────────────────
@@ -282,12 +423,14 @@ setup_agents() {
 # ── Run host setups ──────────────────────────────────────────
 for host in $HOSTS; do
   case "$host" in
-    claude)  setup_claude  ;;
-    cursor)  setup_cursor  ;;
-    codex)   setup_codex   ;;
-    copilot) setup_copilot ;;
-    agents)  setup_agents  ;;
-    *)       warn "Unknown host: $host" ;;
+    claude)   setup_claude   ;;
+    cursor)   setup_cursor   ;;
+    codex)    setup_codex    ;;
+    opencode) setup_opencode ;;
+    gemini)   setup_gemini   ;;
+    copilot)  setup_copilot  ;;
+    agents)   setup_agents   ;;
+    *)        warn "Unknown host: $host" ;;
   esac
 done
 

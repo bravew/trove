@@ -1,14 +1,7 @@
 ---
 name: trove-explain
-description: |
-  Explain code, architecture, or data flow at the appropriate level for the audience.
-  Use when someone needs to understand unfamiliar code, a module, or system design.
-version: 1.0.0
-preamble-tier: 2
-triggers:
-  - explain this code
-  - what does this do
-  - walk me through
+description: "Explain code, architecture, or data flow at the appropriate level for the audience. Use when someone needs to understand unfamiliar code, a module, or system design."
+when_to_use: "explain this code; what does this do; walk me through"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

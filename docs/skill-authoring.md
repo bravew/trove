@@ -129,8 +129,8 @@ The build emits host-native artifacts from the canonical template (full table in
 - **Claude Code** → `skills/<category>/<skill>/SKILL.md` (in place)
 - **Cursor** → `output/cursor/.agents/skills/<skill>/SKILL.md` plus `output/cursor/rules/<skill>.mdc` only for glob/always-on context
 - **OpenAI Codex** → `output/codex/.agents/skills/<skill>/SKILL.md`
-- **OpenCode** → `output/opencode/skills/<skill>/SKILL.md` plus plugin bootstrap TS where applicable
-- **Gemini CLI** → `output/gemini/plugins/<plugin>/GEMINI.md` for bootstrap anchors
+- **OpenCode** → `output/opencode/.agents/skills/<skill>/SKILL.md` plus plugin bootstrap TS where applicable
+- **Gemini CLI** → `output/gemini/.agents/skills/<skill>/SKILL.md`, bundled into each extension at `output/gemini/plugins/<plugin>/skills/`, with `GEMINI.md` for the bootstrap anchor
 - **Generic AGENTS.md** → contributes a section to `output/agents/plugins/<plugin>/AGENTS.md`
 
 You can inspect the projected output for a single host:

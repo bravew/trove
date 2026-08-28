@@ -1,17 +1,7 @@
 ---
 name: trove-spec
-description: |
-  Product spec writing skill. Generates structured feature specifications
-  with user stories, acceptance criteria, and technical considerations.
-version: 1.0.0
-preamble-tier: 2
-triggers:
-  - product spec
-  - feature spec
-  - write a spec
-benefits-from:
-  - trove-user-story
-  - trove-unslop
+description: "Product spec writing skill. Generates structured feature specifications with user stories, acceptance criteria, and technical considerations."
+when_to_use: "product spec; feature spec; write a spec"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -3,9 +3,18 @@ import type { HostConfig } from "./types";
 /**
  * Gemini CLI host.
  *
- * Gemini extensions load persistent context from the filename declared in
- * gemini-extension.json. The generator writes GEMINI.md from the workflow
- * discipline anchor for each plugin that ships one.
+ * Two delivery paths, both documented:
+ *
+ *   - Workspace skills land in `.agents/skills/<skill>/SKILL.md`, which Gemini
+ *     discovers directly and prefers over `.gemini/skills/` in the same tier.
+ *   - `gen-plugins` copies the same files into each extension's `skills/`
+ *     subdirectory, the extension-bundled tier.
+ *
+ * `GEMINI.md` stays what it was built for: persistent bootstrap context named
+ * by `contextFileName`, not a substitute for on-demand skills.
+ *
+ * Verified against geminicli.com/docs/cli/skills and
+ * geminicli.com/docs/extensions/reference — see docs/host-matrix.md.
  */
 const gemini: HostConfig = {
   name: "gemini",
@@ -14,10 +23,12 @@ const gemini: HostConfig = {
   manifestFile: "gemini-extension.json",
   marketplaceSubdir: "output/gemini/plugins",
 
-  projections: ["gemini-extension"],
+  projections: ["skill", "gemini-extension"],
+  skillProjection: "strict",
+  skillOutputDir: ".agents/skills",
 
   features: {
-    skills: false,
+    skills: true,
     commands: false,
     hooks: false,
     agents: false,
@@ -28,25 +39,13 @@ const gemini: HostConfig = {
   },
 
   capabilities: {
-    supportsInlineSkill: false,
+    supportsInlineSkill: true,
     supportsRuleFiles: false,
     supportsImportedMemory: true,
     supportsAgentsMd: false,
     supportsToolAllowlistMetadata: false,
   },
 
-  frontmatter: {
-    mode: "strip-platform",
-    stripFields: [
-      "allowed-tools",
-      "context",
-      "effort",
-      "disable-model-invocation",
-      "paths",
-      "user-invocable",
-    ],
-    renameFields: {},
-  },
 
   contentRewrites: [
     { from: "${CLAUDE_SKILL_DIR}", to: "[skill-dir]" },

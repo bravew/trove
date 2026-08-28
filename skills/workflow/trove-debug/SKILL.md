@@ -1,17 +1,8 @@
 ---
 name: trove-debug
-description: Systematic debugging workflow. Use for bug reports, failing tests, broken behavior, red CI, regressions, or unexplained production symptoms.
-version: 1.0.0
-preamble-tier: 3
+description: "Systematic debugging workflow. Use for bug reports, failing tests, broken behavior, red CI, regressions, or unexplained production symptoms."
+when_to_use: "bug report; test failure; this is broken; red ci; debug"
 user-invocable: true
-triggers:
-  - bug report
-  - test failure
-  - this is broken
-  - red ci
-  - debug
-benefits-from:
-  - trove-tdd
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

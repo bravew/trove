@@ -7,7 +7,8 @@
  *
  * Environment:
  *   ANTHROPIC_API_KEY     — Required for actual evaluation
- *   EVAL_MODEL            — Model to use (default: claude-sonnet-4-6)
+ *   EVAL_MODEL            — Model to use (default: claude-sonnet-5)
+ *   EVAL_MAX_TOKENS       — Judge response cap (default: 8192)
  *
  * Usage:
  *   bun run eval:gate              # Run gate-level evals (blocks release)
@@ -31,7 +32,21 @@ const gateOnly = args.includes("--gate");
 const changedOnly = args.includes("--changed");
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = process.env.EVAL_MODEL || "claude-sonnet-4-6";
+const MODEL = process.env.EVAL_MODEL || "claude-sonnet-5";
+
+/**
+ * Judge response cap.
+ *
+ * On Sonnet 5 adaptive thinking is on and `max_tokens` bounds thinking **plus**
+ * visible output, so the previous 1024 could be spent entirely on reasoning and
+ * truncate the judge's JSON — which reads as a quality regression rather than a
+ * truncation. The judge's JSON is a few hundred tokens; the headroom is for the
+ * thinking in front of it.
+ */
+const MAX_TOKENS = Number(process.env.EVAL_MAX_TOKENS ?? 8192);
+
+/** Token usage accumulated across judge calls, for cost comparison. */
+export const usageTotals = { input: 0, output: 0, calls: 0 };
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -187,12 +202,28 @@ Score each criterion 0-10 and compute a weighted average. Return JSON only:
 }
 \`\`\``;
 
+  // No temperature/top_p/top_k anywhere in this repo, and none added here:
+  // Sonnet 5 rejects all three with a 400.
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 1024,
+    max_tokens: MAX_TOKENS,
+    thinking: { type: "adaptive" },
     system: judgePrompt,
     messages: [{ role: "user", content: userMessage }],
   });
+
+  usageTotals.input += response.usage.input_tokens;
+  usageTotals.output += response.usage.output_tokens;
+  usageTotals.calls += 1;
+
+  // A truncated judge response yields unparseable JSON that looks like a bad
+  // score. Name the real cause instead.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `Judge response hit max_tokens (${MAX_TOKENS}) before finishing its JSON. ` +
+        `Raise EVAL_MAX_TOKENS; do not read the run as a score change.`,
+    );
+  }
 
   // Extract JSON from response
   const text = response.content
@@ -379,6 +410,11 @@ const resultsPath = path.join(ROOT, "evals", "results.json");
 fs.writeFileSync(resultsPath, JSON.stringify({
   timestamp: new Date().toISOString(),
   model: MODEL,
+  maxTokens: MAX_TOKENS,
+  // Recorded so a model change can be read as score-vs-cost rather than score
+  // alone: tokenizers differ between models, so token counts move for reasons
+  // unrelated to quality.
+  usage: { ...usageTotals },
   results,
   summary: { passed: totalPassed, failed: totalFailed, total: totalPassed + totalFailed },
 }, null, 2) + "\n");
@@ -388,6 +424,10 @@ console.log(`\nResults written to evals/results.json`);
 
 console.log("\n" + "═".repeat(45));
 console.log(`Results: ${totalPassed} passed, ${totalFailed} failed`);
+console.log(
+  `Model:   ${MODEL} — ${usageTotals.calls} judge call(s), ` +
+    `${usageTotals.input} in / ${usageTotals.output} out tokens`,
+);
 
 if (totalFailed > 0 && gateOnly) {
   console.error("✗ Quality gate failed. Fix failing evals before release.");

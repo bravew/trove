@@ -1,5 +1,4 @@
 name: trove-product
-version: "1.0.0"
 description: "PM skills: specs, user stories, release notes, triage"
 author:
   name: Trove Contributors
@@ -12,13 +11,13 @@ roles: [pm]
 
 skills:
   - path: ./skills/trove-spec
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-user-story
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-release-notes
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
 mcp_servers:
   # Notion — product specs, roadmaps, and task databases (OAuth, no env vars)

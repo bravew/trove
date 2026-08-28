@@ -1,22 +1,13 @@
 ---
 name: trove-commit
-description: |
-  Git commit workflow and message conventions. Use when creating, drafting, or reviewing atomic commits with conventional messages.
-version: 1.0.0
-preamble-tier: 2
+description: "Git commit workflow and message conventions. Use when creating, drafting, or reviewing atomic commits with conventional messages."
+when_to_use: "commit message; write a commit; draft commit; commit these changes"
 user-invocable: true
 allowed-tools:
-  - Bash(git *)
+  - "Bash(git *)"
   - Read
   - Glob
   - Grep
-triggers:
-  - commit message
-  - write a commit
-  - draft commit
-  - commit these changes
-benefits-from:
-  - trove-unslop
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -16,6 +16,7 @@ const cursor: HostConfig = {
   marketplaceSubdir: ".cursor-plugin",
 
   projections: ["skill", "rule"],
+  skillProjection: "cursor",
   skillOutputDir: ".agents/skills",
   ruleOutputDir: "rules",
 
@@ -38,21 +39,6 @@ const cursor: HostConfig = {
     supportsToolAllowlistMetadata: false,
   },
 
-  frontmatter: {
-    mode: "strip-platform",
-    stripFields: [
-      "allowed-tools",
-      "context",
-      "effort",
-      "version",
-      "preamble-tier",
-      "activation",
-      "triggers",
-      "benefits-from",
-      "user-invocable",
-    ],
-    renameFields: {},
-  },
 
   contentRewrites: [
     { from: "${CLAUDE_SKILL_DIR}", to: "[skill-dir]" },

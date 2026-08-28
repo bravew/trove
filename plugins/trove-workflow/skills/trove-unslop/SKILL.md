@@ -1,15 +1,8 @@
 ---
 name: trove-unslop
-description: |
-  Cut AI tells from writing — PR descriptions, release notes, specs, commit bodies, and replies.
-  Use before finalizing prose, or when the user asks to clean up, de-slop, or make text sound human.
-version: 1.0.0
-preamble-tier: 2
+description: "Cut AI tells from writing — PR descriptions, release notes, specs, commit bodies, and replies. Use before finalizing prose, or when the user asks to clean up, de-slop, or make text sound human."
+when_to_use: "clean up this writing; de-slop this; make this sound human"
 user-invocable: true
-triggers:
-  - clean up this writing
-  - de-slop this
-  - make this sound human
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -1,14 +1,8 @@
 ---
 name: trove-write-skill
-description: Skill authoring workflow. Use when creating or updating a Codex or Trove skill, including rubrics, tasks, metadata, and validation.
-version: 1.0.0
-preamble-tier: 3
+description: "Skill authoring workflow. Use when creating or updating a Codex or Trove skill, including rubrics, tasks, metadata, and validation."
+when_to_use: "add a skill; write a new skill; improve skill; skill rubric"
 user-invocable: true
-triggers:
-  - add a skill
-  - write a new skill
-  - improve skill
-  - skill rubric
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

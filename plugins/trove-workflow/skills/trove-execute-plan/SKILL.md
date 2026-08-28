@@ -1,17 +1,8 @@
 ---
 name: trove-execute-plan
-description: Execute an approved implementation plan one checkpoint at a time with verification before advancing.
-version: 1.0.0
-preamble-tier: 3
+description: "Execute an approved implementation plan one checkpoint at a time with verification before advancing."
+when_to_use: "execute the plan; implement this plan; go checkpoint by checkpoint; continue the plan"
 user-invocable: true
-triggers:
-  - execute the plan
-  - implement this plan
-  - go checkpoint by checkpoint
-  - continue the plan
-benefits-from:
-  - trove-plan
-  - trove-verify
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

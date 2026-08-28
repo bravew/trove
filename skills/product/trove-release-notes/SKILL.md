@@ -1,22 +1,12 @@
 ---
 name: trove-release-notes
-description: |
-  Release notes generator. Creates user-facing release notes
-  from git history, PR descriptions, and changelog entries.
-version: 1.0.0
-preamble-tier: 2
+description: "Release notes generator. Creates user-facing release notes from git history, PR descriptions, and changelog entries."
+when_to_use: "release notes; draft a changelog; what shipped; update changelog"
 user-invocable: true
 allowed-tools:
   - Read
   - Edit
-  - Bash(git *)
-triggers:
-  - release notes
-  - draft a changelog
-  - what shipped
-  - update changelog
-benefits-from:
-  - trove-unslop
+  - "Bash(git *)"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

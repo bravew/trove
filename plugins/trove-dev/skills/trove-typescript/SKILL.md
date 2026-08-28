@@ -1,22 +1,11 @@
 ---
 name: trove-typescript
-description: |
-  TypeScript type-system discipline for any .ts/.tsx file: make illegal states unrepresentable, validate at boundaries, avoid as/any.
-  Use when reading or editing TypeScript that isn't covered by a framework-specific skill. Defers to trove-react / trove-react-best-practices on .tsx component work.
-version: 1.0.0
-preamble-tier: 3
+description: "TypeScript type-system discipline for any .ts/.tsx file: make illegal states unrepresentable, validate at boundaries, avoid as/any. Use when reading or editing TypeScript that isn't covered by a framework-specific skill. Defers to trove-react / trove-react-best-practices on .tsx component work."
+paths:
+  - "**/*.ts"
+  - "**/*.tsx"
+when_to_use: "typescript best practices; type this correctly; make illegal states unrepresentable"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.ts"
-    - "**/*.tsx"
-triggers:
-  - typescript best practices
-  - type this correctly
-  - make illegal states unrepresentable
-benefits-from:
-  - trove-react
-  - trove-principle-type-discipline
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -24,7 +24,7 @@ git clone https://github.com/bravew/trove.git ~/.trove
 cd ~/.trove && ./setup
 ```
 
-The universal `setup` script installs Claude Code, Cursor, Codex, Copilot/AGENTS.md, and generic AGENTS.md outputs. Pass repeated `--host claude` / `--host cursor` / `--host codex` / `--host copilot` flags to scope, or `--role dev` / `--role design` / `--role pm` to install only role-specific plugins. OpenCode and Gemini artifacts are generated under `output/` for host-specific installation.
+The universal `setup` script installs to Claude Code, Cursor, Codex, OpenCode, Gemini CLI, and Copilot/AGENTS.md. Pass repeated `--host claude` / `--host cursor` / `--host codex` / `--host opencode` / `--host gemini` / `--host copilot` flags to scope, or `--role dev` / `--role design` / `--role pm` to install only role-specific plugins. Every symlink it creates is recorded, existing non-Trove entries are never overwritten, and `./setup --uninstall` reverses exactly what was installed.
 
 ## Upgrade
 
@@ -70,11 +70,11 @@ Optional MCP connector metadata lives on role plugins such as `trove-design`, `t
 | Claude Code | ✅ | ✅ | ✅ | ✅ | native |
 | Cursor | ✅ native skills + scoped rules | partial | subagents | ✅ | native |
 | OpenAI Codex | ✅ | — | — | ✅ | native |
-| OpenCode | ✅ | bootstrap plugin | — | — | generated |
-| Gemini CLI | bootstrap context | — | — | ✅ via extension | generated |
+| OpenCode | ✅ | bootstrap plugin | — | — | `~/.config/opencode/skills` |
+| Gemini CLI | ✅ via extension | bootstrap context | — | ✅ via extension | `~/.gemini/extensions` |
 | Copilot / Windsurf / Aider / Junie | `AGENTS.md` fallback | — | — | — | manual |
 
-Full feature matrix in [docs/cross-platform.md](docs/cross-platform.md).
+Full feature matrix in [docs/cross-platform.md](docs/cross-platform.md); discovery roots, honored frontmatter, and the source and date each was verified against in [docs/host-matrix.md](docs/host-matrix.md).
 
 ## What's a skill?
 
@@ -134,12 +134,12 @@ marketplace.yaml                          ─┘
                                                                   ├─ Claude Code:  in-place SKILL.md, .claude-plugin/marketplace.json
                                                                   ├─ Cursor:       output/cursor/.agents/skills/<skill>/SKILL.md + filtered rules
                                                                   ├─ Codex:        output/codex/.agents/skills/<skill>/SKILL.md
-                                                                  ├─ OpenCode:     output/opencode/plugins/<plugin>/index.ts + skills
-                                                                  ├─ Gemini CLI:   output/gemini/plugins/<plugin>/gemini-extension.json
+                                                                  ├─ OpenCode:     output/opencode/.agents/skills + plugins/<plugin>/index.ts
+                                                                  ├─ Gemini CLI:   output/gemini/.agents/skills + plugins/<plugin>/{skills,GEMINI.md}
                                                                   └─ AGENTS.md:    output/agents/AGENTS.md + per-plugin scoped files
 ```
 
-Each host adapter (`hosts/<name>.ts`) declares its projection kinds and frontmatter transforms. Adding a new platform = one new host file + one entry in `hosts/index.ts`. See [docs/cross-platform.md](docs/cross-platform.md).
+Each host adapter (`hosts/<name>.ts`) declares its projection kinds and its frontmatter projection profile. Adding a new platform = one new host file + one entry in `hosts/index.ts`. See [docs/cross-platform.md](docs/cross-platform.md).
 
 ## Release model
 
@@ -176,7 +176,8 @@ Calendar-versioned (`YYYY.M.D`). The `release.yml` workflow owns `VERSION`, the 
 - [Eval System](docs/eval-system.md) — per-skill rubrics, LLM-as-judge, gate-blocking criteria
 
 **Cross-cutting**
-- [Cross-Platform Guide](docs/cross-platform.md) — host capabilities, projection model, frontmatter transforms
+- [Cross-Platform Guide](docs/cross-platform.md) — host capabilities, projection model, frontmatter projection
+- [Host Matrix](docs/host-matrix.md) — discovery roots, honored fields, test method, source URL, verification date
 - [Routing Index](docs/routing.md) — auto-generated; lists every skill's triggers + paths
 - [User Config](docs/user-config.md) — `~/.trove/config.yaml` schema
 - [Self-Upgrade & Doctor](docs/self-upgrade.md) — `trove upgrade`, install-type detection

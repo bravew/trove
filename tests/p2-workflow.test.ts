@@ -68,16 +68,21 @@ test("triggers: every maintained skill template declares triggers", () => {
   }
 });
 
-test("triggers: pass through to Claude SKILL.md but not minimal Codex SKILL.md", () => {
+test("triggers: reach each host through its own documented field, never as `triggers`", () => {
+  // `triggers` is authoring vocabulary. Claude has a documented home for it
+  // (`when_to_use`); a strict Agent Skills host has none, so the language has
+  // to survive inside `description` instead.
   const claudeSkill = fs.readFileSync(path.join(ROOT, "skills", "coding", "trove-python", "SKILL.md"), "utf-8");
-  expect(claudeSkill).toMatch(/^triggers:/m);
-  expect(claudeSkill).toContain("- python conventions");
+  expect(claudeSkill).not.toMatch(/^triggers:/m);
+  expect(claudeSkill).toMatch(/^when_to_use: ".*python conventions.*"$/m);
 
   const codexSkill = fs.readFileSync(
     path.join(OUTPUT, "codex", ".agents", "skills", "trove-python", "SKILL.md"),
     "utf-8",
   );
   expect(codexSkill).not.toMatch(/^triggers:/m);
+  expect(codexSkill).not.toMatch(/^when_to_use:/m);
+  expect(codexSkill).toMatch(/^description: ".*Use when: python conventions;.*"$/m);
 });
 
 // ─── Routing index ─────────────────────────────────────────

@@ -1,21 +1,11 @@
 ---
 name: trove-cdk
-description: |
-  AWS CDK (TypeScript) conventions for infrastructure as code.
-  Auto-activates on CDK project files.
-version: 1.0.0
-preamble-tier: 2
+description: "AWS CDK (TypeScript) conventions for infrastructure as code. Auto-activates on CDK project files."
+paths:
+  - "**/cdk.json"
+  - "**/cdk/**/*.ts"
+when_to_use: "cdk stack; aws cdk; infrastructure as code"
 user-invocable: false
-activation:
-  globs:
-    - "**/cdk.json"
-    - "**/cdk/**/*.ts"
-triggers:
-  - cdk stack
-  - aws cdk
-  - infrastructure as code
-benefits-from:
-  - trove-principle-idempotency
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

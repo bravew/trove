@@ -4,7 +4,6 @@ description: "Dockerfile and Docker Compose best practices. Auto-activates on Do
 paths:
   - "**/Dockerfile*"
   - "**/docker-compose*.yml"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

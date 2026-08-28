@@ -30,12 +30,11 @@ import {
   findTemplates,
   loadAndParseTemplate,
   applyContentRewrites,
-  applyHostFrontmatter,
   injectGeneratedHeader,
-  flattenDescription,
   type TemplateFile,
   type ParsedTemplate,
 } from "./lib/skill-parser";
+import { emitFrontmatter, projectFrontmatter } from "./lib/projection";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
@@ -62,10 +61,20 @@ interface SkillArtifact {
 
 const SUPPORT_DIRS = ["references", "scripts"] as const;
 
+/**
+ * Emit a host-native `SKILL.md`.
+ *
+ * The frontmatter is rebuilt from the normalized authoring contract through
+ * the host's projection profile rather than edited in place, so a host only
+ * ever receives fields its profile allows.
+ */
 function projectSkill(template: TemplateFile, parsed: ParsedTemplate, host: HostConfig): SkillArtifact {
-  let content = shouldUseMinimalAgentSkillFrontmatter(host)
-    ? buildMinimalAgentSkill(parsed, host)
-    : applyHostFrontmatter(parsed.resolved, host);
+  const fields = projectFrontmatter(parsed.authoring, {
+    profile: host.skillProjection,
+    hostName: host.name,
+    supportsToolAllowlist: host.capabilities.supportsToolAllowlistMetadata,
+  });
+  let content = `${emitFrontmatter(fields)}${parsed.body}`;
   content = applyContentRewrites(content, host);
   content = injectGeneratedHeader(content, path.basename(template.path));
 
@@ -79,35 +88,13 @@ function projectSkill(template: TemplateFile, parsed: ParsedTemplate, host: Host
   return { outputPath, content };
 }
 
-function shouldUseMinimalAgentSkillFrontmatter(host: HostConfig): boolean {
-  return host.name === "codex" || host.name === "cursor";
-}
-
-function hasExplicitUserInvocableFalse(parsed: ParsedTemplate): boolean {
-  return /^user-invocable:\s*false\s*$/m.test(parsed.rawFrontmatter);
-}
-
-function buildMinimalAgentSkill(parsed: ParsedTemplate, host: HostConfig): string {
-  const lines = [
-    "---",
-    `name: ${parsed.name}`,
-    `description: ${JSON.stringify(flattenDescription(parsed.description))}`,
-  ];
-
-  if (host.name === "cursor") {
-    if (parsed.paths.length > 0) {
-      lines.push("paths:");
-      for (const glob of parsed.paths) {
-        lines.push(`  - ${JSON.stringify(glob)}`);
-      }
-    }
-    if (hasExplicitUserInvocableFalse(parsed)) {
-      lines.push("disable-model-invocation: true");
-    }
-  }
-
-  lines.push("---");
-  return `${lines.join("\n")}${parsed.body}`;
+/**
+ * `user-invocable: false` marks a skill the user cannot summon by name, so
+ * Cursor's only way to deliver it is an always-on rule. This is distinct from
+ * `activation.manual`, which is the opposite signal (see projection.ts).
+ */
+function isModelOnly(parsed: ParsedTemplate): boolean {
+  return parsed.authoring.userInvocable === false;
 }
 
 // ─── Cursor `.mdc` rule projection ──────────────────────────
@@ -125,9 +112,9 @@ function projectCursorRule(template: TemplateFile, parsed: ParsedTemplate, host:
   let body = parsed.body.replace(/^\n+/, "\n");
   body = applyContentRewrites(body, host);
 
-  const description = flattenDescription(parsed.description);
-  const globs = parsed.paths;
-  const explicitNonInvocable = hasExplicitUserInvocableFalse(parsed);
+  const description = parsed.authoring.description;
+  const globs = parsed.authoring.globs;
+  const modelOnly = isModelOnly(parsed);
 
   // Selection model:
   //   activation.globs present → Auto Attached  (globs set, alwaysApply: false)
@@ -145,7 +132,7 @@ function projectCursorRule(template: TemplateFile, parsed: ParsedTemplate, host:
   const lines: string[] = ["---"];
   if (description) lines.push(`description: ${JSON.stringify(description)}`);
   if (globs.length > 0) lines.push(`globs: ${globs.join(", ")}`);
-  lines.push(`alwaysApply: ${globs.length === 0 && explicitNonInvocable ? "true" : "false"}`);
+  lines.push(`alwaysApply: ${globs.length === 0 && modelOnly ? "true" : "false"}`);
   lines.push("---", "");
 
   const header = GENERATED_HEADER.replace("{{SOURCE}}", path.basename(template.path));
@@ -157,7 +144,7 @@ function projectCursorRule(template: TemplateFile, parsed: ParsedTemplate, host:
 }
 
 function shouldProjectCursorRule(parsed: ParsedTemplate): boolean {
-  return parsed.paths.length > 0 || hasExplicitUserInvocableFalse(parsed);
+  return parsed.authoring.globs.length > 0 || isModelOnly(parsed);
 }
 
 // ─── Output writing ─────────────────────────────────────────

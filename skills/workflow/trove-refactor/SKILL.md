@@ -1,20 +1,8 @@
 ---
 name: trove-refactor
-description: |
-  Behavior-preserving change to structure: rename, extract, inline, dedupe, move, or migrate an internal API. Pin behavior first, migrate callers and delete the legacy API in one wave, prove behavior unchanged on the real artifact.
-  Use for refactors and internal-API migrations.
-version: 1.0.0
-preamble-tier: 3
+description: "Behavior-preserving change to structure: rename, extract, inline, dedupe, move, or migrate an internal API. Pin behavior first, migrate callers and delete the legacy API in one wave, prove behavior unchanged on the real artifact. Use for refactors and internal-API migrations."
+when_to_use: "refactor this; migrate callers; extract this; delete the legacy api"
 user-invocable: true
-triggers:
-  - refactor this
-  - migrate callers
-  - extract this
-  - delete the legacy api
-benefits-from:
-  - trove-verify
-  - trove-tdd
-  - trove-principle-migrate-then-delete
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

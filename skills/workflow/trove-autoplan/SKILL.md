@@ -1,21 +1,8 @@
 ---
 name: trove-autoplan
-description: |
-  Front-door planning workflow. Take an idea and produce implementation-ready
-  output by composing the Trove product skills (spec → user stories →
-  release-note preview). Defers all detail to the leaf skills it calls.
-version: 1.0.0
-preamble-tier: 4
+description: "Front-door planning workflow. Take an idea and produce implementation-ready output by composing the Trove product skills (spec → user stories → release-note preview). Defers all detail to the leaf skills it calls."
+when_to_use: "autoplan; turn this idea into a plan; draft an implementation plan; end-to-end planning"
 user-invocable: true
-triggers:
-  - autoplan
-  - turn this idea into a plan
-  - draft an implementation plan
-  - end-to-end planning
-benefits-from:
-  - trove-spec
-  - trove-user-story
-  - trove-release-notes
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

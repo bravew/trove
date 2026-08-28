@@ -1,21 +1,11 @@
 ---
 name: trove-react
-description: |
-  React 19 coding conventions and performance patterns.
-  Auto-activates when working with React/TypeScript files.
-  Covers hooks, state management, TanStack Query, Zustand, immutable updates, and component conventions.
-version: 1.0.0
-preamble-tier: 2
+description: "React 19 coding conventions and performance patterns. Auto-activates when working with React/TypeScript files. Covers hooks, state management, TanStack Query, Zustand, immutable updates, and component conventions."
+paths:
+  - "**/*.tsx"
+  - "**/*.jsx"
+when_to_use: "react component; react hooks; tanstack query; zustand state"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.tsx"
-    - "**/*.jsx"
-triggers:
-  - react component
-  - react hooks
-  - tanstack query
-  - zustand state
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

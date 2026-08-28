@@ -1,13 +1,8 @@
 ---
 name: using-trove
-description: Skill discipline anchor for the Trove marketplace. Loaded once per session; routes the agent to the right trove-* skill before code, planning, review, or git actions.
-version: 1.0.0
+description: "Skill discipline anchor for the Trove marketplace. Loaded once per session; routes the agent to the right trove-* skill before code, planning, review, or git actions."
+when_to_use: "session start; skill routing; trove bootstrap"
 user-invocable: false
-disable-model-invocation: false
-triggers:
-  - session start
-  - skill routing
-  - trove bootstrap
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

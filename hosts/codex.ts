@@ -15,6 +15,7 @@ const codex: HostConfig = {
   marketplaceSubdir: ".agents/plugins",
 
   projections: ["skill", "agents-section"],
+  skillProjection: "strict",
   skillOutputDir: ".agents/skills",
 
   features: {
@@ -36,17 +37,6 @@ const codex: HostConfig = {
     supportsToolAllowlistMetadata: false,
   },
 
-  frontmatter: {
-    mode: "strip-platform",
-    stripFields: [
-      "allowed-tools",
-      "context",
-      "effort",
-      "disable-model-invocation",
-      "paths",
-    ],
-    renameFields: {},
-  },
 
   contentRewrites: [
     { from: "${CLAUDE_SKILL_DIR}", to: "[skill-dir]" },
