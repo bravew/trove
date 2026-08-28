@@ -63,8 +63,8 @@ skills:
   - path: ./skills/trove-arena
     platforms: [claude, cursor, codex, agents, opencode]
 
-  # Design-discipline principles — surfaced by description and benefits-from,
-  # cited by using-trove. Adapted from the spudex/pstack principle set.
+  # Design-discipline principles — surfaced by description and benefits-from.
+  # Provenance is recorded in upstream.yaml and THIRD_PARTY.md.
   - path: ./skills/trove-principle-laziness
     platforms: [claude, cursor, codex, agents, opencode]
 

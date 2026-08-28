@@ -1,0 +1,82 @@
+# Weekly vendored-skill drift check.
+#
+# Runs `commands/trove-sync-upstream.md` against `upstream.yaml`, applies safe
+# upstream updates, and opens a PR. Never merges. A no-op week opens nothing.
+#
+# SETUP REQUIRED before this does anything:
+#   1. Add secret CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or
+#      ANTHROPIC_API_KEY, and switch the `with:` line below to match.
+#   2. Settings → Actions → General → allow "Create pull requests".
+# Until then the job fails fast at the auth step rather than running blind.
+#
+# GitHub scheduling caveats that bite unattended jobs:
+#   - Scheduled runs only fire from the DEFAULT BRANCH. Merge to main first.
+#   - On public repos GitHub disables the schedule after 60 days with no
+#     repository activity.
+#   - A scheduled run is attributed to whoever last edited the `cron:` line.
+#     claude-code-action rejects a bot actor unless it is in `allowed_bots`.
+#   - Avoid the top of the hour; GitHub delays schedules under peak load.
+
+name: Upstream Sync
+
+on:
+  schedule:
+    # Mondays 08:17 UTC — off-peak, deliberately not :00.
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Scope: a skill name, --source <id>, or --report-only"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write        # push the sync branch
+      pull-requests: write   # open the PR
+      id-token: write        # claude-code-action GitHub App auth
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+        name: Install dependencies
+
+      # Baseline: the tree must be green BEFORE the sync, so any red state in
+      # the PR is unambiguously caused by the sync.
+      - run: bun run build && bun run validate
+        name: Baseline build and validate
+
+      - uses: anthropics/claude-code-action@v1
+        name: Run upstream sync
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Reference the file by path rather than as /trove-sync-upstream, so
+          # the run does not depend on slash-command discovery in CI.
+          prompt: |
+            Read commands/trove-sync-upstream.md and execute it exactly as written.
+            Scope: ${{ github.event.inputs.scope || '(all sources)' }}
+
+            You are running unattended. Obey the command's non-negotiable rules.
+            Open a pull request only if something actually changed; if every pin
+            is current, report NO-OP and exit without creating a branch.
+            Never merge, never force-push, never enable auto-merge.
+          claude_args: |
+            --model claude-sonnet-5
+            --max-turns 60
+            --allowedTools "Bash(gh api:*),Bash(gh pr create:*),Bash(git *),Bash(bun run *),Bash(diff:*),Read,Write,Edit,Glob,Grep"

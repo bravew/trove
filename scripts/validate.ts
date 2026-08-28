@@ -31,6 +31,8 @@ import {
   findDuplicateSkillRegistrationFindings,
 } from "./lib/inventory";
 import { flattenSkillText, validateSkillBudget } from "./lib/skill-budget";
+import { checkOffline } from "./lib/upstream-sync";
+import { loadUpstreamManifest, validateManifestInventory } from "./lib/upstream-manifest";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
@@ -705,6 +707,23 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
   scanForSecrets(filePath);
 }
 
+function validateUpstreamLocks(): void {
+  console.log("\n── Upstream provenance ──");
+  try {
+    const manifest = loadUpstreamManifest(ROOT);
+    validateManifestInventory(manifest, ROOT);
+    const report = checkOffline(ROOT, manifest);
+    const failed = report.artifacts.filter((artifact) => artifact.conclusion === "validation-failed");
+    if (failed.length > 0) {
+      for (const artifact of failed) error(`upstream artifact '${artifact.artifact}' is not active: ${artifact.verification.join(", ")}`);
+      return;
+    }
+    ok(`${manifest.skills.length} skill origins and ${report.artifacts.length} upstream lock(s) validated`);
+  } catch (cause) {
+    error(`upstream manifest: ${(cause as Error).message}`);
+  }
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 console.log("Trove — Validation");
@@ -730,6 +749,7 @@ if (validateAll || pluginsOnly) {
 }
 
 if (validateAll) {
+  validateUpstreamLocks();
   validateSkillTemplates();
   validateBootstrapHostOutputs();
 
