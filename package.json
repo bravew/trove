@@ -27,6 +27,7 @@
     "test:acceptance:setup": "tests/acceptance/setup-links.sh",
     "scaffold:plugin": "bun run scripts/scaffold-plugin.ts",
     "scaffold:skill": "bun run scripts/scaffold-skill.ts",
+    "sync:upstream": "bun run scripts/sync-upstream.ts",
     "test": "bun test",
     "bump-version": "bun run scripts/bump-version.ts",
     "promote-stable": "bun run scripts/promote-stable.ts"

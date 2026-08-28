@@ -62,12 +62,20 @@ Replaces the manual pattern of `onNavigate` + `startTransition` + `addTransition
 import { useRouter } from 'next/navigation';
 import { startTransition, addTransitionType } from 'react';
 
-function handleNavigate(href: string) {
+function NavButton({ href, children }: { href: string; children: React.ReactNode }) {
   const router = useRouter();
-  startTransition(() => {
-    addTransitionType('nav-forward');
-    router.push(href);
-  });
+  return (
+    <button
+      onClick={() => {
+        startTransition(() => {
+          addTransitionType('nav-forward');
+          router.push(href);
+        });
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 ```
 
@@ -83,11 +91,13 @@ For search/sort/filter that re-renders on the server (via URL params), use `star
 import { useRouter } from 'next/navigation';
 import { startTransition } from 'react';
 
-function handleSort(sort: string) {
+function SortButton({ sort, children }: { sort: string; children: React.ReactNode }) {
   const router = useRouter();
-  startTransition(() => {
-    router.replace(`?sort=${sort}`);
-  });
+  return (
+    <button onClick={() => startTransition(() => router.replace(`?sort=${sort}`))}>
+      {children}
+    </button>
+  );
 }
 ```
 
@@ -157,14 +167,16 @@ When navigating between dynamic segments of the same route (e.g., `/collection/[
 
 ```tsx
 <Suspense fallback={<Skeleton />}>
-  <ViewTransition key={slug} name={`collection-${slug}`} share="auto" default="none">
+  <ViewTransition key={slug} name="collection-content" share="auto" default="none">
     <Content slug={slug} />
   </ViewTransition>
 </Suspense>
 ```
 
 - `key={slug}` forces unmount/remount on change
-- `name` + `share="auto"` creates a shared element crossfade
+- `name` + `share="auto"` creates a shared element crossfade — the name must be
+  the *same* on both sides, so keep it stable across slugs; keying is what forces
+  the remount
 - VT inside `<Suspense>` (without keying Suspense) keeps old content visible during loading
 
 ---

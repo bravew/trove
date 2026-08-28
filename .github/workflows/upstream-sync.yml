@@ -1,0 +1,148 @@
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "17 6 * * 3"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run a read-only check or update one artifact
+        required: true
+        type: choice
+        default: check
+        options:
+          - check
+          - update
+      artifact:
+        description: Artifact id for update mode
+        required: false
+        type: string
+        default: trove-react-view-transitions
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'update' && 'upstream-sync-update' || 'upstream-sync-check' }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event_name == 'schedule' || inputs.mode == 'check'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install locked dependencies
+        run: bun ci
+
+      - name: Verify baseline
+        run: |
+          bun run build
+          bun test
+          bun run validate
+
+      - name: Check upstream
+        run: bun run sync:upstream -- --check --json "$RUNNER_TEMP/upstream-report.json" --markdown "$RUNNER_TEMP/upstream-report.md"
+
+      - name: Upload deterministic report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upstream-sync-report
+          path: |
+            ${{ runner.temp }}/upstream-report.json
+            ${{ runner.temp }}/upstream-report.md
+          if-no-files-found: error
+          retention-days: 30
+
+  update:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'update' && vars.UPSTREAM_SYNC_WRITES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+      ARTIFACT: ${{ inputs.artifact }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install locked dependencies
+        run: bun ci
+
+      - name: Verify baseline
+        run: |
+          bun run build
+          bun test
+          bun run validate
+
+      - name: Update one artifact
+        run: bun run sync:upstream -- --update "$ARTIFACT" --json "$RUNNER_TEMP/upstream-report.json" --markdown "$RUNNER_TEMP/upstream-report.md"
+
+      - name: Read result
+        id: result
+        run: |
+          conclusion=$(jq -r '.artifacts[0].conclusion' "$RUNNER_TEMP/upstream-report.json")
+          candidate=$(jq -r '.artifacts[0].candidate_sha // empty' "$RUNNER_TEMP/upstream-report.json")
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Commit deterministic candidate
+        if: steps.result.outputs.conclusion == 'updated'
+        id: commit
+        run: |
+          branch="chore/upstream-${ARTIFACT}-${{ steps.result.outputs.candidate }}"
+          git config user.name "trove-upstream-bot"
+          git config user.email "trove-upstream-bot@users.noreply.github.com"
+          git add -A
+          if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git fetch origin "$branch"
+            git diff --quiet FETCH_HEAD -- || {
+              echo "existing automation branch has different content" >&2
+              exit 1
+            }
+          else
+            git switch -c "$branch"
+            git commit -m "chore(upstream): update $ARTIFACT"
+            git push -u origin "$branch"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request if needed
+        if: steps.result.outputs.conclusion == 'updated'
+        env:
+          BRANCH: ${{ steps.commit.outputs.branch }}
+        run: |
+          if [[ -z $(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number') ]]; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(upstream): update $ARTIFACT" \
+              --body-file "$RUNNER_TEMP/upstream-report.md"
+          fi
+
+      - name: Upload update report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upstream-sync-update-${{ inputs.artifact }}
+          path: |
+            ${{ runner.temp }}/upstream-report.json
+            ${{ runner.temp }}/upstream-report.md
+          if-no-files-found: error
+          retention-days: 30

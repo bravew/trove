@@ -1,0 +1,6 @@
+/upstream.yaml @bravew
+/upstream-patches/ @bravew
+/scripts/lib/upstream-manifest.ts @bravew
+/scripts/lib/upstream-sync.ts @bravew
+/scripts/sync-upstream.ts @bravew
+/.github/workflows/upstream-sync.yml @bravew
