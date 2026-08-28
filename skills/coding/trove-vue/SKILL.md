@@ -1,19 +1,10 @@
 ---
 name: trove-vue
-description: |
-  Vue 3 Composition API conventions and best practices.
-  Auto-activates when working with Vue single-file components.
-  Covers reactivity, component patterns, Vue Router, and Pinia state management.
-version: 1.0.0
-preamble-tier: 2
+description: "Vue 3 Composition API conventions and best practices. Auto-activates when working with Vue single-file components. Covers reactivity, component patterns, Vue Router, and Pinia state management."
+paths:
+  - "**/*.vue"
+when_to_use: "vue component; composition api; pinia store"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.vue"
-triggers:
-  - vue component
-  - composition api
-  - pinia store
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

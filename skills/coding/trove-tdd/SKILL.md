@@ -1,17 +1,8 @@
 ---
 name: trove-tdd
-description: |
-  Write a focused regression test that fails before the fix and passes after.
-  Use when the user asks for TDD, a failing test, or a regression test, or when a bug has a cheap local test target. Skip when the test path is expensive, integration-heavy, or unclear.
-version: 1.0.0
-preamble-tier: 2
+description: "Write a focused regression test that fails before the fix and passes after. Use when the user asks for TDD, a failing test, or a regression test, or when a bug has a cheap local test target. Skip when the test path is expensive, integration-heavy, or unclear."
+when_to_use: "write a failing test; regression test; tdd this"
 user-invocable: true
-triggers:
-  - write a failing test
-  - regression test
-  - tdd this
-benefits-from:
-  - trove-verify
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -1,28 +1,14 @@
 ---
 name: trove-ship
-description: |
-  Front-door ship workflow. Prepare a change for landing by composing the
-  review and commit skills, surfacing a final Decision Gate before any
-  destructive action. Thin orchestrator — defers detail to leaf skills.
-version: 1.0.0
-preamble-tier: 4
+description: "Front-door ship workflow. Prepare a change for landing by composing the review and commit skills, surfacing a final Decision Gate before any destructive action. Thin orchestrator — defers detail to leaf skills."
+when_to_use: "ship this change; prepare to land; get this PR-ready; ship workflow"
 user-invocable: true
 allowed-tools:
-  - Bash(git *)
-  - Bash(gh pr *)
+  - "Bash(git *)"
+  - "Bash(gh pr *)"
   - Read
   - Glob
   - Grep
-triggers:
-  - ship this change
-  - prepare to land
-  - get this PR-ready
-  - ship workflow
-benefits-from:
-  - trove-review
-  - trove-commit
-  - trove-security-review
-  - trove-unslop
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

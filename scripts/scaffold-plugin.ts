@@ -58,9 +58,10 @@ for (const dir of dirs) {
 }
 
 // Create plugin.yaml
+// No `version`: generated manifests are stamped from the repository VERSION
+// file, so a second version here could only drift out of date.
 const pluginYaml = {
   name,
-  version: "1.0.0",
   description: `TODO: Add description for ${name}`,
   author: {
     name: "Your Name or Organization",

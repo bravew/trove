@@ -1,18 +1,8 @@
 ---
 name: trove-arena
-description: |
-  Spawn N parallel candidate attempts at one hard, novel artifact, pick the strongest base, graft the best ideas from the losers into it, then verify. A heavyweight technique — most work routes to trove-architect instead.
-  Use only for a genuinely novel, hard-to-reverse design decision with no precedent.
-version: 1.0.0
-preamble-tier: 3
+description: "Spawn N parallel candidate attempts at one hard, novel artifact, pick the strongest base, graft the best ideas from the losers into it, then verify. A heavyweight technique — most work routes to trove-architect instead. Use only for a genuinely novel, hard-to-reverse design decision with no precedent."
+when_to_use: "throw it in the arena; try several approaches in parallel; competing prototypes"
 user-invocable: true
-triggers:
-  - throw it in the arena
-  - try several approaches in parallel
-  - competing prototypes
-benefits-from:
-  - trove-worktree
-  - trove-architect
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

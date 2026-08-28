@@ -1,5 +1,4 @@
 name: trove-workflow
-version: "0.1.0"
 description: "Workflow methodology skills and session bootstrap"
 author:
   name: Trove Contributors
@@ -13,75 +12,75 @@ skills:
     platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-autoplan
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-ship
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-brainstorm
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-debug
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-plan
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-execute-plan
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-verify
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-dispatch
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-receive-review
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-worktree
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-write-skill
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-unslop
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-why
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-refactor
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-show-work
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-reflect
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-arena
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   # Design-discipline principles — surfaced by description and benefits-from.
   # Provenance is recorded in upstream.yaml and THIRD_PARTY.md.
   - path: ./skills/trove-principle-laziness
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-principle-data-shape
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-principle-type-discipline
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-principle-migrate-then-delete
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-principle-idempotency
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
   - path: ./skills/trove-principle-encode-in-structure
-    platforms: [claude, cursor, codex, agents, opencode]
+    platforms: [claude, cursor, codex, agents, opencode, gemini]
 
 hooks:
   SessionStart:

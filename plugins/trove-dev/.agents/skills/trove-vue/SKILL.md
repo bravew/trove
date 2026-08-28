@@ -3,7 +3,6 @@ name: trove-vue
 description: "Vue 3 Composition API conventions and best practices. Auto-activates when working with Vue single-file components. Covers reactivity, component patterns, Vue Router, and Pinia state management."
 paths:
   - "**/*.vue"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

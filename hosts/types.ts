@@ -16,6 +16,16 @@
 export type ProjectionKind = "skill" | "rule" | "agents-section" | "gemini-extension";
 
 /**
+ * Which frontmatter allowlist a `skill` projection uses. The allowlists
+ * themselves live in scripts/lib/projection.ts.
+ *
+ *   strict — the six Agent Skills fields only
+ *   claude — spec fields plus Claude Code's documented fields
+ *   cursor — Cursor's documented native skill frontmatter
+ */
+export type ProjectionProfile = "strict" | "claude" | "cursor";
+
+/**
  * Capability surface for a host.
  *
  * `features` (below) describes plugin-manifest surfaces (hooks, commands,
@@ -59,6 +69,16 @@ export interface HostConfig {
   projections: ProjectionKind[];
 
   /**
+   * Which frontmatter allowlist a `skill` projection uses. `strict` emits only
+   * the six Agent Skills fields; `claude` and `cursor` add each host's
+   * documented extras. See scripts/lib/projection.ts.
+   *
+   * Hosts that emit no `skill` artifact (agents, gemini today) still declare
+   * one, because the strict projection is what their content is derived from.
+   */
+  skillProjection: ProjectionProfile;
+
+  /**
    * Where to drop per-skill SKILL.md output, relative to `output/<host>/`.
    * Each skill becomes `<skillOutputDir>/<skill-name>/SKILL.md`. Ignored when
    * `skill` is not in `projections`. For Claude this is unused — Claude emits
@@ -99,16 +119,6 @@ export interface HostConfig {
    */
   capabilities: HostCapabilities;
 
-  /** Frontmatter transformation rules. */
-  frontmatter: {
-    /** 'keep' = pass through, 'strip-platform' = remove platform-specific fields. */
-    mode: "keep" | "strip-platform";
-    /** Fields to strip from SKILL.md frontmatter. */
-    stripFields: string[];
-    /** Fields to rename (e.g., { 'paths': 'globs' }). */
-    renameFields: Record<string, string>;
-  };
-
   /** Content transformation rules applied to generated skill files. */
   contentRewrites: Array<{ from: string; to: string }>;
 
@@ -120,7 +130,11 @@ export type HostName = "claude" | "cursor" | "codex" | "agents" | "opencode" | "
 
 export interface PluginYaml {
   name: string;
-  version: string;
+  /**
+   * Not authored. Present only so validation can reject a stray value —
+   * shipped versions come from the repository VERSION file.
+   */
+  version?: string;
   description: string;
   author: { name: string; email?: string };
   homepage?: string;
@@ -179,6 +193,8 @@ export interface MarketplaceJson {
     name: string;
     source: string | Record<string, unknown>;
     description?: string;
+    category?: string;
+    keywords?: string[];
     strict?: boolean;
     skills?: string[];
   }>;

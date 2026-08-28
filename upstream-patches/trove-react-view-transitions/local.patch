@@ -2,7 +2,7 @@ diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
 index 9e59843..070da1d 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
-@@ -1,334 +1,115 @@
+@@ -1,334 +1,114 @@
  ---
  name: trove-react-view-transitions
 -description: Guide for implementing smooth, native-feeling animations using React's View Transition API (`<ViewTransition>` component, `addTransitionType`, and CSS view transition pseudo-elements). Use this skill whenever the user wants to add page transitions, animate route changes, create shared element animations, animate enter/exit of components, animate list reorder, implement directional (forward/back) navigation animations, or integrate view transitions in Next.js. Also use when the user mentions view transitions, `startViewTransition`, `ViewTransition`, transition types, or asks about animating between UI states in React without third-party animation libraries.
@@ -12,7 +12,6 @@ index 9e59843..070da1d 100644
 +  pseudo-elements). Use for page transitions, shared element morphs, Suspense
 +  reveals, list identity, or animating between React UI states without a
 +  third-party animation library.
-+version: 1.0.0
 +preamble-tier: 2
 +user-invocable: true
 +triggers:

@@ -1,14 +1,8 @@
 ---
 name: trove-dispatch
-description: Parallel-agent dispatch workflow. Use when a request contains multiple independent tasks that can be safely delegated.
-version: 1.0.0
-preamble-tier: 3
+description: "Parallel-agent dispatch workflow. Use when a request contains multiple independent tasks that can be safely delegated."
+when_to_use: "parallel agents; dispatch tasks; multiple independent tasks; delegate this"
 user-invocable: true
-triggers:
-  - parallel agents
-  - dispatch tasks
-  - multiple independent tasks
-  - delegate this
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

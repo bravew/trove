@@ -19,8 +19,8 @@ sources:
         local_path: skills/coding/trove-react-best-practices
         base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         base_tree_digest: sha256:8fd82d48dc3e8974fbc13d4cd7ea4f49263e145e113cacc75f1ca6bed898f39d
-        local_tree_digest: sha256:ecd5b4204c4a540c4d9fe43bf1879f564a2959bc5840f5b1995eb5a05c52520a
-        patch_digest: sha256:7a10478fe7ac002ce5e1d1102badab87d5bb180a7940538833ab0eafda079cc2
+        local_tree_digest: sha256:a7a0d104153802b02a606e1651127ba91686733864808af8b7992c09294c4493
+        patch_digest: sha256:30a09c1e30acbe96425f70684bbe3b0b515a41c6cbfd7bc7289a9aab070e0240
         checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         checked_at: "2026-08-28T00:00:00Z"
         candidate_sha: null
@@ -49,8 +49,8 @@ sources:
         local_path: skills/coding/trove-react-native
         base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         base_tree_digest: sha256:7e4fa4bde2933d908489410c3ab054c7ec99cd057bf0d812c22bdf0d90d80d17
-        local_tree_digest: sha256:5256f90d3de0f03148e0ae64bf962e4ee33eab72be6f685232091fd50bdef46a
-        patch_digest: sha256:53b057baad510f96f84cde070861eb39df5cb9984df903e9db528786fdadfa63
+        local_tree_digest: sha256:d840af528b0fa261f160ef3dacecf1b53c52f862722cb84d16d0e5809f5b4586
+        patch_digest: sha256:c3bf411a6763dd723d5892422a0997b1b8e6c753631666316f444b8a539375af
         checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         checked_at: "2026-08-28T00:00:00Z"
         candidate_sha: null
@@ -79,8 +79,8 @@ sources:
         local_path: skills/coding/trove-react-view-transitions
         base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         base_tree_digest: sha256:572e1c39c7686c7952e05ea45c6a229d78346d46c8fe2eb70a4e169473aef09c
-        local_tree_digest: sha256:d828e3e8806ac90054717a14465bd8a9083b32ea41656ec5808015c5c6a5fbbc
-        patch_digest: sha256:2bd5ae8289312645a1912fb9867e3a6e82e3050681fd34482dd081160be03e1f
+        local_tree_digest: sha256:25f72c562196d410cb320a162d7c68386ad76551149308de1999e75be27ff6de
+        patch_digest: sha256:9d34711a6647d45c38904f63545314abdcf76600c39d69e7b63510cadd4f880a
         checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         checked_at: "2026-08-28T00:00:00Z"
         candidate_sha: null

@@ -1,20 +1,11 @@
 ---
 name: trove-terraform
-description: |
-  Terraform/OpenTofu conventions and best practices.
-  Auto-activates on .tf files.
-  Covers module structure, state management, and security patterns.
-version: 1.0.0
-preamble-tier: 2
+description: "Terraform/OpenTofu conventions and best practices. Auto-activates on .tf files. Covers module structure, state management, and security patterns."
+paths:
+  - "**/*.tf"
+  - "**/*.tfvars"
+when_to_use: "terraform module; tf state; opentofu"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.tf"
-    - "**/*.tfvars"
-triggers:
-  - terraform module
-  - tf state
-  - opentofu
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

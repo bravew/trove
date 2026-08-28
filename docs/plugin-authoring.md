@@ -91,15 +91,18 @@ bun run validate      # frontmatter, naming, hooks, MCP, secrets
 /plugin install trove-testing@trove
 
 # Or symlink for fast iteration on a single skill
+# Personal skills are discovered at ~/.claude/skills/<skill>/SKILL.md — a
+# grouping folder in between is read as a skill directory with no SKILL.md.
 ln -sf /path/to/trove/skills/coding/trove-unit-test \
-  ~/.claude/skills/trove/trove-unit-test
+  ~/.claude/skills/trove-unit-test
 ```
 
 ## `plugin.yaml` reference
 
 ```yaml
 name: trove-testing                       # required, kebab-case, trove- prefix
-version: "1.0.0"                         # required, semver
+                                          # no `version` — generated manifests
+                                          # are stamped from the VERSION file
 description: "Testing skills and patterns"
 author:
   name: Trove Contributors
@@ -111,7 +114,7 @@ roles: [dev]                             # dev | design | pm | devops
 
 skills:
   - path: ./skills/trove-unit-test        # relative to plugin root
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.test.ts"]            # mirrors the skill's own activation.globs
 

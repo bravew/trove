@@ -4,7 +4,6 @@ description: "AWS CDK (TypeScript) conventions for infrastructure as code. Auto-
 paths:
   - "**/cdk.json"
   - "**/cdk/**/*.ts"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

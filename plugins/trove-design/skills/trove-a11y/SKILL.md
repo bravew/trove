@@ -1,22 +1,13 @@
 ---
 name: trove-a11y
-description: |
-  Accessibility checking skill for web and mobile interfaces.
-  Auto-activates on UI component files. Checks WCAG compliance and ARIA patterns.
-version: 1.0.0
-preamble-tier: 2
+description: "Accessibility checking skill for web and mobile interfaces. Auto-activates on UI component files. Checks WCAG compliance and ARIA patterns."
+paths:
+  - "**/*.tsx"
+  - "**/*.jsx"
+  - "**/*.vue"
+  - "**/*.html"
+when_to_use: "accessibility check; a11y review; wcag compliance; aria patterns"
 user-invocable: false
-activation:
-  globs:
-    - "**/*.tsx"
-    - "**/*.jsx"
-    - "**/*.vue"
-    - "**/*.html"
-triggers:
-  - accessibility check
-  - a11y review
-  - wcag compliance
-  - aria patterns
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

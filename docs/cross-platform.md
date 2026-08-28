@@ -12,6 +12,10 @@
 | **Marketplace** | Native | Native | Native | Generated plugin | Generated extension | Manual |
 | **Auto-update** | Yes | Yes | Yes | Host-dependent | Host-dependent | No |
 
+> Discovery roots, honored frontmatter, the source consulted for each, and the
+> date it was verified live in [host-matrix.md](./host-matrix.md). Update that
+> table in the same commit as any change here.
+
 ## Projection Model
 
 A canonical `SKILL.md.tmpl` is projected into one or more host-native artifact
@@ -22,8 +26,8 @@ kinds. Each host declares its projection kinds in `hosts/<name>.ts`:
 | Claude Code | `skill` | `skills/<category>/<skill>/SKILL.md` (in place) |
 | Cursor | `skill` + filtered `rule` | `output/cursor/.agents/skills/<skill>/SKILL.md` + `output/cursor/rules/<skill>.mdc` for glob/always-on rules |
 | Codex | `skill` | `output/codex/.agents/skills/<skill>/SKILL.md` |
-| OpenCode | `skill` + plugin template | `output/opencode/skills/<skill>/SKILL.md` + `output/opencode/plugins/<plugin>/index.ts` |
-| Gemini CLI | `gemini-extension` | `output/gemini/plugins/<plugin>/gemini-extension.json` + `GEMINI.md` |
+| OpenCode | `skill` + plugin template | `output/opencode/.agents/skills/<skill>/SKILL.md` + `output/opencode/plugins/<plugin>/index.ts` |
+| Gemini CLI | `skill` + `gemini-extension` | `output/gemini/.agents/skills/<skill>/SKILL.md`, bundled into `output/gemini/plugins/<plugin>/skills/` alongside `gemini-extension.json` + `GEMINI.md` |
 | Generic (AGENTS.md) | `agents-section` | `output/agents/AGENTS.md` + `output/agents/plugins/<plugin>/AGENTS.md` |
 
 The generator (`scripts/gen-skills.ts`) parses each template once, resolves
@@ -99,25 +103,39 @@ skills.
 
 ### Gemini extension context
 
-Gemini CLI extensions load a context file named by `gemini-extension.json`.
-For plugins with a `using-*` anchor, the build emits
-`output/gemini/plugins/<plugin>/gemini-extension.json` with
-`contextFileName: "GEMINI.md"` and writes `GEMINI.md` from the compiled anchor
-body.
+A Gemini extension carries two things: persistent bootstrap context, and the
+plugin's on-demand skills.
 
-## Frontmatter transforms per host
+- `gemini-extension.json` declares the required `name`, `version`, and
+  `description`, plus `contextFileName: "GEMINI.md"` for plugins with a
+  `using-*` anchor.
+- `GEMINI.md` is the compiled anchor body — bootstrap context only.
+- `skills/<skill>/SKILL.md` inside the extension carries every other skill, so
+  Gemini can load them on demand instead of receiving only the anchor.
 
-| Field | Claude | Cursor skill | Cursor rule | Codex skill | Generic section |
+The same files are also written to `output/gemini/.agents/skills/`, the
+workspace discovery root Gemini prefers over `.gemini/skills/`.
+
+## Frontmatter projection per host
+
+Frontmatter is **rebuilt** from an explicit per-host allowlist in
+`scripts/lib/projection.ts`, not edited in place — a field a profile does not
+list simply never appears. Authoring vocabulary (`preamble-tier`, `activation`,
+`triggers`, `benefits-from`, `host-overrides`) is a build input and reaches no
+host.
+
+| Authoring field | Claude | Cursor skill | Cursor rule | Strict hosts (Codex, OpenCode, Gemini) | Generic section |
 |---|---|---|---|---|---|
-| `allowed-tools` | Keep | Strip | Strip | Strip | Strip |
-| `context: fork` | Keep | Strip | Strip | Strip | Strip |
-| `effort:` | Keep | Strip | Strip | Strip | Strip |
-| `disable-model-invocation` | Keep | Keep/generated | Strip | Strip | Strip |
-| `${CLAUDE_SKILL_DIR}` | Keep | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Strip |
-| `activation.globs` | Keep | Map -> `paths:` | Map -> `globs:` | Strip | Strip |
-| `user-invocable:` | Keep | `false` maps to `disable-model-invocation: true` | Read for always-on selection | Strip | Strip |
 | `name:` | Keep | Keep | Drop | Keep | Section heading |
-| `description:` | Keep | Flatten to one line | Flatten to one line | Flatten to one line | Italicized one-liner |
+| `description:` | Flatten to one line | Flatten | Flatten | Flatten, plus folded trigger language | Italicized one-liner |
+| `activation.globs` | -> `paths:` | -> `paths:` | -> `globs:` | Omitted (no equivalent field) | Omitted |
+| `triggers` | -> `when_to_use:` | Omitted | Omitted | Folded into `description` | Omitted |
+| `activation.manual: true` | -> `disable-model-invocation: true` | -> `disable-model-invocation: true` | Omitted | Omitted | Omitted |
+| `user-invocable:` | Keep | **Omitted** — Cursor has no equivalent, and it is not the same as manual-only | Read for always-on selection | Omitted | Omitted |
+| `allowed-tools` | Keep (YAML list) | Omitted | Omitted | Omitted — the spec's space-separated encoding cannot represent `Bash(git *)` | Omitted |
+| `license`, `compatibility`, `metadata` | Keep | `metadata` only | Omitted | Keep | Omitted |
+| `context:`, `model:`, `effort:` | Keep | Omitted | Omitted | Omitted | Omitted |
+| `${CLAUDE_SKILL_DIR}` | Keep | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Strip |
 
 ## Build pipeline
 
@@ -128,8 +146,9 @@ SKILL.md.tmpl
        ├─ Cursor        → output/cursor/.agents/skills/<skill>/SKILL.md
        │                  + output/cursor/rules/<skill>.mdc where needed
        ├─ OpenAI Codex  → output/codex/.agents/skills/<skill>/SKILL.md
-       ├─ OpenCode      → output/opencode/skills/<skill>/SKILL.md + plugin TS
-       ├─ Gemini CLI    → output/gemini/plugins/<plugin>/GEMINI.md
+       ├─ OpenCode      → output/opencode/.agents/skills/<skill>/SKILL.md + plugin TS
+       ├─ Gemini CLI    → output/gemini/.agents/skills/<skill>/SKILL.md
+       │                  + output/gemini/plugins/<plugin>/{skills/,GEMINI.md}
        └─ Generic       → output/agents/{AGENTS.md, plugins/<plugin>/AGENTS.md}
 ```
 

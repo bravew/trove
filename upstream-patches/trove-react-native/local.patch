@@ -2,7 +2,7 @@ diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
 index 2e4a6f4..acfa2ff 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
-@@ -1,35 +1,44 @@
+@@ -1,35 +1,43 @@
  ---
  name: trove-react-native
 -description:
@@ -17,7 +17,6 @@ index 2e4a6f4..acfa2ff 100644
 +  on tasks involving React Native, Expo, mobile performance, FlashList, or
 +  native platform APIs. User-invocable; no auto-attach (no RN project in the
 +  current Trove workspace).
-+version: 1.0.0
 +preamble-tier: 2
 +user-invocable: true
 +triggers:

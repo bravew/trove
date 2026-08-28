@@ -17,6 +17,8 @@ bun run build:marketplace     # Stage 3 only: generate per-platform marketplace.
 bun run validate              # Validate all structure, naming, frontmatter, secrets
 bun run validate:plugins      # Validate plugins only
 bun run validate:market       # Validate marketplace only
+bun run validate:claude-manifests  # claude plugin validate --strict, all plugins
+bun run test:acceptance:setup      # Installer link layout in a disposable HOME
 bun run dev                   # Watch mode (rebuilds on change)
 bun test                      # Run tests
 
@@ -38,9 +40,12 @@ bun run bump-version          # Auto-bump VERSION file
 bun run promote-stable        # Promote canary to stable
 
 # Setup (installs to detected hosts)
-./setup                       # Auto-detect Claude/Cursor/Codex
+./setup                       # Auto-detect Claude/Cursor/Codex/OpenCode/Gemini
 ./setup --host claude         # Claude Code only
+./setup --host opencode       # OpenCode only
+./setup --host gemini         # Gemini CLI only
 ./setup --role dev            # Developer plugins only
+./setup --uninstall           # Remove every link the installer created
 ```
 
 ## Architecture
@@ -57,24 +62,46 @@ Each stage must run in order. `bun run build` runs all three sequentially.
 
 ### Host Adapter System (`hosts/`)
 
-Four host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `agents.ts`) each define:
+Six host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `agents.ts`, `opencode.ts`,
+`gemini.ts`) each define:
 - Where outputs land (`pluginSubdir`, `marketplaceSubdir`)
 - Supported features (hooks, agents, MCP, rules, marketplace — varies per platform)
-- Frontmatter transforms: Claude keeps all fields; Cursor strips `allowed-tools`, `context`, `effort`; Codex/Agents strip frontmatter entirely
+- Which projection profile a `skill` artifact uses (`skillProjection`)
 - Content rewrites: e.g., Cursor rewrites `${CLAUDE_SKILL_DIR}` → `[skill-dir]`
+
+Frontmatter is **rebuilt** per host from an explicit allowlist in
+`scripts/lib/projection.ts`, never edited in place — a host receives only fields
+its profile permits. `strict` emits the six Agent Skills fields (Codex,
+OpenCode, Gemini, AGENTS.md); `claude` and `cursor` add each host's documented
+extras. `docs/host-matrix.md` records every discovery root, honored field,
+source URL, and verification date.
 
 ### Skill Authoring
 
 Source of truth: `skills/<category>/<skill-name>/SKILL.md.tmpl`
 
-Templates use YAML frontmatter (`name`, `description`, `user-invocable`, `paths`) and `{{PLACEHOLDER}}` tokens resolved via `scripts/resolvers/index.ts`. Currently only `{{PREAMBLE}}` exists (injects `templates/preamble.md`). New placeholders are added by adding a key to the resolvers map.
+Templates use YAML frontmatter and `{{PLACEHOLDER}}` tokens resolved via
+`scripts/resolvers/index.ts`. Currently only `{{PREAMBLE}}` exists (injects
+`templates/preamble.md`). New placeholders are added by adding a key to the
+resolvers map.
 
-Generated output: Claude gets `SKILL.md` in-place next to the template. Other hosts get `output/<host>/<skill>/SKILL.md`.
+The authoring vocabulary is **private**: `preamble-tier`, `activation`,
+`triggers`, `benefits-from`, and `host-overrides` are build inputs and never
+appear in a generated artifact. `activation.globs` becomes `paths`; `triggers`
+becomes Claude's `when_to_use` and folds into `description` for strict hosts.
+Manual-only intent is authored as `activation.manual: true` — never inferred
+from `user-invocable: false`, which means the opposite.
+
+Generated output: Claude gets `SKILL.md` in-place next to the template. Other
+hosts get `output/<host>/<skillOutputDir>/<skill>/SKILL.md` — `.agents/skills`
+for Cursor, Codex, OpenCode, and Gemini, which all document it as a discovery
+root.
 
 ### Plugin Structure (`plugins/<name>/`)
 
 ```
-plugin.yaml          # Manifest: name, version, skills[], hooks{}, platforms{}
+plugin.yaml          # Manifest: name, skills[], hooks{}, platforms{}
+                     # (no version — generated manifests are stamped from VERSION)
 skills/              # Generated — SKILL.md files copied here by build:plugins
 hooks/               # Shell scripts (e.g., auto-lint.sh)
 rules/               # Cursor-specific rule files
@@ -104,6 +131,10 @@ JSON stubs for external plugins (figma, linear, sentry) not yet in `marketplace.
 - No `..` path traversal in sources
 - Secret scanning (strips code blocks to reduce false positives)
 - Curated external plugins must have SHA pins
+- Every strict artifact is checked against the Agent Skills spec by
+  `scripts/lib/agent-skills-spec.ts`, written in-repo from the published
+  specification and pinned to a recorded `SPEC_REVISION`. `skills-ref` runs as
+  a non-blocking advisory cross-check in CI only.
 
 ### Eval System (`evals/`)
 

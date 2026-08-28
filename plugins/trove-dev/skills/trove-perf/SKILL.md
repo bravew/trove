@@ -1,17 +1,8 @@
 ---
 name: trove-perf
-description: |
-  Diagnose and fix a measured performance problem against a baseline: measure first, fix, re-measure, and cite the delta with an artifact path.
-  Use for slow endpoints, slow queries, or any "make this faster" backed by a measurement.
-version: 1.0.0
-preamble-tier: 2
+description: "Diagnose and fix a measured performance problem against a baseline: measure first, fix, re-measure, and cite the delta with an artifact path. Use for slow endpoints, slow queries, or any \"make this faster\" backed by a measurement."
+when_to_use: "this is slow; optimize performance; measure and improve"
 user-invocable: true
-triggers:
-  - this is slow
-  - optimize performance
-  - measure and improve
-benefits-from:
-  - trove-verify
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

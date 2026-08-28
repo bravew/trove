@@ -21,6 +21,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
+import { ALL_HOSTS } from "../hosts/index";
+import { projectFrontmatter, toAuthoringSkill } from "./lib/projection";
 import { lintDecisionGates } from "./lib/decision-gate";
 import { validateV2Frontmatter } from "./schema";
 import { detectCycles, buildForwardGraph } from "./lib/dep-graph";
@@ -31,6 +33,11 @@ import {
   findDuplicateSkillRegistrationFindings,
 } from "./lib/inventory";
 import { flattenSkillText, validateSkillBudget } from "./lib/skill-budget";
+import {
+  SPEC_REVISION,
+  SPEC_URL,
+  validateAgentSkillFrontmatter,
+} from "./lib/agent-skills-spec";
 import { checkOffline } from "./lib/upstream-sync";
 import { loadUpstreamManifest, validateManifestInventory } from "./lib/upstream-manifest";
 
@@ -176,7 +183,15 @@ function validatePlugin(pluginName: string): void {
 
     // Required fields
     if (!plugin.name) error("plugin.yaml: missing 'name'");
-    if (!plugin.version) error("plugin.yaml: missing 'version'");
+    // No `version:` here on purpose: generated manifests take their version
+    // from the repository VERSION file, so a second one in plugin.yaml can
+    // only ever drift out of date. See the plan's F8.
+    if (plugin.version) {
+      error(
+        "plugin.yaml: remove 'version' — shipped plugin versions come from the VERSION file, " +
+          "and a second source can only drift",
+      );
+    }
     if (!plugin.description) error("plugin.yaml: missing 'description'");
 
     // Naming convention: must start with trove-
@@ -190,9 +205,6 @@ function validatePlugin(pluginName: string): void {
     }
 
     // Version: semver
-    if (plugin.version && !/^\d+\.\d+\.\d+$/.test(plugin.version)) {
-      warn(`plugin.yaml: version '${plugin.version}' should be semver (major.minor.patch)`);
-    }
 
     // Skills validation
     if (plugin.skills?.length) {
@@ -492,14 +504,14 @@ function validateBootstrapHostOutputs(): void {
         `${label} OpenCode plugin`,
       );
       if (pluginIndex) {
-        for (const expected of [`../../skills/${anchor.skill}/SKILL.md`, "systemPrompt", 'name: "use_skill"']) {
+        for (const expected of [`../../.agents/skills/${anchor.skill}/SKILL.md`, "systemPrompt", 'name: "use_skill"']) {
           if (!pluginIndex.includes(expected)) {
             error(`${label}: OpenCode plugin missing '${expected}'`);
           }
         }
       }
       requireFile(
-        path.join(outputRoot, "opencode", "skills", anchor.skill, "SKILL.md"),
+        path.join(outputRoot, "opencode", ".agents", "skills", anchor.skill, "SKILL.md"),
         `${label} OpenCode skill`,
       );
     }
@@ -511,10 +523,25 @@ function validateBootstrapHostOutputs(): void {
       );
       if (extension) {
         const parsed = JSON.parse(extension);
+        // name, version, and description are required by the extension schema;
+        // a manifest missing them declares nothing Gemini can load.
+        for (const field of ["name", "version", "description"]) {
+          if (typeof parsed[field] !== "string" || parsed[field].length === 0) {
+            error(`${label}: Gemini extension manifest must set a non-empty '${field}'`);
+          }
+        }
         if (parsed.contextFileName !== "GEMINI.md") {
           error(`${label}: Gemini extension must set contextFileName to GEMINI.md`);
         }
       }
+
+      // F4: the extension must also carry the plugin's on-demand skills, not
+      // just the persistent bootstrap context.
+      const bundledRoot = path.join(outputRoot, "gemini", "plugins", anchor.plugin, "skills");
+      requireFile(
+        path.join(bundledRoot, anchor.skill, "SKILL.md"),
+        `${label} Gemini bundled skill`,
+      );
 
       const gemini = requireFile(
         path.join(outputRoot, "gemini", "plugins", anchor.plugin, "GEMINI.md"),
@@ -677,9 +704,16 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
   }
 
   const body = content.slice(fmEnd + 4);
+  // Measure what Claude actually receives, not what was authored: `triggers`
+  // is projected into `when_to_use`, and both count toward Claude's combined
+  // description cap.
+  const claudeFm = projectFrontmatter(
+    toAuthoringSkill(parsed, path.basename(path.dirname(filePath))),
+    { profile: "claude", hostName: "claude", supportsToolAllowlist: true },
+  );
   for (const finding of validateSkillBudget({
-    description: flattenSkillText(parsed.description),
-    whenToUse: flattenSkillText(parsed.when_to_use),
+    description: flattenSkillText(claudeFm.description),
+    whenToUse: flattenSkillText(claudeFm.when_to_use),
     body,
   })) {
     error(`${relPath}: ${finding.message}`);
@@ -724,6 +758,73 @@ function validateUpstreamLocks(): void {
   }
 }
 
+// ─── Strict Agent Skills conformance ────────────────────────
+
+/**
+ * Blocking conformance gate for every artifact that claims to be a plain
+ * Agent Skill: Codex, OpenCode, Gemini, and anything uploaded to a strict
+ * consumer. The rules live in scripts/lib/agent-skills-spec.ts, written from
+ * the published specification rather than delegated to `skills-ref` — see
+ * dev-doc/2026-08-modernization-plan.md, F14 and Checkpoint 3.
+ */
+function validateStrictAgentSkills(): void {
+  console.log("\n── Agent Skills Spec Conformance ──");
+  console.log(`  spec revision ${SPEC_REVISION} — ${SPEC_URL}`);
+
+  const hosts = ALL_HOSTS.filter(
+    (h) => h.skillProjection === "strict" && h.projections.includes("skill"),
+  );
+  if (hosts.length === 0) {
+    warn("no host emits a strict Agent Skills artifact — the spec gate checked nothing");
+    return;
+  }
+
+  let checked = 0;
+  for (const host of hosts) {
+    const root = path.join(ROOT, "output", host.name, host.skillOutputDir ?? "");
+    if (!fs.existsSync(root)) {
+      error(`${host.displayName}: expected strict skill output at ${path.relative(ROOT, root)}`);
+      continue;
+    }
+
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const skillPath = path.join(root, entry.name, "SKILL.md");
+      if (!fs.existsSync(skillPath)) {
+        error(`${path.relative(ROOT, path.join(root, entry.name))}: missing SKILL.md`);
+        continue;
+      }
+
+      const rel = path.relative(ROOT, skillPath);
+      const content = fs.readFileSync(skillPath, "utf-8");
+      if (!content.startsWith("---\n")) {
+        error(`${rel}: missing frontmatter`);
+        continue;
+      }
+      const fmEnd = content.indexOf("\n---", 4);
+      if (fmEnd === -1) {
+        error(`${rel}: unclosed frontmatter`);
+        continue;
+      }
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = (YAML.parse(content.slice(4, fmEnd)) as Record<string, unknown>) ?? {};
+      } catch (e) {
+        error(`${rel}: frontmatter is not valid YAML: ${(e as Error).message}`);
+        continue;
+      }
+
+      const report = validateAgentSkillFrontmatter(parsed, entry.name);
+      for (const issue of report.errors) error(`${rel}: ${issue.field}: ${issue.message}`);
+      for (const issue of report.warnings) warn(`${rel}: ${issue.field}: ${issue.message}`);
+      checked++;
+    }
+  }
+
+  ok(`${checked} strict Agent Skills artifact(s) checked across ${hosts.length} host(s)`);
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 console.log("Trove — Validation");
@@ -751,6 +852,7 @@ if (validateAll || pluginsOnly) {
 if (validateAll) {
   validateUpstreamLocks();
   validateSkillTemplates();
+  validateStrictAgentSkills();
   validateBootstrapHostOutputs();
 
   const anchors = collectSessionStartAnchors();

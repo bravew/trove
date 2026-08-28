@@ -13,6 +13,11 @@ import YAML from "yaml";
 import type { HostConfig, PluginYaml } from "../../hosts/types";
 import { resolvers, makeBaseContext } from "../resolvers/index";
 import type { ResolverContext, SkillFrontmatterV2, SkillManifest } from "../resolvers/types";
+import { flattenDescription, toAuthoringSkill, type AuthoringSkill } from "./projection";
+
+// Re-exported so callers have one import site for template parsing helpers.
+export { flattenDescription };
+export type { AuthoringSkill };
 
 export const ROOT = path.resolve(import.meta.dir, "../..");
 
@@ -152,16 +157,12 @@ export interface ParsedTemplate {
   rawFrontmatter: string;
   /** Body after the closing `---`, with leading newline preserved. */
   body: string;
-  name: string;
-  description: string;
-  /**
-   * Activation globs. Reads `activation.globs` (v2 canonical) and falls
-   * back to legacy `paths:` when v2 is absent.
-   */
-  paths: string[];
-  userInvocable: boolean;
   /** Parsed v2 fields (best-effort, partial when frontmatter is incomplete). */
   v2: SkillFrontmatterV2;
+  /** Raw parsed frontmatter mapping, before any host projection. */
+  frontmatter: Record<string, unknown>;
+  /** Normalized authoring contract consumed by the host projections. */
+  authoring: AuthoringSkill;
 }
 
 function parseV2(parsed: Record<string, unknown>): SkillFrontmatterV2 {
@@ -194,16 +195,14 @@ function parseV2(parsed: Record<string, unknown>): SkillFrontmatterV2 {
   return v2;
 }
 
-export function parseTemplate(resolved: string): ParsedTemplate {
+export function parseTemplate(resolved: string, dirName = ""): ParsedTemplate {
   const empty = (): ParsedTemplate => ({
     resolved,
     rawFrontmatter: "",
     body: resolved,
-    name: "",
-    description: "",
-    paths: [],
-    userInvocable: false,
     v2: {},
+    frontmatter: {},
+    authoring: toAuthoringSkill({}, dirName),
   });
 
   const fmStart = resolved.indexOf("---\n");
@@ -221,24 +220,14 @@ export function parseTemplate(resolved: string): ParsedTemplate {
     parsed = {};
   }
 
-  const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
-  const description = typeof parsed.description === "string" ? parsed.description.trim() : "";
-  const v2 = parseV2(parsed);
-
-  // Activation globs come from v2 `activation.globs` first, with legacy
-  // string `paths:` as a fallback during the migration.
-  let paths: string[] = [];
-  if (v2.activation?.globs && v2.activation.globs.length > 0) {
-    paths = v2.activation.globs;
-  } else if (typeof parsed.paths === "string") {
-    paths = parsed.paths.split(",").map((p) => p.trim()).filter(Boolean);
-  } else if (Array.isArray(parsed.paths)) {
-    paths = (parsed.paths as unknown[]).filter((p): p is string => typeof p === "string");
-  }
-
-  const userInvocable = parsed["user-invocable"] === true;
-
-  return { resolved, rawFrontmatter, body, name, description, paths, userInvocable, v2 };
+  return {
+    resolved,
+    rawFrontmatter,
+    body,
+    v2: parseV2(parsed),
+    frontmatter: parsed,
+    authoring: toAuthoringSkill(parsed, dirName),
+  };
 }
 
 /**
@@ -275,54 +264,10 @@ export function loadAndParseTemplate(template: TemplateFile): ParsedTemplate {
   }
 
   const resolved = resolvePlaceholders(tmplContent, template.path, { skill: manifest });
-  return parseTemplate(resolved);
+  return parseTemplate(resolved, template.skillName);
 }
 
 // ─── Frontmatter / content rewriting ────────────────────────
-
-function stripFrontmatterFields(rawFrontmatter: string, stripFields: string[]): string {
-  let lines = rawFrontmatter.split("\n");
-  for (const field of stripFields) {
-    const filtered: string[] = [];
-    let skipping = false;
-    for (const line of lines) {
-      if (line.startsWith(`${field}:`)) {
-        skipping = true;
-        continue;
-      }
-      if (skipping) {
-        if (line === "" || /^\s/.test(line)) continue;
-        skipping = false;
-      }
-      filtered.push(line);
-    }
-    lines = filtered;
-  }
-  return lines.join("\n");
-}
-
-export function applyHostFrontmatter(content: string, host: HostConfig): string {
-  if (host.frontmatter.mode === "keep") return content;
-
-  const fmStart = content.indexOf("---\n");
-  if (fmStart !== 0) return content;
-  const fmEnd = content.indexOf("\n---", fmStart + 4);
-  if (fmEnd === -1) return content;
-
-  const raw = content.slice(fmStart + 4, fmEnd);
-  const body = content.slice(fmEnd + 4);
-
-  let updated = stripFrontmatterFields(raw, host.frontmatter.stripFields);
-
-  for (const [from, to] of Object.entries(host.frontmatter.renameFields)) {
-    updated = updated
-      .split("\n")
-      .map((line) => (line.startsWith(`${from}:`) ? line.replace(`${from}:`, `${to}:`) : line))
-      .join("\n");
-  }
-
-  return `---\n${updated}\n---${body}`;
-}
 
 export function applyContentRewrites(content: string, host: HostConfig): string {
   for (const rewrite of host.contentRewrites) {
@@ -339,8 +284,4 @@ export function injectGeneratedHeader(content: string, sourceFile: string): stri
     return content.slice(0, insertAt) + header + content.slice(insertAt);
   }
   return header + content;
-}
-
-export function flattenDescription(description: string): string {
-  return description.replace(/\s+/g, " ").trim();
 }

@@ -4,7 +4,6 @@ description: "TypeScript type-system discipline for any .ts/.tsx file: make ille
 paths:
   - "**/*.ts"
   - "**/*.tsx"
-disable-model-invocation: true
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

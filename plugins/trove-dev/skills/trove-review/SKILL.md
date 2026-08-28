@@ -1,24 +1,14 @@
 ---
 name: trove-review
-description: |
-  Code review skill that checks for common issues, security vulnerabilities, and style violations.
-  Use when reviewing code changes or PRs.
-version: 1.0.0
-preamble-tier: 2
+description: "Code review skill that checks for common issues, security vulnerabilities, and style violations. Use when reviewing code changes or PRs."
+when_to_use: "code review; review this diff; check this code"
 user-invocable: true
 allowed-tools:
   - Read
   - Grep
   - Glob
-  - Bash(git *)
-  - Bash(gh pr *)
-triggers:
-  - code review
-  - review this diff
-  - check this code
-benefits-from:
-  - trove-security-review
-  - trove-secret-scan
+  - "Bash(git *)"
+  - "Bash(gh pr *)"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

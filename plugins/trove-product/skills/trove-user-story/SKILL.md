@@ -1,16 +1,7 @@
 ---
 name: trove-user-story
-description: |
-  User story writing skill. Generates well-structured user stories
-  with acceptance criteria, edge cases, and test scenarios.
-version: 1.0.0
-preamble-tier: 2
-triggers:
-  - user story
-  - acceptance criteria
-  - write a story
-benefits-from:
-  - trove-unslop
+description: "User story writing skill. Generates well-structured user stories with acceptance criteria, edge cases, and test scenarios."
+when_to_use: "user story; acceptance criteria; write a story"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

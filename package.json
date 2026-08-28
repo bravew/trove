@@ -19,10 +19,12 @@
     "validate": "bun run scripts/validate.ts",
     "validate:plugins": "bun run scripts/validate.ts --plugins",
     "validate:market": "bun run scripts/validate.ts --marketplace",
+    "validate:claude-manifests": "scripts/validate-claude-manifests.sh",
     "eval:gate": "bun run scripts/eval-runner.ts --gate",
     "eval:changed": "bun run scripts/eval-runner.ts --changed",
     "test:acceptance": "tests/acceptance/harness-bootstrap.sh",
     "test:acceptance:artifacts": "tests/acceptance/run-artifact-checks.sh",
+    "test:acceptance:setup": "tests/acceptance/setup-links.sh",
     "scaffold:plugin": "bun run scripts/scaffold-plugin.ts",
     "scaffold:skill": "bun run scripts/scaffold-skill.ts",
     "sync:upstream": "bun run scripts/sync-upstream.ts",
@@ -31,12 +33,12 @@
     "promote-stable": "bun run scripts/promote-stable.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
+    "@anthropic-ai/sdk": "^0.122.0",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/bun": "^1.3.13",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "bun": ">=1.0.0"

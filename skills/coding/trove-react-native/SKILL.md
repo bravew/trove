@@ -1,25 +1,12 @@
 ---
 name: trove-react-native
-description: |
-  React Native and Expo best practices for building performant mobile apps.
-  Use when building React Native components, optimizing list/scroll performance,
-  implementing Reanimated animations, or working with native modules. Triggers
-  on tasks involving React Native, Expo, mobile performance, FlashList, or
-  native platform APIs. User-invocable; no auto-attach (no RN project in the
-  current Trove workspace).
-version: 1.0.0
-preamble-tier: 2
-user-invocable: true
-triggers:
-  - react native
-  - expo
-  - flashlist
-  - reanimated
-  - mobile performance
+description: "React Native and Expo best practices for building performant mobile apps. Use when building React Native components, optimizing list/scroll performance, implementing Reanimated animations, or working with native modules. Triggers on tasks involving React Native, Expo, mobile performance, FlashList, or native platform APIs. User-invocable; no auto-attach (no RN project in the current Trove workspace)."
 license: MIT
+when_to_use: "react native; expo; flashlist; reanimated; mobile performance"
+user-invocable: true
 metadata:
   source: vercel-labs/agent-skills
-  upstream-version: "1.0.0"
+  upstream-version: 1.0.0
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

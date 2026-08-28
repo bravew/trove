@@ -84,7 +84,9 @@ export function validateV2Frontmatter(
 ): SchemaReport {
   const report = emptyReport();
 
-  // version: optional, but must parse as semver if present.
+  // version: no longer part of the authoring vocabulary — it reached no host
+  // and duplicated the repository VERSION (see the plan's F8). Still checked
+  // so a reintroduced value has to be well-formed rather than silently ignored.
   if ("version" in parsed) {
     if (!isSemver(parsed.version)) {
       fail(report, `'version' must be semver (got: ${JSON.stringify(parsed.version)})`);

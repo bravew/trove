@@ -1,14 +1,7 @@
 ---
 name: trove-secret-scan
-description: |
-  Scan files for accidentally committed secrets, API keys, and credentials.
-  Flags common secret patterns and suggests remediation.
-version: 1.0.0
-preamble-tier: 2
-triggers:
-  - scan for secrets
-  - leaked credentials
-  - check for api keys
+description: "Scan files for accidentally committed secrets, API keys, and credentials. Flags common secret patterns and suggests remediation."
+when_to_use: "scan for secrets; leaked credentials; check for api keys"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

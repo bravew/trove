@@ -1,5 +1,4 @@
 name: trove-design
-version: "1.0.0"
 description: "Designer skills: Figma review, accessibility, design systems"
 author:
   name: Trove Contributors
@@ -12,18 +11,18 @@ roles: [design]
 
 skills:
   - path: ./skills/trove-design-review
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-a11y
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.html"]
 
   - path: ./skills/trove-component-spec
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-visual-parity
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
 mcp_servers:
   # Figma — design integration (Streamable HTTP + OAuth, no env vars)

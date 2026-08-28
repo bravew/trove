@@ -2,7 +2,7 @@ diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
 index 17a064c..15b57dd 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
-@@ -1,26 +1,44 @@
+@@ -1,26 +1,43 @@
  ---
  name: trove-react-best-practices
 -description: React and Next.js performance optimization guidelines from Vercel Engineering. This skill should be used when writing, reviewing, or refactoring React/Next.js code to ensure optimal performance patterns. Triggers on tasks involving React components, Next.js pages, data fetching, bundle optimization, or performance improvements.
@@ -11,7 +11,6 @@ index 17a064c..15b57dd 100644
 +  Use when writing, reviewing, or refactoring React code specifically for performance:
 +  eliminating waterfalls, bundle size, re-render optimization, or server/client data fetching.
 +  Complements trove-react, which carries project-specific conventions.
-+version: 1.0.0
 +preamble-tier: 2
 +user-invocable: true
 +triggers:

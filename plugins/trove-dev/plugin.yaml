@@ -1,5 +1,4 @@
 name: trove-dev
-version: "1.0.0"
 description: "Developer skills: coding patterns, code review, git workflow, debugging"
 author:
   name: Trove Contributors
@@ -12,61 +11,61 @@ roles: [dev]
 
 skills:
   - path: ./skills/trove-python
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.py"]
 
   - path: ./skills/trove-react
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.tsx", "**/*.jsx"]
 
   - path: ./skills/trove-react-best-practices
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-react-view-transitions
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-react-native
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-vue
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.vue"]
 
   - path: ./skills/trove-swift
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.swift"]
 
   - path: ./skills/trove-lambda
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/lambda_handler.py", "**/lambda_function.py"]
 
   - path: ./skills/trove-review
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-commit
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-explain
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-typescript
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
     auto_attach:
       globs: ["**/*.ts", "**/*.tsx"]
 
   - path: ./skills/trove-tdd
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-architect
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
   - path: ./skills/trove-perf
-    platforms: [claude, cursor, codex, agents]
+    platforms: [claude, cursor, codex, agents, gemini]
 
 commands:
   # User-invocable workflow commands (namespaced as /trove-dev:<name> in Claude Code)

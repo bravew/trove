@@ -1,18 +1,8 @@
 ---
 name: trove-why
-description: |
-  Reconstruct design rationale and decision history from evidence — source control, issue tracker (Linear), docs (Notion), chat (Slack), error tracking (Sentry) — with calibrated confidence.
-  Use for "why does X work this way", "why did we pick Y", regressions, and postmortems. Use trove-explain for how it works now.
-version: 1.0.0
-preamble-tier: 3
+description: "Reconstruct design rationale and decision history from evidence — source control, issue tracker (Linear), docs (Notion), chat (Slack), error tracking (Sentry) — with calibrated confidence. Use for \"why does X work this way\", \"why did we pick Y\", regressions, and postmortems. Use trove-explain for how it works now."
+when_to_use: "why does this work this way; why did we choose; design rationale; what's the history of"
 user-invocable: true
-triggers:
-  - why does this work this way
-  - why did we choose
-  - design rationale
-  - what's the history of
-benefits-from:
-  - trove-explain
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

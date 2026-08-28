@@ -208,20 +208,23 @@ test("schema: host-overrides keyed by unknown host is an error", () => {
 // ─── Per-host snapshot of trove-python ──────────────────────
 //
 // trove-python is the canonical projection target — it exercises auto-attach
-// (paths/globs), description block scalar, and triggers. Pinning these
-// outputs catches accidental projection drift.
+// globs, a block-scalar description, and triggers. Pinning these outputs
+// catches accidental projection drift.
 
 test("snapshot: trove-python projects identically into Claude SKILL.md", () => {
   const out = fs.readFileSync(path.join(ROOT, "skills", "coding", "trove-python", "SKILL.md"), "utf-8");
-  // Frontmatter shape: v2 fields present, no legacy `paths:`.
+  // Claude receives the spec fields plus Claude's own documented fields.
   expect(out).toMatch(/^name: trove-python$/m);
-  expect(out).toMatch(/^version: 1\.0\.0$/m);
-  expect(out).toMatch(/^preamble-tier: 2$/m);
-  expect(out).toMatch(/^activation:$/m);
-  expect(out).toMatch(/^\s+globs:$/m);
+  expect(out).toMatch(/^paths:$/m);
   expect(out).toMatch(/^\s+- "\*\*\/\*\.py"$/m);
-  expect(out).toMatch(/^triggers:$/m);
-  expect(out).not.toMatch(/^paths:/m);
+  expect(out).toMatch(/^when_to_use: ".+"$/m);
+  expect(out).toMatch(/^user-invocable: false$/m);
+  // The private authoring vocabulary must not reach a host wire format.
+  expect(out).not.toMatch(/^version:/m);
+  expect(out).not.toMatch(/^preamble-tier:/m);
+  expect(out).not.toMatch(/^activation:/m);
+  expect(out).not.toMatch(/^triggers:/m);
+  expect(out).not.toMatch(/^benefits-from:/m);
   // Body shape: tier-2 preamble + content.
   expect(out).toContain("Trove · v");
   expect(out).toContain("Python / FastAPI Conventions");
@@ -244,8 +247,14 @@ test("snapshot: trove-python projects to Codex .agents/skills with minimal front
     "utf-8",
   );
   expect(codex).toMatch(/^name: trove-python$/m);
-  expect(codex).toMatch(/^description: "Python\/FastAPI coding conventions and best practices\. Auto-activates when working with Python files\. Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling\."$/m);
+  // Codex has no `when_to_use`, so trigger language folds into the
+  // description or the skill stops being discoverable there.
+  expect(codex).toMatch(
+    /^description: "Python\/FastAPI coding conventions and best practices\. Auto-activates when working with Python files\. Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling\. Use when: python conventions; fastapi patterns; async python; pydantic models\."$/m,
+  );
   expect(codex).not.toMatch(/^version:/m);
+  expect(codex).not.toMatch(/^when_to_use:/m);
+  expect(codex).not.toMatch(/^user-invocable:/m);
   expect(codex).not.toMatch(/^activation:/m);
   expect(codex).not.toMatch(/^triggers:/m);
   expect(codex).not.toMatch(/^paths:/m);

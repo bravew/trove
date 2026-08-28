@@ -1,14 +1,8 @@
 ---
 name: trove-verify
-description: Completion verification workflow. Use before claiming done, fixed, complete, ready, or shipped.
-version: 1.0.0
-preamble-tier: 3
+description: "Completion verification workflow. Use before claiming done, fixed, complete, ready, or shipped."
+when_to_use: "verify this; before done; completion check; claim done"
 user-invocable: true
-triggers:
-  - verify this
-  - before done
-  - completion check
-  - claim done
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
