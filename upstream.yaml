@@ -49,8 +49,8 @@ sources:
         local_path: skills/coding/trove-react-native
         base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         base_tree_digest: sha256:7e4fa4bde2933d908489410c3ab054c7ec99cd057bf0d812c22bdf0d90d80d17
-        local_tree_digest: sha256:d840af528b0fa261f160ef3dacecf1b53c52f862722cb84d16d0e5809f5b4586
-        patch_digest: sha256:c3bf411a6763dd723d5892422a0997b1b8e6c753631666316f444b8a539375af
+        local_tree_digest: sha256:38b99f36a98c524cd3c65a620a011c1f8641295adfe274a2d1e5fef36a2071f4
+        patch_digest: sha256:e5135afb07c4728eeb0ba1a0ff7b60da83a606a3c28e2c70469d6ef4ae5269b7
         checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         checked_at: "2026-08-28T00:00:00Z"
         candidate_sha: null
@@ -79,8 +79,8 @@ sources:
         local_path: skills/coding/trove-react-view-transitions
         base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         base_tree_digest: sha256:572e1c39c7686c7952e05ea45c6a229d78346d46c8fe2eb70a4e169473aef09c
-        local_tree_digest: sha256:25f72c562196d410cb320a162d7c68386ad76551149308de1999e75be27ff6de
-        patch_digest: sha256:9d34711a6647d45c38904f63545314abdcf76600c39d69e7b63510cadd4f880a
+        local_tree_digest: sha256:953e3a17a1e29e99101c41ee0516be94a8328814de7b67fed668724bf05f50d0
+        patch_digest: sha256:5e1422aa77e30f6c4b6ef3f12bf377e3baa7f79fc4bbdecdc17a9a60042ef719
         checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
         checked_at: "2026-08-28T00:00:00Z"
         candidate_sha: null

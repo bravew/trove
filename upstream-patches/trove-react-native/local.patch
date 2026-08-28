@@ -1,5 +1,5 @@
 diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
-index 2e4a6f4..acfa2ff 100644
+index 2e4a6f4..68062a3 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
 @@ -1,35 +1,43 @@
@@ -62,7 +62,7 @@ index 2e4a6f4..acfa2ff 100644
  ## Rule Categories by Priority
  
  | Priority | Category         | Impact   | Prefix               |
-@@ -47,77 +56,73 @@ Reference these guidelines when:
+@@ -47,77 +55,73 @@ Reference these guidelines when:
  
  ### 1. List Performance (CRITICAL)
  
@@ -358,16 +358,16 @@ index 8a393ba..cd41643 100644
  Benefits apply to any screen with scrollable content—profiles, settings, feeds,
  search results. Default to virtualization.
 diff --git a/references/monorepo-native-deps-in-app.md b/references/monorepo-native-deps-in-app.md
-index ff85d76..15f5fa9 100644
+index ff85d76..ba05bbc 100644
 --- a/references/monorepo-native-deps-in-app.md
 +++ b/references/monorepo-native-deps-in-app.md
-@@ -37,10 +37,13 @@ packages/
+@@ -37,10 +37,16 @@ packages/
  // packages/app/package.json
  {
    "dependencies": {
 -    "react-native-reanimated": "3.16.1"
-+    "react-native-reanimated": "^4.0.0",
-+    "react-native-worklets": "^0.x"
++    "react-native-reanimated": "4.0.0",
++    "react-native-worklets": "0.4.0"
    }
  }
  ```
@@ -376,7 +376,10 @@ index ff85d76..15f5fa9 100644
 -for autolinking to detect and link the native code.
 +for autolinking to detect and link the native code. Reanimated v4 split the
 +worklets runtime into the separate `react-native-worklets` package — both must
-+be installed in the app directory.
++be installed in the app directory. Pin the pair rather than using caret ranges:
++each Reanimated minor requires a matching Worklets minor, so a floating range
++can resolve to an incompatible combination. Check Reanimated's compatibility
++table for the pairing that matches your version.
 diff --git a/references/navigation-native-navigators.md b/references/navigation-native-navigators.md
 index 035c5fd..8ce6dcb 100644
 --- a/references/navigation-native-navigators.md

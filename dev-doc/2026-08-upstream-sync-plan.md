@@ -70,7 +70,9 @@ Use separate fields:
   derived;
 - `base_tree_digest`: a deterministic digest of the selected upstream files after path
   filtering but before local patches;
-- `checked_sha` and `checked_at`: the latest upstream revision inspected;
+- `checked_sha` and `checked_at`: the latest upstream revision a maintainer
+  accepted as inspected. A report-only `--check` never writes these — it writes
+  nothing at all; only an update operation records them;
 - `candidate_sha`: optional revision proposed by an open update;
 - `imported_at`: when `base_sha` actually became the vendored base.
 

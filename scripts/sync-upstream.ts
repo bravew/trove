@@ -85,6 +85,21 @@ export function main(args: readonly string[], root = path.resolve(import.meta.di
     fs.writeFileSync(output, renderMarkdown(report));
   }
   process.stdout.write(renderMarkdown(report));
+
+  // A report that names a problem must not leave the workflow green. Only
+  // `update-available` is informational: on a scheduled check it is the
+  // expected outcome whenever upstream has moved, and it is what the update
+  // job acts on. Everything else needs a maintainer.
+  const healthy = report.mode === "update"
+    ? ["no-changes", "updated"]
+    : ["no-changes", "updated", "update-available"];
+  const unhealthy = report.artifacts.filter((artifact) => !healthy.includes(artifact.conclusion));
+  if (unhealthy.length > 0) {
+    for (const artifact of unhealthy) {
+      console.error(`${artifact.artifact}: ${artifact.conclusion}`);
+    }
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.main) {

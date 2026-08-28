@@ -37,8 +37,8 @@ packages/
 // packages/app/package.json
 {
   "dependencies": {
-    "react-native-reanimated": "^4.0.0",
-    "react-native-worklets": "^0.x"
+    "react-native-reanimated": "4.0.0",
+    "react-native-worklets": "0.4.0"
   }
 }
 ```
@@ -46,4 +46,7 @@ packages/
 Even if the shared package uses the native dependency, the app must also list it
 for autolinking to detect and link the native code. Reanimated v4 split the
 worklets runtime into the separate `react-native-worklets` package — both must
-be installed in the app directory.
+be installed in the app directory. Pin the pair rather than using caret ranges:
+each Reanimated minor requires a matching Worklets minor, so a floating range
+can resolve to an incompatible combination. Check Reanimated's compatibility
+table for the pairing that matches your version.

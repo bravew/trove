@@ -747,7 +747,17 @@ function validateUpstreamLocks(): void {
     const manifest = loadUpstreamManifest(ROOT);
     validateManifestInventory(manifest, ROOT);
     const report = checkOffline(ROOT, manifest);
-    const failed = report.artifacts.filter((artifact) => artifact.conclusion === "validation-failed");
+    // `blocked-unproven-base` is a declared, reviewed state — an artifact we
+    // vendored without a provable upstream base. It must be visible, but it is
+    // not a validation failure: making it one would mean the manifest could
+    // never record the state its own schema defines.
+    const blocked = report.artifacts.filter((artifact) => artifact.verification.includes("blocked-unproven-base"));
+    const failed = report.artifacts.filter(
+      (artifact) => artifact.conclusion === "validation-failed" && !blocked.includes(artifact),
+    );
+    for (const artifact of blocked) {
+      warn(`upstream artifact '${artifact.artifact}' has an unproven base — it cannot be synced until a base is established`);
+    }
     if (failed.length > 0) {
       for (const artifact of failed) error(`upstream artifact '${artifact.artifact}' is not active: ${artifact.verification.join(", ")}`);
       return;

@@ -179,7 +179,13 @@ function timestampAt(value: unknown, where: string): string {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
     fail(where, "must be an ISO-8601 UTC timestamp with second precision");
   }
-  if (Number.isNaN(Date.parse(timestamp))) fail(where, "must be a valid timestamp");
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) fail(where, "must be a valid timestamp");
+  // Date.parse silently rolls over impossible calendar dates: 2026-02-31
+  // becomes 2026-03-03. Round-trip the parsed value so only real dates pass.
+  if (new Date(parsed).toISOString().replace(".000Z", "Z") !== timestamp) {
+    fail(where, "must be a real calendar date");
+  }
   return timestamp;
 }
 

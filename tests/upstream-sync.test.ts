@@ -80,6 +80,12 @@ describe("upstream manifest boundary", () => {
     expect(() => parseUpstreamManifest(raw)).toThrow("active artifacts require non-null");
   });
 
+  test("rejects calendar-invalid timestamps", () => {
+    const raw = rawManifest();
+    artifactAt(raw).checked_at = "2026-02-31T00:00:00Z";
+    expect(() => parseUpstreamManifest(raw)).toThrow("must be a real calendar date");
+  });
+
   test("rejects credentials, local repositories, and option-like refs", () => {
     const credentialed = rawManifest();
     (credentialed.sources as Record<string, unknown>[])[0].repository = "https://token@example.com/repo.git";
@@ -358,6 +364,13 @@ function createUpdateFixture(change: FixtureChange): UpdateFixture {
       : entry.bytes,
   }));
   writeEntryTree(path.join(root, "skills/coding/trove-example"), local);
+  // The build writes a generated SKILL.md next to the template. The sync does
+  // not own it — walkLocal ignores it and it is absent from every tree digest —
+  // but an update must not destroy it either.
+  fs.writeFileSync(
+    path.join(root, "skills/coding/trove-example/SKILL.md"),
+    "---\nname: trove-example\n---\n\ngenerated\n",
+  );
   const patchPath = "upstream-patches/trove-example/local.patch";
   const patch = Buffer.from(createPatch(transformed, local));
   fs.mkdirSync(path.join(root, path.dirname(patchPath)), { recursive: true });
@@ -417,6 +430,9 @@ describe("one-artifact updater", () => {
       });
       expect(first.artifacts[0].conclusion).toBe("updated");
       expect(first.artifacts[0].changed_paths).toEqual(["rules/b.md"]);
+      // The directory swap must carry across files the sync does not own.
+      expect(fs.readFileSync(path.join(fixture.root, "skills/coding/trove-example/SKILL.md"), "utf8"))
+        .toContain("generated");
       expect(fs.readFileSync(path.join(fixture.root, "skills/coding/trove-example/references/b.md"), "utf8"))
         .toBe("new upstream file\n");
       expect(fs.readFileSync(path.join(fixture.root, "skills/coding/trove-example/references/a.md"), "utf8"))

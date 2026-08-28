@@ -327,9 +327,19 @@ function licenseExpression(entries: readonly TreeEntry[]): string | null {
   if (!skill) return null;
   const content = skill.bytes.toString("utf8");
   if (!content.startsWith("---\n")) return null;
-  const end = content.indexOf("\n---", 4);
+  // Match the closing delimiter exactly, as injectPreamble does: a body line
+  // like `----` or `--- note` would otherwise truncate the frontmatter and
+  // feed a fragment to YAML.parse.
+  const end = content.indexOf("\n---\n", 4);
   if (end === -1) return null;
-  const parsed = YAML.parse(content.slice(4, end)) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(content.slice(4, end)) as unknown;
+  } catch {
+    // Unparseable frontmatter carries no license we can trust; the caller
+    // reports that as `missing` rather than crashing the scheduled check.
+    return null;
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const value = (parsed as Record<string, unknown>).license;
   return typeof value === "string" ? value : null;
@@ -699,6 +709,29 @@ function defaultVerification(root: string): readonly string[] {
   return ["bun run build", "bun test", "bun run validate"];
 }
 
+function carryUnownedFiles(
+  source: string,
+  stage: string,
+  owned: readonly TreeEntry[],
+): void {
+  const ownedPaths = new Set(owned.map((entry) => entry.path));
+  const visit = (directory: string, prefix = ""): void => {
+    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+      const relative = prefix ? `${prefix}/${item.name}` : item.name;
+      const absolute = path.join(directory, item.name);
+      if (item.isDirectory()) {
+        visit(absolute, relative);
+        continue;
+      }
+      if (!item.isFile() || ownedPaths.has(relative)) continue;
+      const target = safeAbsolute(stage, relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(absolute, target);
+    }
+  };
+  visit(source);
+}
+
 function installCandidate(
   root: string,
   manifest: UpstreamManifest,
@@ -718,6 +751,12 @@ function installCandidate(
   try {
     fs.mkdirSync(stage, { recursive: true });
     writeEntries(stage, result.patched);
+    // The swap replaces the whole directory, but walkLocal deliberately
+    // ignores generated SKILL.md files, so they are absent from
+    // result.patched. Carry them across so the rename never destroys a file
+    // the sync does not own. `bun run build` rewrites them afterwards; this
+    // keeps the swap non-destructive even when verification is customized.
+    carryUnownedFiles(localDirectory, stage, result.patched);
     fs.renameSync(localDirectory, backup);
     fs.renameSync(stage, localDirectory);
     updateManifestLock(

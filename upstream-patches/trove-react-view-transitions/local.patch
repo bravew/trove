@@ -1,5 +1,5 @@
 diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
-index 9e59843..070da1d 100644
+index 9e59843..7190fd3 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
 @@ -1,334 +1,114 @@
@@ -650,7 +650,7 @@ index 2e5f7cb..e4207c9 100644
 -For Next.js-specific implementation steps (`transitionTypes` on `<Link>`, prefetch behavior, and same-route dynamic segments), see [nextjs.md](nextjs.md).
 +For Next.js-specific implementation steps (config flag, `transitionTypes` on `<Link>`, same-route dynamic segments), see `nextjs.md`.
 diff --git a/references/nextjs.md b/references/nextjs.md
-index 473750a..5070305 100644
+index 473750a..1778a0f 100644
 --- a/references/nextjs.md
 +++ b/references/nextjs.md
 @@ -2,33 +2,41 @@
@@ -682,13 +682,13 @@ index 473750a..5070305 100644
  
 -When following [implementation.md](implementation.md), apply these additions:
 +When following `implementation.md`, apply these additions:
- 
--**Step 4:** Use `transitionTypes` on `<Link>` — see [The `transitionTypes` Prop](#the-transitiontypes-prop-on-nextlink). If the animation depends on dynamic destination content, also see [When Content Must Be Ready](#when-content-must-be-ready).
++
 +**After Step 2:** Enable the experimental flag above.
  
--**After Step 6:** For same-route dynamic segments (e.g., `/collection/[slug]`), use the `key` + `name` + `share` pattern — see [Same-Route Dynamic Segment Transitions](#same-route-dynamic-segment-transitions).
+-**Step 4:** Use `transitionTypes` on `<Link>` — see [The `transitionTypes` Prop](#the-transitiontypes-prop-on-nextlink). If the animation depends on dynamic destination content, also see [When Content Must Be Ready](#when-content-must-be-ready).
 +**Step 4:** Use `transitionTypes` on `<Link>` — see "The `transitionTypes` Prop" section below for usage and availability.
-+
+ 
+-**After Step 6:** For same-route dynamic segments (e.g., `/collection/[slug]`), use the `key` + `name` + `share` pattern — see [Same-Route Dynamic Segment Transitions](#same-route-dynamic-segment-transitions).
 +**After Step 6:** For same-route dynamic segments (e.g., `/collection/[slug]`), use the `key` + `name` + `share` pattern — see Same-Route Dynamic Segment Transitions below.
  
  ---
@@ -742,25 +742,30 @@ index 473750a..5070305 100644
  
  ---
  
-@@ -74,20 +60,17 @@ See the Next.js [View Transitions guide](https://nextjs.org/docs/app/guides/view
+@@ -74,20 +60,25 @@ See the Next.js [View Transitions guide](https://nextjs.org/docs/app/guides/view
  'use client';
  
  import { useRouter } from 'next/navigation';
 +import { startTransition, addTransitionType } from 'react';
  
 -function DetailButton({ href }: { href: string }) {
-+function handleNavigate(href: string) {
++function NavButton({ href, children }: { href: string; children: React.ReactNode }) {
    const router = useRouter();
 -
--  return (
+   return (
 -    <button onClick={() => router.push(href, { transitionTypes: ['nav-forward'] })}>
 -      Open
--    </button>
--  );
-+  startTransition(() => {
-+    addTransitionType('nav-forward');
-+    router.push(href);
-+  });
++    <button
++      onClick={() => {
++        startTransition(() => {
++          addTransitionType('nav-forward');
++          router.push(href);
++        });
++      }}
++    >
++      {children}
+     </button>
+   );
  }
  ```
  
@@ -769,12 +774,12 @@ index 473750a..5070305 100644
  ---
  
  ## Server-Side Filtering with `router.replace`
-@@ -100,55 +83,15 @@ For search/sort/filter that re-renders on the server (via URL params), use `star
+@@ -100,56 +91,18 @@ For search/sort/filter that re-renders on the server (via URL params), use `star
  import { useRouter } from 'next/navigation';
  import { startTransition } from 'react';
  
 -function SortControl() {
-+function handleSort(sort: string) {
++function SortButton({ sort, children }: { sort: string; children: React.ReactNode }) {
    const router = useRouter();
 -
 -  function handleSort(sort: string) {
@@ -784,12 +789,9 @@ index 473750a..5070305 100644
 -  }
 -
 -  return <button onClick={() => handleSort('newest')}>Newest</button>;
-+  startTransition(() => {
-+    router.replace(`?sort=${sort}`);
-+  });
- }
- ```
- 
+-}
+-```
+-
 -List items wrapped in `<ViewTransition key={item.id}>` will animate reorder. This is the server-component alternative to the client-side [Searchable Grid](patterns.md#searchable-grid-with-usedeferredvalue) pattern.
 -
 -For immediate control feedback while the route commits, use `useOptimistic` for the button state but keep the animated list tied to the committed sort value. See [Exclude Elements with `useOptimistic`](patterns.md#exclude-elements-with-useoptimistic).
@@ -808,7 +810,7 @@ index 473750a..5070305 100644
 -export function Tabs({ tabs, active, indicatorName = 'tab-indicator' }) {
 -  const [optimisticActive, setOptimisticActive] = useOptimistic(active);
 -  const [, startTransition] = useTransition();
--  return (
+   return (
 -    <nav>
 -      {tabs.map(t => (
 -        <Link key={t.value} href={t.href} scroll={false}
@@ -823,14 +825,19 @@ index 473750a..5070305 100644
 -        </Link>
 -      ))}
 -    </nav>
--  );
--}
--```
-+List items wrapped in `<ViewTransition key={item.id}>` will animate reorder. This is the server-component alternative to the client-side `useDeferredValue` pattern in `patterns.md`.
++    <button onClick={() => startTransition(() => router.replace(`?sort=${sort}`))}>
++      {children}
++    </button>
+   );
+ }
+ ```
  
++List items wrapped in `<ViewTransition key={item.id}>` will animate reorder. This is the server-component alternative to the client-side `useDeferredValue` pattern in `patterns.md`.
++
  ---
  
-@@ -206,28 +149,28 @@ Same rules as explicit `<Suspense>`: use simple string props (not type maps) sin
+ ## Two-Layer Pattern (Directional + Suspense)
+@@ -206,13 +159,11 @@ Same rules as explicit `<Suspense>`: use simple string props (not type maps) sin
  </ViewTransition>
  ```
  
@@ -845,16 +852,14 @@ index 473750a..5070305 100644
  
  ```tsx
  <Suspense fallback={<Skeleton />}>
--  <ViewTransition key={slug} name="collection-content" share="auto" default="none">
-+  <ViewTransition key={slug} name={`collection-${slug}`} share="auto" default="none">
-     <Content slug={slug} />
-   </ViewTransition>
- </Suspense>
+@@ -223,11 +174,15 @@ When navigating between dynamic segments of the same route (e.g., `/collection/[
  ```
  
  - `key={slug}` forces unmount/remount on change
 -- The stable `name` pairs the outgoing and incoming containers; `share="auto"` creates the crossfade
-+- `name` + `share="auto"` creates a shared element crossfade
++- `name` + `share="auto"` creates a shared element crossfade — the name must be
++  the *same* on both sides, so keep it stable across slugs; keying is what forces
++  the remount
  - VT inside `<Suspense>` (without keying Suspense) keeps old content visible during loading
  
 +---
