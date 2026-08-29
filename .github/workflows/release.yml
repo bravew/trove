@@ -16,7 +16,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # RELEASE_TOKEN is a fine-grained PAT owned by a repository admin.
+          # `main` is protected by a ruleset requiring a pull request, and a
+          # user-owned repo cannot name the GitHub Actions app as a bypass
+          # actor (the API rejects it: "Actor GitHub Actions integration must
+          # be part of the ruleset source or owner organization"), so
+          # GITHUB_TOKEN can never push the release commit. The ruleset lists
+          # the repository-admin role as its bypass actor instead. Falls back
+          # to GITHUB_TOKEN so forks still check out; the preflight in
+          # "Commit and tag" fails loudly if the PAT is absent.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -91,18 +100,41 @@ jobs:
         # the tag at the first commit and only push the rebuilt outputs.
         # The Create GitHub Release step below also no-ops on the second
         # run, so the day's release reflects the first merge.
+        #
+        # This push writes straight to the protected default branch. It
+        # works only because the `main` ruleset lists the repository-admin
+        # role as a bypass actor AND RELEASE_TOKEN is an admin PAT; rulesets
+        # do not honor that role unless it is explicitly listed, so without
+        # both halves the push is rejected with GH013 (run 33232999272).
+        # Classic branch protection also guards main but sets
+        # enforce_admins:false, so the same PAT satisfies it.
+        # See docs/contributing.md.
+        env:
+          HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
         run: |
+          if [ "$HAS_RELEASE_TOKEN" != "true" ]; then
+            echo "::error::RELEASE_TOKEN is not set. main is protected by a ruleset" \
+                 "that requires a pull request, and GITHUB_TOKEN cannot bypass it on" \
+                 "a user-owned repo. Add a repo-admin PAT as the RELEASE_TOKEN secret."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --staged --quiet && exit 0
           git commit -m "chore: release v${VERSION}"
-          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${VERSION} already exists; pushing commit only (same-day re-release)."
+          # Consult the remote, not local refs: `actions/checkout` fetches
+          # tags, so a tag pushed by an earlier run that then failed to push
+          # `main` would look local-only and be silently skipped here.
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
+            echo "Tag v${VERSION} already exists on the remote; pushing commit only (same-day re-release)."
             git push origin main
           else
             git tag "v${VERSION}"
-            git push origin main --tags
+            # --atomic so the tag cannot land while `main` is rejected. Run
+            # 33232999272 failed exactly that way and left v2026.8.29 pointing
+            # at a commit unreachable from main, with no GitHub Release.
+            git push --atomic origin main "refs/tags/v${VERSION}"
           fi
 
       - name: Create GitHub Release
