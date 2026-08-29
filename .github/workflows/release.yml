@@ -10,13 +10,27 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The release commit is pushed with RELEASE_TOKEN, and pushes made with a
+    # PAT *do* trigger workflows (unlike GITHUB_TOKEN, which is exempt). Without
+    # this guard every release re-enters here: the rerun rebuilds, re-evaluates,
+    # and force-pushes canary again for nothing. It self-terminates today only
+    # because the rebuild is byte-identical and `git diff --staged --quiet`
+    # exits early -- but a build that is not perfectly reproducible, or a rerun
+    # that crosses midnight UTC into a new CalVer version, would chain instead.
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release v') }}"
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # No token here, and credentials are NOT persisted into .git/config.
+          # `bun ci`, `bun run build`, `bun run validate`, and `bun run
+          # eval:gate` all execute repository and dependency code before the
+          # release push; a persisted admin PAT would be usable by any of them
+          # to write to the protected branch. The PAT is instead scoped to the
+          # single push command that needs it, in "Commit and tag" below.
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -91,18 +105,46 @@ jobs:
         # the tag at the first commit and only push the rebuilt outputs.
         # The Create GitHub Release step below also no-ops on the second
         # run, so the day's release reflects the first merge.
+        #
+        # This push writes straight to the protected default branch. It
+        # works only because the `main` ruleset lists the repository-admin
+        # role as a bypass actor AND RELEASE_TOKEN is an admin PAT; rulesets
+        # do not honor that role unless it is explicitly listed, so without
+        # both halves the push is rejected with GH013 (run 33232999272).
+        # Classic branch protection also guards main but sets
+        # enforce_admins:false, so the same PAT satisfies it.
+        # See docs/contributing.md.
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
         run: |
+          if [ "$HAS_RELEASE_TOKEN" != "true" ]; then
+            echo "::error::RELEASE_TOKEN is not set. main is protected by a ruleset" \
+                 "that requires a pull request, and GITHUB_TOKEN cannot bypass it on" \
+                 "a user-owned repo. Add a repo-admin PAT as the RELEASE_TOKEN secret."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --staged --quiet && exit 0
           git commit -m "chore: release v${VERSION}"
-          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${VERSION} already exists; pushing commit only (same-day re-release)."
-            git push origin main
+          # Checkout persisted no credentials, so the PAT is supplied here as a
+          # one-shot push URL rather than written into .git/config where later
+          # steps could reach it. Actions masks the secret in the log.
+          REMOTE="https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Consult the remote, not local refs: `actions/checkout` fetches
+          # tags, so a tag pushed by an earlier run that then failed to push
+          # `main` would look local-only and be silently skipped here.
+          if [ -n "$(git ls-remote --tags "$REMOTE" "refs/tags/v${VERSION}")" ]; then
+            echo "Tag v${VERSION} already exists on the remote; pushing commit only (same-day re-release)."
+            git push "$REMOTE" main
           else
             git tag "v${VERSION}"
-            git push origin main --tags
+            # --atomic so the tag cannot land while `main` is rejected. Run
+            # 33232999272 failed exactly that way and left v2026.8.29 pointing
+            # at a commit unreachable from main, with no GitHub Release.
+            git push --atomic "$REMOTE" main "refs/tags/v${VERSION}"
           fi
 
       - name: Create GitHub Release
@@ -126,5 +168,12 @@ jobs:
           fi
 
       - name: Deploy to canary
+        # `canary` is unprotected, so this needs no admin PAT -- GITHUB_TOKEN
+        # is enough, and using it keeps the PAT confined to the one push above.
+        # Supplied inline because checkout persisted no credentials.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git push origin main:canary --force
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            main:canary
