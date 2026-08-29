@@ -163,8 +163,8 @@ sources:
         local_path: skills/research/trove-pulse-cn
         base_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
         base_tree_digest: sha256:c8a464395a376ba4ce2d6d81e23d26727cd350827dcdc5bc822e6791d2f6ded3
-        local_tree_digest: sha256:e7298c7164319e1bd77c020b46a9dd9213dc318c5b21872932e3aa82a5c0a6c5
-        patch_digest: sha256:c5fb8427fd8e10c487cb284ebb94f662671119ff9378e9dbc7a5a4ecab9c3ee6
+        local_tree_digest: sha256:3d9a9074537cdd9219e04b0db79f6a681221839259c2e7c44fad3eaf2c811705
+        patch_digest: sha256:33e8d936c8be9f597dc9b9d02e616a652533bdc581e383162e1e7164510e4025
         checked_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
         checked_at: "2026-08-29T00:00:00Z"
         candidate_sha: null

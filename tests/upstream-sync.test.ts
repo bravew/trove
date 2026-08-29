@@ -11,6 +11,7 @@ import {
   isCanonicalArtifactPath,
   lockEntries,
   patchEntries,
+  readGitSelection,
   stableJson,
   transformSelection,
   updateArtifacts,
@@ -25,6 +26,7 @@ import {
   parseUpstreamManifest,
   validateManifestInventory,
   type UpstreamManifest,
+  type FullSha,
 } from "../scripts/lib/upstream-manifest";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -307,6 +309,76 @@ describe("canonical artifact paths", () => {
     expect(isCanonicalArtifactPath("scripts")).toBe(false);
     expect(isCanonicalArtifactPath("assets/demo.mp4")).toBe(false);
     expect(isCanonicalArtifactPath("agents/openai.yaml")).toBe(false);
+  });
+
+  test("rejects git symlink mode 120000 in a selected path", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-git-symlink-"));
+    try {
+      const upstream = path.join(temporary, "upstream");
+      fs.mkdirSync(path.join(upstream, "skills/example/rules"), { recursive: true });
+      fs.writeFileSync(
+        path.join(upstream, "skills/example/SKILL.md"),
+        "---\nname: example\ndescription: fixture\nlicense: MIT\n---\n",
+      );
+      fs.writeFileSync(path.join(upstream, "skills/example/rules/a.md"), "ok\n");
+      fs.symlinkSync("a.md", path.join(upstream, "skills/example/rules/link.md"));
+      runGit(upstream, ["init", "-q", "-b", "main"]);
+      runGit(upstream, ["add", "."]);
+      runGit(upstream, ["commit", "-q", "-m", "symlink"]);
+      const sha = runGit(upstream, ["rev-parse", "HEAD"]) as FullSha;
+      const digest = `sha256:${"b".repeat(64)}`;
+      const manifest = parseUpstreamManifest({
+        version: 2,
+        policy: {
+          maximum_file_bytes: 65536,
+          maximum_artifact_bytes: 262144,
+          allow_binary: false,
+          allow_generated: false,
+        },
+        sources: [{
+          id: "fixture",
+          repository: pathToFileURL(upstream).href,
+          ref: "main",
+          license: { expression: "MIT", evidence: "LICENSE" },
+          artifacts: [{
+            id: "example",
+            upstream_path: "skills/example",
+            local_path: "skills/research/example",
+            base_sha: sha,
+            base_tree_digest: digest,
+            local_tree_digest: digest,
+            patch_digest: digest,
+            checked_sha: sha,
+            checked_at: "2026-08-28T00:00:00Z",
+            candidate_sha: null,
+            imported_at: "2026-08-28T00:00:00Z",
+            include: ["SKILL.md", "rules/**"],
+            exclude: [],
+            path_map: { "SKILL.md": "SKILL.md.tmpl" },
+            transforms: [],
+            patches: [],
+            status: "active",
+          }],
+        }],
+        skills: [{
+          local_path: "skills/research/example",
+          origin: "adapted",
+          source_id: "fixture",
+          upstream_path: "skills/example",
+          evidence_sha: sha,
+        }],
+        external_records: [],
+        not_vendored: {},
+      }, { allowFileRepositories: true });
+      expect(() => readGitSelection(
+        path.join(upstream, ".git"),
+        sha,
+        manifest.sources[0].artifacts[0],
+        manifest,
+      )).toThrow("symlink");
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   });
 
   test("round-trips scripts/** through transform, write, and walk with both file modes", () => {

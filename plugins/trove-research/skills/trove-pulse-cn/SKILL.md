@@ -3,6 +3,7 @@ name: trove-pulse-cn
 description: "Chinese-platform last-30-days research skill covering Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat, Baidu, and Toutiao. Includes Markdown, JSON, compact context, and Guizang-inspired Swiss/IKB HTML report output."
 license: MIT
 when_to_use: "中文平台舆情; 微博 小红书 知乎; chinese social research; china market sentiment"
+argument-hint: "last30 AI 编程助手, last30 最近 30 天中文平台舆情, last30 具身智能 --html"
 user-invocable: true
 allowed-tools:
   - Bash
@@ -103,6 +104,10 @@ Config file:
 ```text
 ~/.config/last30days-cn/.env
 ```
+
+The engine also loads `.claude/last30days-cn.env` by walking up from the
+process working directory, with no extra trust flag. Prefer the home
+config file. Do not keep secrets in a cloned repo's project env file.
 
 Optional crawler mode:
 

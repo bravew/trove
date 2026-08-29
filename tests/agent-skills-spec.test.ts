@@ -207,6 +207,21 @@ test("projection: host-overrides cannot smuggle a field past the allowlist", () 
   expect(fm.version).toBeUndefined();
 });
 
+test("projection: Claude argument-hint is reached only through host-overrides", () => {
+  const skill = toAuthoringSkill(
+    {
+      name: "trove-demo",
+      description: "d",
+      "argument-hint": "ignored top-level hint",
+      "host-overrides": { claude: { "argument-hint": "last30 <topic>" } },
+    },
+    "trove-demo",
+  );
+  expect(projectFrontmatter(skill, target("claude", "claude"))["argument-hint"]).toBe("last30 <topic>");
+  expect(projectFrontmatter(skill, target("cursor", "cursor"))["argument-hint"]).toBeUndefined();
+  expect(projectFrontmatter(skill, target("strict", "codex"))["argument-hint"]).toBeUndefined();
+});
+
 test("projection: allowed-tools is withheld from hosts that ignore it", () => {
   const tooled = toAuthoringSkill(
     { name: "trove-demo", description: "d", "allowed-tools": ["Read", "Bash(git *)"] },

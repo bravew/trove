@@ -96,6 +96,10 @@ Config file:
 ~/.config/last30days-cn/.env
 ```
 
+The engine also loads `.claude/last30days-cn.env` by walking up from the
+process working directory, with no extra trust flag. Prefer the home
+config file. Do not keep secrets in a cloned repo's project env file.
+
 Optional crawler mode:
 
 ```bash
