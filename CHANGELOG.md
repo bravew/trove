@@ -43,6 +43,10 @@ release process.
   in-repo from the published specification and pinned to a recorded
   `SPEC_REVISION`. `skills-ref` runs as a non-blocking advisory cross-check in
   CI only.
+- `trove-research` plugin with two vendored last-30-days skills: `trove-pulse`
+  (global/English platforms, wrapper + on-demand spec) and `trove-pulse-cn`
+  (Chinese platforms, direct import). Neither auto-attaches; both run keyless
+  with stdlib Python. Cookie/browser access is opt-in, default off.
 - Gemini CLI receives skills. Extensions now bundle their plugin's skills under
   `skills/`, declare the required `name`/`version`/`description`, and the same
   files are written to the `.agents/skills` workspace root. Previously Gemini
@@ -63,6 +67,10 @@ release process.
 
 ### Changed
 
+- Upstream sync can vendor `scripts/**`, apply `replace-literal` rewrites,
+  exclude Trove-authored files from the lock via `local_only`, and raise size
+  caps per artifact. `bun run validate` secret-scans skill `scripts/**`
+  `.py` / `.js` / `.mjs` files.
 - Host frontmatter is rebuilt from an explicit per-host allowlist
   (`scripts/lib/projection.ts`) rather than string-stripped in place. Trove's
   authoring vocabulary — `preamble-tier`, `activation`, `triggers`,

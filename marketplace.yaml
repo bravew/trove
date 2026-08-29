@@ -79,3 +79,18 @@ plugins:
       - lambda
     roles:
       - devops
+  - name: trove-research
+    source: trove-research
+    description: "Research skills: last-30-days pulse across global and Chinese social platforms"
+    category: research
+    tags:
+      - research
+      - reddit
+      - trends
+      - social
+      - competitive-analysis
+      - weibo
+      - xiaohongshu
+    roles:
+      - pm
+      - dev

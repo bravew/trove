@@ -14,7 +14,7 @@ on:
           - check
           - update
       artifact:
-        description: Artifact id for update mode
+        description: Artifact id for update mode (free-form; any artifact id from upstream.yaml)
         required: false
         type: string
         default: trove-react-view-transitions

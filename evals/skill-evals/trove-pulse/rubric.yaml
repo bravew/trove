@@ -1,0 +1,15 @@
+criteria:
+  keyless_default:
+    weight: 3
+    description: "Runs with no API keys and no pip install; cookie reading stays opt-in off"
+  uses_vendored_engine:
+    weight: 3
+    description: "Invokes python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py and reads references/runtime-spec.md"
+  sibling_routing:
+    weight: 2
+    description: "Hands Chinese-platform questions to /trove-research:trove-pulse-cn"
+  evidence_discipline:
+    weight: 2
+    description: "Grounds claims in engine output; does not invent posts, dates, or engagement"
+
+min_pass_score: 7.0

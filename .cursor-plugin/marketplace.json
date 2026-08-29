@@ -85,6 +85,21 @@
         "ecs",
         "lambda"
       ]
+    },
+    {
+      "name": "trove-research",
+      "source": "./plugins/trove-research",
+      "description": "Research skills: last-30-days pulse across global and Chinese social platforms",
+      "category": "research",
+      "keywords": [
+        "research",
+        "reddit",
+        "trends",
+        "social",
+        "competitive-analysis",
+        "weibo",
+        "xiaohongshu"
+      ]
     }
   ]
 }

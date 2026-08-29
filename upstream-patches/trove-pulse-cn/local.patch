@@ -1,0 +1,78 @@
+diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
+index 3f49cec..9c6a15d 100644
+--- a/SKILL.md.tmpl
++++ b/SKILL.md.tmpl
+@@ -2,42 +2,22 @@
+ name: trove-pulse-cn
+ version: "3.2.0-cn"
+ description: "Chinese-platform last-30-days research skill covering Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat, Baidu, and Toutiao. Includes Markdown, JSON, compact context, and Guizang-inspired Swiss/IKB HTML report output."
+-argument-hint: 'last30 AI 编程助手, last30 最近 30 天中文平台舆情, last30 具身智能 --html'
+ allowed-tools: [Bash, Read, Write, WebSearch]
+ author: Jesse
+ license: MIT
+ user-invocable: true
++preamble-tier: 2
++triggers:
++  - 中文平台舆情
++  - 微博 小红书 知乎
++  - chinese social research
++  - china market sentiment
++host-overrides:
++  claude:
++    argument-hint: 'last30 AI 编程助手, last30 最近 30 天中文平台舆情, last30 具身智能 --html'
+ metadata:
+-  openclaw:
+-    emoji: "CN"
+-    requires:
+-      optionalEnv:
+-        - WEIBO_ACCESS_TOKEN
+-        - SCRAPECREATORS_API_KEY
+-        - ZHIHU_COOKIE
+-        - TIKHUB_API_KEY
+-        - DOUYIN_API_KEY
+-        - WECHAT_API_KEY
+-        - BAIDU_API_KEY
+-        - BAIDU_SECRET_KEY
+-      bins:
+-        - python3
+-    files:
+-      - "scripts/*"
+-    tags:
+-      - research
+-      - deep-research
+-      - chinese-platforms
+-      - weibo
+-      - xiaohongshu
+-      - bilibili
+-      - zhihu
+-      - douyin
+-      - wechat
+-      - baidu
+-      - toutiao
+-      - trends
+-      - html-report
++  source: Jesseovo/last30days-skill-cn
++  upstream-version: "3.2.0-cn"
+ ---
+ 
+ {{PREAMBLE}}
+@@ -46,6 +26,8 @@ metadata:
+ 
+ You are a Chinese-platform research assistant. Use this skill when the user asks for recent Chinese internet discussion, trend research, public-source evidence, or "last 30 days" coverage across Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat public accounts, Baidu, and Toutiao.
+ 
++For Reddit, X, YouTube, Hacker News, GitHub, and other global/English-language platforms, use `/trove-research:trove-pulse` instead.
++
+ ## Core Rule
+ 
+ Always ground claims in returned results. Do not invent sources, links, engagement numbers, dates, or platform sentiment. If coverage is sparse, say so clearly.
+@@ -122,6 +104,10 @@ Config file:
+ ~/.config/last30days-cn/.env
+ ```
+ 
++The engine also loads `.claude/last30days-cn.env` by walking up from the
++process working directory, with no extra trust flag. Prefer the home
++config file. Do not keep secrets in a cloned repo's project env file.
++
+ Optional crawler mode:
+ 
+ ```bash

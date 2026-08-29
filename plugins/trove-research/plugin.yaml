@@ -1,0 +1,25 @@
+name: trove-research
+description: "Research skills: last-30-days pulse across global and Chinese social platforms"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [research, social, trends, competitive-analysis]
+category: research
+
+roles: [pm, dev]
+
+skills:
+  - path: ./skills/trove-pulse
+    platforms: [claude, cursor, codex, agents, gemini, opencode]
+
+  - path: ./skills/trove-pulse-cn
+    platforms: [claude, cursor, codex, agents, gemini, opencode]
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []

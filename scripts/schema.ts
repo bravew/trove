@@ -25,6 +25,7 @@ const KNOWN_TOOLS = new Set<string>([
   "Agent",
   "WebFetch",
   "WebSearch",
+  "AskUserQuestion",
   "TodoWrite",
   "NotebookEdit",
 ]);

@@ -242,7 +242,7 @@ test("agents: root AGENTS.md is concise and links to scoped files", () => {
 
 test("agents: per-plugin scoped AGENTS.md exists for each plugin", () => {
   const pluginsDir = path.join(OUTPUT, "agents", "plugins");
-  for (const pluginName of ["trove-dev", "trove-design", "trove-product", "trove-infra", "trove-security", "trove-workflow"]) {
+  for (const pluginName of ["trove-dev", "trove-design", "trove-product", "trove-infra", "trove-security", "trove-workflow", "trove-research"]) {
     const file = path.join(pluginsDir, pluginName, "AGENTS.md");
     expect(fs.existsSync(file)).toBe(true);
   }

@@ -35,6 +35,7 @@ import {
   type ParsedTemplate,
 } from "./lib/skill-parser";
 import { emitFrontmatter, projectFrontmatter } from "./lib/projection";
+import { isUnownedSupportName } from "./lib/support-files";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
@@ -170,6 +171,7 @@ function listFilesRecursive(dir: string, baseDir = dir): string[] {
   if (!fs.existsSync(dir)) return [];
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (isUnownedSupportName(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...listFilesRecursive(full, baseDir));

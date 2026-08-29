@@ -168,12 +168,13 @@ test("schema: unknown allowed-tools is a warning, not an error", () => {
   expect(report.warnings[0].message).toContain("unknown tool 'MadeUpTool'");
 });
 
-test("schema: known tools (incl. Task and Agent) produce no findings", () => {
+test("schema: known tools (incl. Task, Agent, AskUserQuestion) produce no findings", () => {
   // `Task` and `Agent` are both names Claude Code has used for the
   // sub-agent dispatch tool; both must be accepted to avoid spurious
-  // warnings on real-world skills.
+  // warnings on real-world skills. `AskUserQuestion` is the consent
+  // surface used by trove-pulse.
   const report = validateV2Frontmatter(
-    { "allowed-tools": ["Read", "Write", "Edit", "Bash", "Task", "Agent", "WebFetch"] },
+    { "allowed-tools": ["Read", "Write", "Edit", "Bash", "Task", "Agent", "WebFetch", "AskUserQuestion"] },
     new Set(),
   );
   expect(report.errors).toEqual([]);

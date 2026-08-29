@@ -57,6 +57,15 @@ Each skill is listed under its owning plugin. The **Triggers** column is natural
 | **trove-spec** | Product spec writing skill. Generates structured feature specifications with user stories, acceptance criteria, and technical considerations. | `product spec`, `feature spec`, `write a spec` | — |
 | **trove-user-story** | User story writing skill. Generates well-structured user stories with acceptance criteria, edge cases, and test scenarios. | `user story`, `acceptance criteria`, `write a story` | — |
 
+## trove-research
+
+> Research skills: last-30-days pulse across global and Chinese social platforms
+
+| Skill | What it does | Triggers | Paths |
+|-------|--------------|----------|-------|
+| **trove-pulse** | Research what people actually said about a topic in the last 30 days across Reddit, X, YouTube, Hacker News, GitHub, Polymarket, and the web (upstream: last30days), ranked by real engagement rather than editorial pick. Use for market and competitor checks, sentiment reads, launch reception, and "what changed recently" questions. | `last 30 days`, `what are people saying`, `social research`, `trend check` | — |
+| **trove-pulse-cn** | Chinese-platform last-30-days research skill covering Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat, Baidu, and Toutiao. Includes Markdown, JSON, compact context, and Guizang-inspired Swiss/IKB HTML report output. | `中文平台舆情`, `微博 小红书 知乎`, `chinese social research`, `china market sentiment` | — |
+
 ## trove-security
 
 > Security review and vulnerability scanning

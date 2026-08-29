@@ -1,0 +1,11 @@
+{
+  "name": "trove-research",
+  "description": "Research skills: last-30-days pulse across global and Chinese social platforms",
+  "version": "2026.7.4",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "trove-research",
+    "category": "research",
+    "shortDescription": "Research skills: last-30-days pulse across global and Chinese social platforms"
+  }
+}

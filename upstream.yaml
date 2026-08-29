@@ -103,6 +103,112 @@ sources:
         patches:
           - upstream-patches/trove-react-view-transitions/local.patch
         status: active
+  - id: last30days-skill
+    repository: https://github.com/mvanhorn/last30days-skill.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: LICENSE
+    artifacts:
+      - id: trove-pulse
+        upstream_path: skills/last30days
+        local_path: skills/research/trove-pulse
+        base_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8
+        base_tree_digest: sha256:481f17608da17364f7a9597f10c952f56e280a2444adc2c330545987494dab6d
+        local_tree_digest: sha256:8fa9c3aa3443695b49001904a85727e4ee0a746160eef229032b9e32b452dbf7
+        patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        checked_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8
+        checked_at: "2026-08-29T00:00:00Z"
+        candidate_sha: null
+        imported_at: "2026-08-29T00:00:00Z"
+        include:
+          - SKILL.md
+          - references/**
+          - scripts/**
+        exclude:
+          - scripts/build-skill.sh
+          - scripts/compare.sh
+          - scripts/test-v1-vs-v2.sh
+          - scripts/setup-pass.sh
+          - scripts/setup-keychain.sh
+          - scripts/evaluate_search_quality.py
+          - scripts/test_device_auth.py
+          - scripts/verify_v3.py
+        path_map:
+          SKILL.md: references/runtime-spec.md
+        local_only:
+          - SKILL.md.tmpl
+        transforms:
+          - kind: replace-literal
+            path: references/runtime-spec.md
+            from: "`/last30days"
+            to: "`/trove-research:trove-pulse"
+            minimum_occurrences: 1
+        # Spec is 229 KB today and the selection is ~2.5 MB; both grow weekly.
+        # Raising the globals would weaken the guard for the Vercel artifacts.
+        policy:
+          maximum_file_bytes: 524288
+          maximum_artifact_bytes: 8388608
+        patches: []
+        status: active
+  - id: last30days-skill-cn
+    repository: https://github.com/Jesseovo/last30days-skill-cn.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: LICENSE
+    artifacts:
+      - id: trove-pulse-cn
+        upstream_path: skills/last30days
+        local_path: skills/research/trove-pulse-cn
+        base_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
+        base_tree_digest: sha256:c8a464395a376ba4ce2d6d81e23d26727cd350827dcdc5bc822e6791d2f6ded3
+        local_tree_digest: sha256:3d9a9074537cdd9219e04b0db79f6a681221839259c2e7c44fad3eaf2c811705
+        patch_digest: sha256:33e8d936c8be9f597dc9b9d02e616a652533bdc581e383162e1e7164510e4025
+        checked_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
+        checked_at: "2026-08-29T00:00:00Z"
+        candidate_sha: null
+        imported_at: "2026-08-29T00:00:00Z"
+        include:
+          - SKILL.md
+          - scripts/**
+        exclude: []
+        path_map:
+          SKILL.md: SKILL.md.tmpl
+        transforms:
+          # rename-skill would also rewrite the engine badge and
+          # ~/.config/last30days-cn/ — those strings are still emitted by
+          # the vendored Python, so only the Trove skill name and heading change.
+          - kind: inject-preamble
+            marker: "{{PREAMBLE}}"
+          - kind: replace-literal
+            path: SKILL.md.tmpl
+            from: "name: last30days-cn"
+            to: "name: trove-pulse-cn"
+            minimum_occurrences: 1
+          - kind: replace-literal
+            path: SKILL.md.tmpl
+            from: "# last30days-cn"
+            to: "# trove-pulse-cn"
+            minimum_occurrences: 1
+          - kind: replace-literal
+            path: SKILL.md.tmpl
+            from: "allowed-tools: Bash, Read, Write, WebSearch"
+            to: "allowed-tools: [Bash, Read, Write, WebSearch]"
+            minimum_occurrences: 1
+          - kind: replace-literal
+            path: SKILL.md.tmpl
+            from: "python {{SKILL_DIR}}"
+            to: "python3 ${CLAUDE_SKILL_DIR}"
+            minimum_occurrences: 13
+          - kind: replace-literal
+            path: SKILL.md.tmpl
+            from: "{{USER_TOPIC}}"
+            to: "<topic>"
+            minimum_occurrences: 8
+        patches:
+          - upstream-patches/trove-pulse-cn/local.patch
+        status: active
   - id: cursor-pstack
     repository: https://github.com/cursor/plugins.git
     ref: main
@@ -137,6 +243,8 @@ skills:
   - { local_path: skills/product/trove-release-notes, origin: original }
   - { local_path: skills/product/trove-spec, origin: original }
   - { local_path: skills/product/trove-user-story, origin: original }
+  - { local_path: skills/research/trove-pulse, origin: adapted, source_id: last30days-skill, upstream_path: skills/last30days, evidence_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8 }
+  - { local_path: skills/research/trove-pulse-cn, origin: adapted, source_id: last30days-skill-cn, upstream_path: skills/last30days, evidence_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f }
   - { local_path: skills/review/trove-review, origin: original }
   - { local_path: skills/shared/trove-cdk, origin: original }
   - { local_path: skills/shared/trove-docker, origin: original }
@@ -184,3 +292,17 @@ not_vendored:
     - vercel-optimize
     - web-design-guidelines
     - writing-guidelines
+  last30days-skill:
+    - mcp
+    - tests
+    - assets
+    - agents
+    - grok-plugin
+    - translated-readmes
+  last30days-skill-cn:
+    - assets
+    - tests
+    - fixtures
+    - hooks
+    - agents
+    - root-development-copies

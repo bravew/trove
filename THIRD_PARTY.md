@@ -22,6 +22,37 @@ distributed in the [Cursor plugins repository](https://github.com/cursor/plugins
 under the MIT license. Exact source paths and the reviewed revision are recorded
 in `upstream.yaml`.
 
+## last30days research engines
+
+Two skills in `trove-research` are adapted from MIT-licensed last-30-days
+research engines. Exact selection, transforms, patches, and lock digests live
+in `upstream.yaml`.
+
+### trove-pulse
+
+Adapted from [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill)
+at `a218edadbc3361672f5e5e2cd72a8212b0b3fbb8` (`v3.21.1`). Trove vendors
+`references/` and `scripts/` and authors a wrapper `SKILL.md.tmpl` that is
+local-only (outside the sync lock).
+
+The vendored tree includes `scripts/lib/vendor/bird-search`, an MIT-licensed
+Node client (`engines.node >= 22`, ~116 KB) used for X/Twitter search. A sync
+whose `changed_paths` touch `scripts/lib/vendor/**` is a named review trigger.
+
+Not vendored: `mcp/`, `tests/`, `assets/`, `agents/`, `.grok-plugin/`, and
+translated READMEs.
+
+### trove-pulse-cn
+
+Adapted from [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn)
+at `1a8a04c3c347defbcdbb8da26d7cf1a531426b1f` (`v3.2.0`). That repository is
+itself an MIT fork of `mvanhorn/last30days-skill`. The upstream `LICENSE`
+naming both copyright holders is preserved in the vendored tree.
+
+Not vendored: `assets/`, `tests/`, `fixtures/`, `hooks/`, `agents/`, and the
+root development copies (the installable payload under `skills/last30days/` is
+what Trove vendors).
+
 ## Curated plugin records
 
 The Sentry and Figma curated records point to external repositories at the full

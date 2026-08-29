@@ -81,6 +81,19 @@
       },
       "category": "infrastructure",
       "description": "Infrastructure and DevOps automation"
+    },
+    {
+      "name": "trove-research",
+      "source": {
+        "source": "local",
+        "path": "./plugins/trove-research"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "research",
+      "description": "Research skills: last-30-days pulse across global and Chinese social platforms"
     }
   ]
 }

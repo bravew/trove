@@ -23,6 +23,8 @@ import * as path from "path";
 import YAML from "yaml";
 import { ALL_HOSTS } from "../hosts/index";
 import { projectFrontmatter, toAuthoringSkill } from "./lib/projection";
+import { findSecretMatches, shouldScanSkillScript } from "./lib/secret-scan";
+import { isUnownedSupportName } from "./lib/support-files";
 import { lintDecisionGates } from "./lib/decision-gate";
 import { validateV2Frontmatter } from "./schema";
 import { detectCycles, buildForwardGraph } from "./lib/dep-graph";
@@ -69,14 +71,6 @@ function ok(msg: string): void {
 
 // ─── Secret detection ───────────────────────────────────────
 
-const SECRET_PATTERNS = [
-  { name: "AWS Access Key", pattern: /AKIA[0-9A-Z]{16}/ },
-  { name: "GitHub Token", pattern: /gh[ps]_[A-Za-z0-9_]{36,}/ },
-  { name: "Slack Token", pattern: /xox[baprs]-[0-9a-zA-Z-]+/ },
-  { name: "Private Key", pattern: /-----BEGIN.*PRIVATE KEY-----/ },
-  { name: "Generic Password", pattern: /password\s*[:=]\s*["'][^"']{8,}["']/i },
-];
-
 interface SessionStartAnchor {
   plugin: string;
   skill: string;
@@ -92,17 +86,30 @@ interface BootstrapAnchor {
 function scanForSecrets(filePath: string): void {
   const content = fs.readFileSync(filePath, "utf-8");
   const relPath = path.relative(ROOT, filePath);
+  for (const name of findSecretMatches(filePath, content)) {
+    error(`Possible ${name} found in ${relPath}`);
+  }
+}
 
-  // Strip code blocks and inline code to avoid false positives on example patterns
-  const stripped = content
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/`[^`]+`/g, "");
+function scanSkillScripts(skillDir: string): void {
+  const scriptsDir = path.join(skillDir, "scripts");
+  if (!fs.existsSync(scriptsDir)) return;
 
-  for (const { name, pattern } of SECRET_PATTERNS) {
-    if (pattern.test(stripped)) {
-      error(`Possible ${name} found in ${relPath}`);
+  function walk(dir: string): void {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (isUnownedSupportName(entry.name)) {
+        continue;
+      }
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (shouldScanSkillScript(full)) scanForSecrets(full);
     }
   }
+
+  walk(scriptsDir);
 }
 
 // ─── Marketplace validation ─────────────────────────────────
@@ -590,6 +597,7 @@ function validateSkillTemplates(): void {
       } else if (entry.name === "SKILL.md.tmpl" || entry.name === "SKILL.md") {
         validateSkillFile(full, knownSkills);
         count++;
+        if (entry.name === "SKILL.md.tmpl") scanSkillScripts(path.dirname(full));
       }
     }
   }

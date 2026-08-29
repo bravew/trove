@@ -17,6 +17,7 @@ The Trove delivers coding skills, workflow bootstrap, hooks, agents, and MCP ser
 /plugin install trove-product@trove    # PMs
 /plugin install trove-security@trove   # Everyone
 /plugin install trove-infra@trove      # DevOps
+/plugin install trove-research@trove   # Last-30-days research
 ```
 
 ### Cursor
@@ -56,8 +57,9 @@ OpenCode and Gemini artifacts are generated under `output/opencode/` and
 | `trove-product` | PMs | Specs · user stories · release notes |
 | `trove-security` | All | Security review · secret scanning |
 | `trove-infra` | DevOps | Terraform · AWS CDK · Docker |
+| `trove-research` | PMs and engineers | Last-30-days pulse · global + Chinese platforms |
 
-**52 first-party skills** total. Optional MCP connector metadata lives on the role plugins; curated third-party entries are added only after they project as real installable plugins.
+**53 first-party skills** total. Optional MCP connector metadata lives on the role plugins; curated third-party entries are added only after they project as real installable plugins.
 
 For the full skill inventory with file-glob auto-attach and natural-language triggers, see [routing.md](./routing.md) — it's auto-generated from skill frontmatter.
 

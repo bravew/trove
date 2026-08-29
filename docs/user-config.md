@@ -70,3 +70,43 @@ Two reasons:
 - Not a way to override host capability flags (those live in `hosts/*.ts`).
 - Not exported anywhere by default — `learnings_enabled: true` controls
   whether skills *read* learnings, not whether they're sent to a server.
+
+## Skill secrets and consent (not this file)
+
+`~/.trove/config.yaml` does not store API keys, cookies, or per-skill engine
+config. Skills that need credentials read their own documented locations.
+Do not copy those keys into Trove's YAML — a cloned repo or a shared
+`TROVE_HOME` is the wrong place for them.
+
+### `trove-pulse` (global / English platforms)
+
+- Config file: `~/.config/last30days/.env` (mode 0600). That upstream path is
+  the source of truth for this skill.
+- Precedence: per-run flag > process env > that `.env` > defaults.
+- Keyless baseline works (Reddit, Hacker News, web). No `pip install`.
+- Optional keys worth adding first: `SCRAPECREATORS_API_KEY`, then
+  `AUTH_TOKEN` / `CT0` for X.
+- Cookie/browser-profile reading is opt-in. The skill's Decision Gate defaults
+  to skip. Leave `LAST30DAYS_TRUST_PROJECT_CONFIG` unset so a cloned repo
+  cannot carry config the user did not write.
+- Health check: `python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py doctor`
+  (topic-word `doctor`, no cookies) and `--diagnose`.
+
+### `trove-pulse-cn` (Chinese platforms)
+
+- Config file: `~/.config/last30days-cn/.env`, or `LAST30DAYS_CN_CONFIG_DIR`.
+- Keyless baseline works. Python 3.9+. Optional pip: `jieba`, `playwright`
+  (never a setup step — `--diagnose` reports which are active).
+- `ZHIHU_COOKIE` is a session cookie the user pastes. The engine does not
+  read the browser for it.
+- Upstream also loads `.claude/last30days-cn.env` by walking up from the
+  process cwd, with no trust flag equivalent to
+  `LAST30DAYS_TRUST_PROJECT_CONFIG`. Prefer the home config file. Do not
+  keep secrets in a cloned repo's `.claude/last30days-cn.env`.
+- Health check: `python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py --diagnose`.
+
+### Shared names
+
+`SCRAPECREATORS_API_KEY` and `XIAOHONGSHU_API_BASE` are read by **both**
+engines. Config directories are separate. Setting a shared key in the wrong
+file looks like a broken skill.

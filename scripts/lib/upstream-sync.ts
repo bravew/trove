@@ -4,13 +4,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
-import type {
-  FullSha,
-  Sha256Digest,
-  UpstreamArtifact,
-  UpstreamManifest,
-  UpstreamSource,
+import {
+  effectivePolicy,
+  isCanonicalArtifactPath,
+  type FullSha,
+  type Sha256Digest,
+  type UpstreamArtifact,
+  type UpstreamManifest,
+  type UpstreamPolicy,
+  type UpstreamSource,
 } from "./upstream-manifest";
+import { isUnownedSupportName } from "./support-files";
+
+export { isCanonicalArtifactPath };
 
 export interface TreeEntry {
   path: string;
@@ -73,6 +79,12 @@ function runText(command: string, args: readonly string[], cwd?: string): string
   return run(command, args, cwd).toString("utf8").trim();
 }
 
+export function lockEntries(entries: readonly TreeEntry[], artifact: UpstreamArtifact): TreeEntry[] {
+  if (artifact.localOnly.length === 0) return [...entries];
+  return entries.filter((entry) =>
+    !artifact.localOnly.some((pattern) => matchesPattern(entry.path, pattern)));
+}
+
 function matchesPattern(candidate: string, pattern: string): boolean {
   if (pattern.endsWith("/**")) {
     const prefix = pattern.slice(0, -3);
@@ -94,7 +106,7 @@ function isGenerated(pathname: string, bytes: Buffer): boolean {
 
 function validateEntries(
   entries: readonly TreeEntry[],
-  manifest: UpstreamManifest,
+  policy: UpstreamPolicy,
   label: string,
 ): void {
   let total = 0;
@@ -102,18 +114,18 @@ function validateEntries(
   for (const entry of entries) {
     if (paths.has(entry.path)) throw new SyncError(`${label}: duplicate path '${entry.path}'`);
     paths.add(entry.path);
-    if (entry.bytes.length > manifest.policy.maximumFileBytes) {
+    if (entry.bytes.length > policy.maximumFileBytes) {
       throw new SyncError(`${label}: '${entry.path}' exceeds maximum_file_bytes`);
     }
     total += entry.bytes.length;
-    if (!manifest.policy.allowBinary && entry.bytes.includes(0)) {
+    if (!policy.allowBinary && entry.bytes.includes(0)) {
       throw new SyncError(`${label}: binary file '${entry.path}' is not allowed`);
     }
-    if (!manifest.policy.allowGenerated && isGenerated(entry.path, entry.bytes)) {
+    if (!policy.allowGenerated && isGenerated(entry.path, entry.bytes)) {
       throw new SyncError(`${label}: generated file '${entry.path}' is not allowed`);
     }
   }
-  if (total > manifest.policy.maximumArtifactBytes) {
+  if (total > policy.maximumArtifactBytes) {
     throw new SyncError(`${label}: selected files exceed maximum_artifact_bytes`);
   }
 }
@@ -162,7 +174,7 @@ export function readGitSelection(
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
   if (entries.length === 0) throw new SyncError(`${artifact.id}: include rules selected no files`);
-  validateEntries(entries, manifest, `${artifact.id}@${revision}`);
+  validateEntries(entries, effectivePolicy(manifest, artifact), `${artifact.id}@${revision}`);
   return entries;
 }
 
@@ -183,47 +195,79 @@ function injectPreamble(bytes: Buffer, marker: string, artifact: string): Buffer
   return Buffer.from(`${content.slice(0, insertion)}\n${marker}\n${content.slice(insertion)}`, "utf8");
 }
 
+function applyTransform(
+  transformed: TreeEntry[],
+  transform: UpstreamArtifact["transforms"][number],
+  artifactId: string,
+): void {
+  if (transform.kind === "rename-skill") {
+    for (const entry of transformed) {
+      if (entry.path !== "SKILL.md.tmpl") continue;
+      const content = entry.bytes.toString("utf8");
+      if (!content.includes(transform.from)) {
+        throw new SyncError(`${artifactId}: rename source '${transform.from}' was not found`);
+      }
+      entry.bytes = Buffer.from(content.split(transform.from).join(transform.to), "utf8");
+    }
+    return;
+  }
+  if (transform.kind === "inject-preamble") {
+    const skill = transformed.find((entry) => entry.path === "SKILL.md.tmpl");
+    if (!skill) throw new SyncError(`${artifactId}: inject-preamble requires mapped SKILL.md.tmpl`);
+    skill.bytes = injectPreamble(skill.bytes, transform.marker, artifactId);
+    return;
+  }
+  if (transform.kind === "replace-literal") {
+    if (!isCanonicalArtifactPath(transform.path)) {
+      throw new SyncError(`${artifactId}: replace-literal path '${transform.path}' is outside canonical template content`);
+    }
+    const target = transformed.find((entry) => entry.path === transform.path);
+    if (!target) {
+      throw new SyncError(`${artifactId}: replace-literal path '${transform.path}' was not found`);
+    }
+    const content = target.bytes.toString("utf8");
+    const occurrences = content.split(transform.from).length - 1;
+    if (occurrences < transform.minimumOccurrences) {
+      throw new SyncError(
+        `${artifactId}: replace-literal '${transform.from}' found ${occurrences} time(s) in '${transform.path}', expected at least ${transform.minimumOccurrences}`,
+      );
+    }
+    target.bytes = Buffer.from(content.split(transform.from).join(transform.to), "utf8");
+    return;
+  }
+  const exhaustive: never = transform;
+  throw new SyncError(`${artifactId}: unsupported transform '${String(exhaustive)}'`);
+}
+
 export function transformSelection(
   entries: readonly TreeEntry[],
   artifact: UpstreamArtifact,
 ): readonly TreeEntry[] {
   const transformed = entries.map((entry) => ({ ...entry, path: mapPath(entry.path, artifact.pathMap) }));
   for (const transform of artifact.transforms) {
-    if (transform.kind === "rename-skill") {
-      for (const entry of transformed) {
-        if (entry.path !== "SKILL.md.tmpl") continue;
-        const content = entry.bytes.toString("utf8");
-        if (!content.includes(transform.from)) {
-          throw new SyncError(`${artifact.id}: rename source '${transform.from}' was not found`);
-        }
-        entry.bytes = Buffer.from(content.split(transform.from).join(transform.to), "utf8");
-      }
-    } else {
-      const skill = transformed.find((entry) => entry.path === "SKILL.md.tmpl");
-      if (!skill) throw new SyncError(`${artifact.id}: inject-preamble requires mapped SKILL.md.tmpl`);
-      skill.bytes = injectPreamble(skill.bytes, transform.marker, artifact.id);
-    }
+    applyTransform(transformed, transform, artifact.id);
   }
   const paths = transformed.map((entry) => entry.path);
   if (new Set(paths).size !== paths.length) throw new SyncError(`${artifact.id}: path_map creates duplicate paths`);
   for (const candidate of paths) {
-    if (candidate !== "SKILL.md.tmpl" && !candidate.startsWith("references/")) {
+    if (!isCanonicalArtifactPath(candidate)) {
       throw new SyncError(`${artifact.id}: transformed path '${candidate}' is outside canonical template content`);
     }
   }
   return transformed.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function walkLocal(directory: string, prefix = ""): TreeEntry[] {
+export function walkLocal(directory: string, prefix = ""): TreeEntry[] {
   const entries: TreeEntry[] = [];
   for (const item of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (isUnownedSupportName(item.name)) continue;
     const absolute = path.join(directory, item.name);
     const relative = prefix ? `${prefix}/${item.name}` : item.name;
     const stat = fs.lstatSync(absolute);
     if (stat.isSymbolicLink()) throw new SyncError(`local artifact contains symlink '${relative}'`);
     if (stat.isDirectory()) entries.push(...walkLocal(absolute, relative));
     else if (stat.isFile() && relative !== "SKILL.md") {
-      if (relative !== "SKILL.md.tmpl" && !relative.startsWith("references/")) {
+      if (!isCanonicalArtifactPath(relative)) {
         throw new SyncError(`local artifact path '${relative}' is outside canonical template content`);
       }
       entries.push({ path: relative, mode: stat.mode & 0o111 ? "100755" : "100644", bytes: fs.readFileSync(absolute) });
@@ -243,7 +287,7 @@ function safeAbsolute(root: string, repositoryPath: string): string {
   return absolute;
 }
 
-function patchEntries(root: string, artifact: UpstreamArtifact): TreeEntry[] {
+export function patchEntries(root: string, artifact: UpstreamArtifact): TreeEntry[] {
   return artifact.patches.map((patchPath) => {
     const absolute = safeAbsolute(root, patchPath);
     const stat = fs.lstatSync(absolute);
@@ -260,7 +304,7 @@ function patchEntries(root: string, artifact: UpstreamArtifact): TreeEntry[] {
           if (path.posix.isAbsolute(candidate) || candidate.split("/").some((part) => part === ".." || part === "")) {
             throw new SyncError(`${patchPath}: unsafe patch path '${candidate}'`);
           }
-          if (candidate !== "SKILL.md.tmpl" && !candidate.startsWith("references/")) {
+          if (!isCanonicalArtifactPath(candidate)) {
             throw new SyncError(`${patchPath}: patch path '${candidate}' is outside canonical template content`);
           }
         }
@@ -271,7 +315,7 @@ function patchEntries(root: string, artifact: UpstreamArtifact): TreeEntry[] {
       if (path.posix.isAbsolute(candidate) || candidate.split("/").some((part) => part === ".." || part === "")) {
         throw new SyncError(`${patchPath}: unsafe patch path '${candidate}'`);
       }
-      if (candidate !== "SKILL.md.tmpl" && !candidate.startsWith("references/")) {
+      if (!isCanonicalArtifactPath(candidate)) {
         throw new SyncError(`${patchPath}: patch path '${candidate}' is outside canonical template content`);
       }
     }
@@ -279,7 +323,7 @@ function patchEntries(root: string, artifact: UpstreamArtifact): TreeEntry[] {
   });
 }
 
-function writeEntries(directory: string, entries: readonly TreeEntry[]): void {
+export function writeEntries(directory: string, entries: readonly TreeEntry[]): void {
   for (const entry of entries) {
     const absolute = safeAbsolute(directory, entry.path);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
@@ -366,8 +410,9 @@ function verifyLocalLock(
     };
   }
   const localDirectory = safeAbsolute(root, artifact.localPath);
-  const local = walkLocal(localDirectory);
-  validateEntries(local, manifest, artifact.localPath);
+  const walked = walkLocal(localDirectory);
+  validateEntries(walked, effectivePolicy(manifest, artifact), artifact.localPath);
+  const local = lockEntries(walked, artifact);
   if (digestTree(local) !== artifact.localTreeDigest) {
     throw new SyncError(`${artifact.id}: local tree digest does not match manifest`);
   }
@@ -446,8 +491,8 @@ function checkOnlineArtifact(
       };
     }
 
-    const reconstructed = replayPatches(root, artifact, base);
-    const local = walkLocal(safeAbsolute(root, artifact.localPath));
+    const reconstructed = lockEntries(replayPatches(root, artifact, base), artifact);
+    const local = lockEntries(walkLocal(safeAbsolute(root, artifact.localPath)), artifact);
     const mismatch = changedPaths(reconstructed, local);
     if (mismatch.length) {
       throw new SyncError(`${artifact.id}: reconstructed base differs from local tree: ${mismatch.join(", ")}`);
@@ -532,8 +577,8 @@ function candidateResult(
     if (digestTree(base) !== artifact.baseTreeDigest) {
       throw new SyncError(`${artifact.id}: base tree digest does not match manifest`);
     }
-    const reconstructed = replayPatches(root, artifact, base);
-    const local = walkLocal(safeAbsolute(root, artifact.localPath));
+    const reconstructed = lockEntries(replayPatches(root, artifact, base), artifact);
+    const local = lockEntries(walkLocal(safeAbsolute(root, artifact.localPath)), artifact);
     const reconstructionMismatch = changedPaths(reconstructed, local);
     if (reconstructionMismatch.length > 0) {
       throw new SyncError(
@@ -603,7 +648,7 @@ function candidateResult(
 
     try {
       const patched = replayPatches(root, artifact, candidate);
-      validateEntries(patched, manifest, `${artifact.id} candidate`);
+      validateEntries(patched, effectivePolicy(manifest, artifact), `${artifact.id} candidate`);
       return {
         report: {
           ...offline,
@@ -717,6 +762,7 @@ function carryUnownedFiles(
   const ownedPaths = new Set(owned.map((entry) => entry.path));
   const visit = (directory: string, prefix = ""): void => {
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (isUnownedSupportName(item.name)) continue;
       const relative = prefix ? `${prefix}/${item.name}` : item.name;
       const absolute = path.join(directory, item.name);
       if (item.isDirectory()) {
@@ -750,13 +796,16 @@ function installCandidate(
   if (fs.existsSync(stage) || fs.existsSync(backup)) throw new SyncError(`${artifact.id}: stale update staging path exists`);
   try {
     fs.mkdirSync(stage, { recursive: true });
-    writeEntries(stage, result.patched);
+    writeEntries(stage, lockEntries(result.patched, artifact));
     // The swap replaces the whole directory, but walkLocal deliberately
     // ignores generated SKILL.md files, so they are absent from
     // result.patched. Carry them across so the rename never destroys a file
-    // the sync does not own. `bun run build` rewrites them afterwards; this
-    // keeps the swap non-destructive even when verification is customized.
-    carryUnownedFiles(localDirectory, stage, result.patched);
+    // the sync does not own. `local_only` paths are omitted from the lock
+    // the same way: write the owned tree, then copy Trove-authored files
+    // from the previous directory. `bun run build` rewrites generated
+    // SKILL.md afterwards; this keeps the swap non-destructive even when
+    // verification is customized.
+    carryUnownedFiles(localDirectory, stage, lockEntries(result.patched, artifact));
     fs.renameSync(localDirectory, backup);
     fs.renameSync(stage, localDirectory);
     updateManifestLock(
@@ -766,7 +815,7 @@ function installCandidate(
       candidateSha,
       result.candidateDate,
       digestTree(result.selected),
-      digestTree(result.patched),
+      digestTree(lockEntries(result.patched, artifact)),
     );
     const verification = (options.verify ?? defaultVerification)(root);
     fs.rmSync(backup, { recursive: true, force: true });
