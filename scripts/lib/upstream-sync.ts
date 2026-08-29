@@ -762,6 +762,7 @@ function carryUnownedFiles(
   const ownedPaths = new Set(owned.map((entry) => entry.path));
   const visit = (directory: string, prefix = ""): void => {
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (isUnownedSupportName(item.name)) continue;
       const relative = prefix ? `${prefix}/${item.name}` : item.name;
       const absolute = path.join(directory, item.name);
       if (item.isDirectory()) {
@@ -795,13 +796,16 @@ function installCandidate(
   if (fs.existsSync(stage) || fs.existsSync(backup)) throw new SyncError(`${artifact.id}: stale update staging path exists`);
   try {
     fs.mkdirSync(stage, { recursive: true });
-    writeEntries(stage, result.patched);
+    writeEntries(stage, lockEntries(result.patched, artifact));
     // The swap replaces the whole directory, but walkLocal deliberately
     // ignores generated SKILL.md files, so they are absent from
     // result.patched. Carry them across so the rename never destroys a file
-    // the sync does not own. `bun run build` rewrites them afterwards; this
-    // keeps the swap non-destructive even when verification is customized.
-    carryUnownedFiles(localDirectory, stage, result.patched);
+    // the sync does not own. `local_only` paths are omitted from the lock
+    // the same way: write the owned tree, then copy Trove-authored files
+    // from the previous directory. `bun run build` rewrites generated
+    // SKILL.md afterwards; this keeps the swap non-destructive even when
+    // verification is customized.
+    carryUnownedFiles(localDirectory, stage, lockEntries(result.patched, artifact));
     fs.renameSync(localDirectory, backup);
     fs.renameSync(stage, localDirectory);
     updateManifestLock(
@@ -811,7 +815,7 @@ function installCandidate(
       candidateSha,
       result.candidateDate,
       digestTree(result.selected),
-      digestTree(result.patched),
+      digestTree(lockEntries(result.patched, artifact)),
     );
     const verification = (options.verify ?? defaultVerification)(root);
     fs.rmSync(backup, { recursive: true, force: true });

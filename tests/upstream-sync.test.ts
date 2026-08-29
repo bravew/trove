@@ -727,6 +727,80 @@ function fixtureRaw(repository: string, maximumFileBytes: number): Record<string
   };
 }
 
+function createLocalOnlyUpdateFixture(): UpdateFixture {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-update-local-only-"));
+  const upstream = path.join(temporary, "upstream");
+  const root = path.join(temporary, "root");
+  fs.mkdirSync(path.join(upstream, "skills/example/rules"), { recursive: true });
+  fs.writeFileSync(
+    path.join(upstream, "skills/example/SKILL.md"),
+    "---\nname: fixture-skill\ndescription: fixture\nlicense: MIT\n---\n\n# Fixture\n",
+  );
+  fs.writeFileSync(path.join(upstream, "skills/example/rules/a.md"), "upstream one\n");
+  runGit(upstream, ["init", "-q", "-b", "main"]);
+  runGit(upstream, ["add", "."]);
+  runGit(upstream, ["commit", "-q", "-m", "base"]);
+  const baseSha = runGit(upstream, ["rev-parse", "HEAD"]);
+
+  fs.mkdirSync(root, { recursive: true });
+  const raw = fixtureRaw(pathToFileURL(upstream).href, 4096);
+  const rawArtifact = ((raw.sources as Record<string, unknown>[])[0].artifacts as Record<string, unknown>[])[0];
+  rawArtifact.transforms = [];
+  rawArtifact.patches = [];
+  rawArtifact.local_only = ["SKILL.md.tmpl"];
+  rawArtifact.base_sha = baseSha;
+  rawArtifact.checked_sha = baseSha;
+  (raw.skills as Record<string, unknown>[])[0].evidence_sha = baseSha;
+
+  let manifest = parseUpstreamManifest(raw, { allowFileRepositories: true });
+  const artifact = manifest.sources[0].artifacts[0];
+  const selected: TreeEntry[] = [
+    {
+      path: "SKILL.md",
+      mode: "100644",
+      bytes: fs.readFileSync(path.join(upstream, "skills/example/SKILL.md")),
+    },
+    {
+      path: "rules/a.md",
+      mode: "100644",
+      bytes: fs.readFileSync(path.join(upstream, "skills/example/rules/a.md")),
+    },
+  ];
+  const transformed = transformSelection(selected, artifact);
+  writeEntryTree(path.join(root, "skills/coding/trove-example"), transformed);
+  fs.writeFileSync(path.join(root, "skills/coding/trove-example/SKILL.md.tmpl"), "wrapper\n");
+  fs.writeFileSync(
+    path.join(root, "skills/coding/trove-example/SKILL.md"),
+    "---\nname: trove-example\n---\n\ngenerated\n",
+  );
+  const bytecodeDir = path.join(root, "skills/coding/trove-example/scripts/lib/__pycache__");
+  fs.mkdirSync(bytecodeDir, { recursive: true });
+  fs.writeFileSync(path.join(bytecodeDir, "x.cpython-314.pyc"), Buffer.from([0, 1, 2]));
+
+  rawArtifact.base_tree_digest = digestTree(selected);
+  rawArtifact.local_tree_digest = digestTree(lockEntries(
+    walkLocal(path.join(root, "skills/coding/trove-example")),
+    artifact,
+  ));
+  rawArtifact.patch_digest = digestTree([]);
+
+  fs.writeFileSync(path.join(upstream, "skills/example/rules/b.md"), "new upstream file\n");
+  runGit(upstream, ["add", "-A"]);
+  runGit(upstream, ["commit", "-q", "-m", "add"]);
+
+  fs.writeFileSync(path.join(root, "upstream.yaml"), YAML.stringify(raw, { lineWidth: 0 }));
+  runGit(root, ["init", "-q", "-b", "main"]);
+  runGit(root, ["add", "."]);
+  runGit(root, ["commit", "-q", "-m", "fixture"]);
+  manifest = loadUpstreamManifest(root, "upstream.yaml", { allowFileRepositories: true });
+  return {
+    root,
+    upstream,
+    manifest,
+    cleanup: () => fs.rmSync(temporary, { recursive: true, force: true }),
+  };
+}
+
 function createUpdateFixture(change: FixtureChange): UpdateFixture {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), `trove-update-${change}-`));
   const upstream = path.join(temporary, "upstream");
@@ -859,6 +933,42 @@ describe("one-artifact updater", () => {
       );
       expect(second.artifacts[0].conclusion).toBe("no-changes");
       expect(runGit(fixture.root, ["status", "--porcelain"])).toBe("");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("records a local_only digest and preserves the wrapper plus skips bytecode", () => {
+    const fixture = createLocalOnlyUpdateFixture();
+    try {
+      const wrapper = path.join(fixture.root, "skills/coding/trove-example/SKILL.md.tmpl");
+      const bytecode = path.join(
+        fixture.root,
+        "skills/coding/trove-example/scripts/lib/__pycache__/x.cpython-314.pyc",
+      );
+      expect(fs.readFileSync(wrapper, "utf8")).toBe("wrapper\n");
+      expect(fs.existsSync(bytecode)).toBe(true);
+
+      const report = updateArtifacts(fixture.root, fixture.manifest, { artifactId: "trove-example" }, {
+        verify: () => ["fixture verification"],
+      });
+      expect(report.artifacts[0].conclusion).toBe("updated");
+      expect(fs.readFileSync(wrapper, "utf8")).toBe("wrapper\n");
+      expect(fs.existsSync(bytecode)).toBe(false);
+      expect(fs.readFileSync(
+        path.join(fixture.root, "skills/coding/trove-example/references/b.md"),
+        "utf8",
+      )).toBe("new upstream file\n");
+
+      const updated = loadUpstreamManifest(fixture.root, "upstream.yaml", { allowFileRepositories: true });
+      const artifact = updated.sources[0].artifacts[0];
+      const locked = lockEntries(
+        walkLocal(path.join(fixture.root, "skills/coding/trove-example")),
+        artifact,
+      );
+      expect(locked.map((entry) => entry.path)).toEqual(["references/a.md", "references/b.md"]);
+      expect(artifact.localTreeDigest).toBe(digestTree(locked));
+      expect(() => checkOffline(fixture.root, updated)).not.toThrow();
     } finally {
       fixture.cleanup();
     }
