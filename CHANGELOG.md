@@ -94,3 +94,19 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.8.29] - 2026-08-29
+
+### What's Changed
+* Host projection contract, Agent Skills conformance, and installer layout fixes by @bravew in https://github.com/bravew/trove/pull/1
+* feat(upstream): add deterministic vendored skill sync by @bravew in https://github.com/bravew/trove/pull/2
+* build(deps): bump actions/upload-artifact from 4.6.2 to 7.0.1 by @dependabot[bot] in https://github.com/bravew/trove/pull/3
+* build(deps): bump actions/checkout from 4.4.0 to 7.0.1 by @dependabot[bot] in https://github.com/bravew/trove/pull/4
+* feat(research): vendor last30days as trove-pulse and trove-pulse-cn by @bravew in https://github.com/bravew/trove/pull/5
+* fix(ci): unblock release push to protected main by @bravew in https://github.com/bravew/trove/pull/6
+
+### New Contributors
+* @bravew made their first contribution in https://github.com/bravew/trove/pull/1
+* @dependabot[bot] made their first contribution in https://github.com/bravew/trove/pull/3
+
+**Full Changelog**: https://github.com/bravew/trove/commits/v2026.8.29
+
