@@ -1,0 +1,145 @@
+"""Date utilities for last30days skill.
+
+Author: Jesse (https://github.com/Jesseovo)
+"""
+
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple
+
+CST = timezone(timedelta(hours=8))
+
+
+def get_date_range(days: int = 30, as_of: Optional[str] = None) -> Tuple[str, str]:
+    """Get the date range for the N days ending at ``as_of`` (or today).
+
+    Args:
+        days: 回溯天数。
+        as_of: 终点日期 YYYY-MM-DD（历史回溯）；为空时以今天为终点。
+
+    Returns:
+        Tuple of (from_date, to_date) as YYYY-MM-DD strings
+
+    Raises:
+        ValueError: as_of 无法解析为有效日期时。
+    """
+    if as_of:
+        parsed = parse_date(as_of)
+        if parsed is None:
+            raise ValueError(f"无效的 --as-of 日期: {as_of!r}（应为 YYYY-MM-DD）")
+        end_date = parsed.date()
+    else:
+        end_date = datetime.now(CST).date()
+    from_date = end_date - timedelta(days=days)
+    return from_date.isoformat(), end_date.isoformat()
+
+
+def parse_date(date_str: Optional[str]) -> Optional[datetime]:
+    """Parse a date string in various formats.
+
+    Supports: YYYY-MM-DD, ISO 8601, Unix timestamp
+    """
+    if not date_str:
+        return None
+
+    # 尝试 Unix 时间戳。中文平台按北京时间日历归档。
+    try:
+        ts = float(date_str)
+        return datetime.fromtimestamp(ts, tz=CST)
+    except (ValueError, TypeError):
+        pass
+
+    # Try ISO formats
+    formats = [
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+    ]
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            if dt.tzinfo is not None:
+                return dt.astimezone(CST)
+            return dt.replace(tzinfo=CST)
+        except ValueError:
+            continue
+
+    return None
+
+
+def timestamp_to_date(ts: Optional[float]) -> Optional[str]:
+    """Convert Unix timestamp to YYYY-MM-DD string."""
+    if ts is None:
+        return None
+    try:
+        dt = datetime.fromtimestamp(ts, tz=CST)
+        return dt.date().isoformat()
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def get_date_confidence(date_str: Optional[str], from_date: str, to_date: str) -> str:
+    """Determine confidence level for a date.
+
+    Args:
+        date_str: The date to check (YYYY-MM-DD or None)
+        from_date: Start of valid range (YYYY-MM-DD)
+        to_date: End of valid range (YYYY-MM-DD)
+
+    Returns:
+        'high', 'med', or 'low'
+    """
+    if not date_str:
+        return 'low'
+
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+        start = datetime.strptime(from_date, "%Y-%m-%d").date()
+        end = datetime.strptime(to_date, "%Y-%m-%d").date()
+
+        if start <= dt <= end:
+            return 'high'
+        elif dt < start:
+            # Older than range
+            return 'low'
+        else:
+            # Future date (suspicious)
+            return 'low'
+    except ValueError:
+        return 'low'
+
+
+def days_ago(date_str: Optional[str]) -> Optional[int]:
+    """Calculate how many days ago a date is.
+
+    Returns None if date is invalid or missing.
+    """
+    if not date_str:
+        return None
+
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+        today = datetime.now(CST).date()
+        delta = today - dt
+        return delta.days
+    except ValueError:
+        return None
+
+
+def recency_score(date_str: Optional[str], max_days: int = 30) -> int:
+    """Calculate recency score (0-100).
+
+    0 days ago = 100, max_days ago = 0, clamped.
+    """
+    age = days_ago(date_str)
+    if age is None:
+        return 0  # Unknown date gets worst score
+
+    if age < 0:
+        return 100  # Future date (treat as today)
+    if age >= max_days:
+        return 0
+
+    return int(100 * (1 - age / max_days))

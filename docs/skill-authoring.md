@@ -167,6 +167,44 @@ bun run validate    # frontmatter + decision-gate lint
 2. Add `Context:`, `Question:`, `Options:` (with `- A.`/`- B.` bullets), `Default:`
 3. `bun run validate` — warns on missing pieces, errors on missing options
 
+## Script-bearing skills
+
+Long scripts live in `scripts/` next to `SKILL.md.tmpl`, not in fenced code
+blocks. `bun run build:skills` copies `scripts/` (and `references/`) into every
+host output that receives the skill, so `${CLAUDE_SKILL_DIR}/scripts/...` is a
+sibling of the projected `SKILL.md`. Cursor, Codex, OpenCode, and Gemini rewrite
+`${CLAUDE_SKILL_DIR}` to `[skill-dir]`; state that resolution rule in the skill
+body, because those hosts get a placeholder rather than a variable.
+
+`bun run validate` secret-scans `scripts/**` `.py` / `.js` / `.mjs` files raw
+(Markdown still strips fences). Do not commit credentials, cookies, or private
+keys into a vendored engine.
+
+A skill that runs a network research engine, or that can read browser cookies
+or repo-local config, must not declare `auto_attach.globs`. Make it
+`user-invocable: true` and surface consent through a Decision Gate, defaulted
+off.
+
+## Import shape for vendored engines
+
+When an upstream Agent Skill is imported through `upstream.yaml`, pick the
+shape from measurements, not taste:
+
+| Measurement | Direct import (`SKILL.md` → `SKILL.md.tmpl`) | Wrapper + `references/runtime-spec.md` |
+|---|---|---|
+| Upstream spec fits the 500-line / 5k-token budget | required | not required |
+| Upstream churn | low enough that a small patch survives | high; any patch on the spec conflicts |
+| Local patch surface | a few lines of frontmatter | one added file, `patches: []` |
+| Sync lock coverage | the whole local tree | everything except the wrapper (`local_only`) |
+
+`trove-pulse-cn` is the direct shape. `trove-pulse` is the wrapper shape: the
+2,296-line spec is path-mapped into `references/` and a Trove-authored wrapper
+loads it on demand. Do not suppress the skill budget for one skill.
+
+Bytes enter only through `scripts/lib/upstream-sync.ts`. If the checked-in tree
+does not equal `replay(base) + patches`, the import is wrong. See
+[upstream-sync.md](./upstream-sync.md).
+
 ## What you should *not* author
 
 - Don't hand-roll routing pointers across skills. Add `triggers:` to your frontmatter and let `gen-routing.ts` produce the index.

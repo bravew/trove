@@ -76,7 +76,7 @@ CalVer (`YYYY.M.D`) means same-day merges share a tag. The first merge of the da
 |-------|------------|---------|
 | Plugin name | `trove-<name>` (kebab-case) | `trove-dev` |
 | Skill name | `trove-<name>` (kebab-case, ≤ 64 chars, no colons) | `trove-python` |
-| Category | One of: `development`, `design`, `product`, `security`, `infrastructure`, `observability` | `development` |
+| Category | One of: `development`, `design`, `product`, `security`, `infrastructure`, `observability`, `research` | `development` |
 | Role | One of: `dev`, `design`, `pm`, `devops` | `dev` |
 | Branch | `feat/<thing>`, `fix/<thing>`, `chore/<thing>` | `feat/p6-routing-graph` |
 

@@ -1,5 +1,7 @@
 {
   "benefitsFrom": {
+    "trove-pulse-cn": [],
+    "trove-pulse": [],
     "trove-design-review": [],
     "trove-component-spec": [],
     "trove-a11y": [],

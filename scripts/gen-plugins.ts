@@ -15,6 +15,7 @@ import * as path from "path";
 import YAML from "yaml";
 import { getMarketplaceHosts } from "../hosts/index";
 import type { PluginYaml } from "../hosts/types";
+import { isUnownedSupportName } from "./lib/support-files";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
@@ -476,7 +477,10 @@ function writeGeminiArtifacts(pluginName: string, plugin: PluginYaml): void {
       console.warn(`  WARNING: gemini skill output missing for ${skillName}. Run build:skills first.`);
       continue;
     }
-    fs.cpSync(source, path.join(outputDir, "skills", skillName), { recursive: true });
+    fs.cpSync(source, path.join(outputDir, "skills", skillName), {
+      recursive: true,
+      filter: (candidate) => !isUnownedSupportName(path.basename(candidate)),
+    });
     bundled++;
   }
   console.log(`  GENERATED: ${bundled} bundled skill(s) in ${path.relative(ROOT, path.join(outputDir, "skills"))}`);
@@ -655,6 +659,7 @@ function findSkillSource(skillName: string, pluginName?: string): string | null 
 function copyDirRecursive(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (isUnownedSupportName(entry.name)) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {

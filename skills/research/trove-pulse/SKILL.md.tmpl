@@ -1,0 +1,120 @@
+---
+name: trove-pulse
+description: |
+  Research what people actually said about a topic in the last 30 days across
+  Reddit, X, YouTube, Hacker News, GitHub, Polymarket, and the web (upstream:
+  last30days), ranked by real engagement rather than editorial pick. Use for
+  market and competitor checks, sentiment reads, launch reception, and "what
+  changed recently" questions.
+preamble-tier: 2
+user-invocable: true
+triggers:
+  - last 30 days
+  - what are people saying
+  - social research
+  - trend check
+allowed-tools: [Bash, Read, Write, WebSearch, AskUserQuestion]
+license: MIT
+metadata:
+  source: mvanhorn/last30days-skill
+  upstream-version: "3.21.1"
+---
+
+{{PREAMBLE}}
+
+# trove-pulse
+
+Vendored last-30-days research engine for global/English-language platforms.
+Synced weekly from `mvanhorn/last30days-skill`. For Weibo, Xiaohongshu, Bilibili,
+Zhihu, Douyin, WeChat, Baidu, and Toutiao, use `/trove-research:trove-pulse-cn`.
+
+## Prerequisites and preflight
+
+**No API keys and no `pip install` are required.** Stdlib Python only.
+
+- Required: `python3` ≥ 3.12. If the host has no 3.12, upstream's `uv`-managed
+  3.12 fallback applies when `uv` is on PATH.
+- Optional: `node` ≥ 22 (X/Twitter via the vendored `bird-search` client).
+  Absent: X is skipped.
+- Optional: `yt-dlp` (YouTube transcripts/comments), `digg-pp-cli` (Digg).
+  Preflight reports PATH visibility via `shutil.which`, not file existence.
+  `$HOME/.local/bin` is a common miss on agent gateways.
+
+Health check (does not read cookies):
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py doctor
+python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py --diagnose
+```
+
+## Invocation
+
+Canonical form:
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py "<topic>"
+```
+
+The skill-directory placeholder is rewritten per host. Claude keeps the
+environment-style variable. Cursor, Codex, OpenCode, and Gemini receive
+`[skill-dir]` (or the host's equivalent). Resolve that placeholder to the
+directory that contains this `SKILL.md`, then run
+`python3 <that-dir>/scripts/last30days.py "<topic>"`.
+
+Network egress from the agent's Bash subprocess is required. `Write` is used
+for saved briefs.
+
+## Read the spec
+
+Load `references/runtime-spec.md` before the first engine call. It is
+authoritative for flags, query planning, source coverage, and the output
+contract. Do not improvise a scraper.
+
+## Trove overrides
+
+These sections of the vendored spec do **not** apply here. Everything else stands.
+
+1. Stale-clone self-check and cache-layout probing — Trove installs through
+   `./setup`, not `npx skills add`.
+2. The `/last30days` invocation name — use `/trove-research:trove-pulse`.
+3. Upstream install instructions — ignore them; the skill is already vendored.
+
+## Configuration
+
+Precedence: per-run flag > process env > `~/.config/last30days/.env` (mode 0600)
+> defaults. That upstream path is the source of truth for this skill; do not
+put these keys in `~/.trove/config.yaml`.
+
+Keyless baseline works. Optional keys worth adding first:
+`SCRAPECREATORS_API_KEY`, then `AUTH_TOKEN`/`CT0` for X.
+
+Shared with `trove-pulse-cn`: `SCRAPECREATORS_API_KEY` and
+`XIAOHONGSHU_API_BASE`. Each skill reads its own config directory
+(`~/.config/last30days/.env` here; `LAST30DAYS_CN_CONFIG_DIR` /
+`~/.config/last30days-cn/.env` for the sibling). Setting a shared key in the
+wrong file looks like a broken skill.
+
+Leave `LAST30DAYS_TRUST_PROJECT_CONFIG` unset. A cloned repo could otherwise
+carry config the user did not write.
+
+See `docs/user-config.md` for Trove's own config file, which does not store
+these secrets.
+
+## Decision Gate: first-run setup
+
+Context: The engine can read browser cookies to authenticate X, and on macOS
+that needs Full Disk Access. That is the most invasive thing this skill can do.
+Question: Should this run read browser cookies, or stay keyless?
+Options:
+- A. Skip cookie access; run keyless (and optional env keys if already set).
+- B. Allow cookie reading after the user has granted the OS permission.
+Default: A, because cookie access is opt-in and must never be a silent
+capability of the first run.
+
+## Failure modes
+
+- Python too old (< 3.12): the engine will refuse or fall back to `uv` 3.12.
+- `node` missing: X silently degrades; other sources still run.
+- Rate limits or empty result sets: report them from engine output; do not
+  invent posts, engagement numbers, or dates.
+- `digg-pp-cli` on disk but not on PATH: treat as absent.

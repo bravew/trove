@@ -20,7 +20,21 @@ export interface LicenseRecord {
 
 export type ArtifactTransform =
   | { kind: "rename-skill"; from: string; to: string }
-  | { kind: "inject-preamble"; marker: string };
+  | { kind: "inject-preamble"; marker: string }
+  | {
+      kind: "replace-literal";
+      path: RepositoryPath;
+      from: string;
+      to: string;
+      minimumOccurrences: number;
+    };
+
+const CANONICAL_PREFIXES = ["references/", "scripts/"] as const;
+
+export function isCanonicalArtifactPath(candidate: string): boolean {
+  return candidate === "SKILL.md.tmpl" ||
+    CANONICAL_PREFIXES.some((prefix) => candidate.startsWith(prefix));
+}
 
 interface ArtifactCommon {
   id: string;
@@ -34,6 +48,8 @@ interface ArtifactCommon {
   pathMap: Readonly<Record<string, string>>;
   transforms: readonly ArtifactTransform[];
   patches: readonly RepositoryPath[];
+  localOnly: readonly string[];
+  policy: Pick<UpstreamPolicy, "maximumFileBytes" | "maximumArtifactBytes"> | null;
 }
 
 export type UpstreamArtifact =
@@ -267,6 +283,20 @@ function parseTransform(value: unknown, where: string): ArtifactTransform {
     strictKeys(record, where, ["kind", "marker"]);
     return { kind, marker: stringAt(record.marker, `${where}.marker`) };
   }
+  if (kind === "replace-literal") {
+    strictKeys(record, where, ["kind", "path", "from", "to", "minimum_occurrences"]);
+    const pathname = repositoryPathAt(record.path, `${where}.path`);
+    if (!isCanonicalArtifactPath(pathname)) {
+      fail(`${where}.path`, "must be SKILL.md.tmpl or under references/ or scripts/");
+    }
+    return {
+      kind,
+      path: pathname,
+      from: stringAt(record.from, `${where}.from`),
+      to: stringAt(record.to, `${where}.to`),
+      minimumOccurrences: positiveIntegerAt(record.minimum_occurrences, `${where}.minimum_occurrences`),
+    };
+  }
   return fail(`${where}.kind`, `unsupported transform '${kind}'`);
 }
 
@@ -285,14 +315,57 @@ function parsePathMap(value: unknown, where: string): Readonly<Record<string, st
   return result;
 }
 
-function parseArtifact(value: unknown, where: string): UpstreamArtifact {
+function parseArtifactPolicy(
+  value: unknown,
+  where: string,
+  defaults: UpstreamPolicy,
+): Pick<UpstreamPolicy, "maximumFileBytes" | "maximumArtifactBytes"> {
+  const record = objectAt(value, where);
+  strictKeys(record, where, [], ["maximum_file_bytes", "maximum_artifact_bytes"]);
+  if (!("maximum_file_bytes" in record) && !("maximum_artifact_bytes" in record)) {
+    fail(where, "must set maximum_file_bytes or maximum_artifact_bytes");
+  }
+  const override: Pick<UpstreamPolicy, "maximumFileBytes" | "maximumArtifactBytes"> = {
+    maximumFileBytes: defaults.maximumFileBytes,
+    maximumArtifactBytes: defaults.maximumArtifactBytes,
+  };
+  if ("maximum_file_bytes" in record) {
+    const bytes = positiveIntegerAt(record.maximum_file_bytes, `${where}.maximum_file_bytes`);
+    if (bytes < defaults.maximumFileBytes) {
+      fail(`${where}.maximum_file_bytes`, "must not lower the manifest maximum_file_bytes");
+    }
+    override.maximumFileBytes = bytes;
+  }
+  if ("maximum_artifact_bytes" in record) {
+    const bytes = positiveIntegerAt(record.maximum_artifact_bytes, `${where}.maximum_artifact_bytes`);
+    if (bytes < defaults.maximumArtifactBytes) {
+      fail(`${where}.maximum_artifact_bytes`, "must not lower the manifest maximum_artifact_bytes");
+    }
+    override.maximumArtifactBytes = bytes;
+  }
+  if (override.maximumArtifactBytes < override.maximumFileBytes) {
+    fail(where, "maximum_artifact_bytes must be at least maximum_file_bytes");
+  }
+  return override;
+}
+
+export function effectivePolicy(manifest: UpstreamManifest, artifact: UpstreamArtifact): UpstreamPolicy {
+  if (!artifact.policy) return manifest.policy;
+  return {
+    ...manifest.policy,
+    maximumFileBytes: artifact.policy.maximumFileBytes,
+    maximumArtifactBytes: artifact.policy.maximumArtifactBytes,
+  };
+}
+
+function parseArtifact(value: unknown, where: string, defaults: UpstreamPolicy): UpstreamArtifact {
   const record = objectAt(value, where);
   strictKeys(record, where, [
     "id", "upstream_path", "local_path", "base_sha", "base_tree_digest",
     "local_tree_digest", "patch_digest", "checked_sha", "checked_at",
     "candidate_sha", "imported_at", "include", "exclude", "path_map",
     "transforms", "patches", "status",
-  ]);
+  ], ["local_only", "policy"]);
 
   const status = stringAt(record.status, `${where}.status`);
   if (status !== "active" && status !== "blocked-unproven-base") {
@@ -313,8 +386,13 @@ function parseArtifact(value: unknown, where: string): UpstreamArtifact {
     pathMap: parsePathMap(record.path_map, `${where}.path_map`),
     transforms: arrayAt(record.transforms, `${where}.transforms`).map((entry, index) =>
       parseTransform(entry, `${where}.transforms[${index}]`)),
-    patches: stringArrayAt(record.patches, `${where}.patches`).map((entry, index) =>
+    patches: stringArrayAt(record.patches, `${where}.patches`, true).map((entry, index) =>
       repositoryPathAt(entry, `${where}.patches[${index}]`)),
+    localOnly: record.local_only === undefined
+      ? []
+      : stringArrayAt(record.local_only, `${where}.local_only`, true).map((pattern, index) =>
+        patternAt(pattern, `${where}.local_only[${index}]`)),
+    policy: record.policy === undefined ? null : parseArtifactPolicy(record.policy, `${where}.policy`, defaults),
   };
 
   const baseSha = nullableFullShaAt(record.base_sha, `${where}.base_sha`);
@@ -343,7 +421,12 @@ function parseArtifact(value: unknown, where: string): UpstreamArtifact {
   };
 }
 
-function parseSource(value: unknown, where: string, options: ManifestParseOptions): UpstreamSource {
+function parseSource(
+  value: unknown,
+  where: string,
+  options: ManifestParseOptions,
+  defaults: UpstreamPolicy,
+): UpstreamSource {
   const record = objectAt(value, where);
   strictKeys(record, where, ["id", "repository", "ref", "license", "artifacts"]);
   const repository = repositoryUrlAt(record.repository, `${where}.repository`, options);
@@ -366,7 +449,7 @@ function parseSource(value: unknown, where: string, options: ManifestParseOption
     ref,
     license: parseLicense(record.license, `${where}.license`),
     artifacts: arrayAt(record.artifacts, `${where}.artifacts`).map((entry, index) =>
-      parseArtifact(entry, `${where}.artifacts[${index}]`)),
+      parseArtifact(entry, `${where}.artifacts[${index}]`, defaults)),
   };
 }
 
@@ -433,7 +516,7 @@ export function parseUpstreamManifest(
   }
 
   const sources = arrayAt(record.sources, "manifest.sources").map((entry, index) =>
-    parseSource(entry, `manifest.sources[${index}]`, options));
+    parseSource(entry, `manifest.sources[${index}]`, options, policy));
   const skills = arrayAt(record.skills, "manifest.skills").map((entry, index) =>
     parseSkill(entry, `manifest.skills[${index}]`));
   const externalRecords = arrayAt(record.external_records, "manifest.external_records").map((entry, index) =>

@@ -8,13 +8,19 @@ import YAML from "yaml";
 import {
   checkOffline,
   digestTree,
+  isCanonicalArtifactPath,
+  lockEntries,
+  patchEntries,
   stableJson,
   transformSelection,
   updateArtifacts,
+  walkLocal,
+  writeEntries,
   type TreeEntry,
 } from "../scripts/lib/upstream-sync";
 import {
   ManifestError,
+  effectivePolicy,
   loadUpstreamManifest,
   parseUpstreamManifest,
   validateManifestInventory,
@@ -32,13 +38,45 @@ function artifactAt(raw: Record<string, unknown>, index = 0): Record<string, unk
   return (sources[0].artifacts as Record<string, unknown>[])[index];
 }
 
+function parseFrontmatter(filePath: string): Record<string, unknown> {
+  const content = fs.readFileSync(filePath, "utf8");
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) throw new Error(`no frontmatter in ${filePath}`);
+  return YAML.parse(match[1]) as Record<string, unknown>;
+}
+
 describe("upstream manifest boundary", () => {
   test("accepts the repository manifest and covers every canonical template", () => {
     const manifest = loadUpstreamManifest(ROOT);
     expect(() => validateManifestInventory(manifest, ROOT)).not.toThrow();
     expect(manifest.version).toBe(2);
-    expect(manifest.skills).toHaveLength(51);
-    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(9);
+    expect(manifest.skills).toHaveLength(53);
+    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(11);
+  });
+
+  test("scopes the English pulse slash-command rewrite to backtick form", () => {
+    const manifest = loadUpstreamManifest(ROOT);
+    const pulse = manifest.sources.flatMap((source) => [...source.artifacts])
+      .find((artifact) => artifact.id === "trove-pulse");
+    expect(pulse).toBeDefined();
+    expect(pulse!.localOnly).toEqual(["SKILL.md.tmpl"]);
+    expect(pulse!.patches).toEqual([]);
+    expect(pulse!.transforms.filter((transform) => transform.kind === "replace-literal")).toEqual([{
+      kind: "replace-literal",
+      path: "references/runtime-spec.md",
+      from: "`/last30days",
+      to: "`/trove-research:trove-pulse",
+      minimumOccurrences: 1,
+    }]);
+  });
+
+  test("records matching metadata.upstream-version for pulse artifacts", () => {
+    const pulse = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/SKILL.md.tmpl"));
+    const spec = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/references/runtime-spec.md"));
+    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe(spec.version);
+
+    const cn = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse-cn/SKILL.md.tmpl"));
+    expect((cn.metadata as Record<string, string>)["upstream-version"]).toBe(cn.version);
   });
 
   test("rejects unknown keys at nested boundaries", () => {
@@ -203,6 +241,377 @@ describe("offline lock verification", () => {
     } finally {
       fs.rmSync(output, { force: true });
     }
+  });
+});
+
+function fixtureArtifact(overrides: {
+  include?: string[];
+  pathMap?: Record<string, string>;
+  transforms?: unknown[];
+  patches?: string[];
+} = {}) {
+  const sha = "a".repeat(40);
+  const digest = `sha256:${"b".repeat(64)}`;
+  const manifest = parseUpstreamManifest({
+    version: 2,
+    policy: {
+      maximum_file_bytes: 65536,
+      maximum_artifact_bytes: 262144,
+      allow_binary: false,
+      allow_generated: false,
+    },
+    sources: [{
+      id: "fixture",
+      repository: "file:///fixture",
+      ref: "main",
+      license: { expression: "MIT", evidence: "LICENSE" },
+      artifacts: [{
+        id: "example",
+        upstream_path: "skills/example",
+        local_path: "skills/research/example",
+        base_sha: sha,
+        base_tree_digest: digest,
+        local_tree_digest: digest,
+        patch_digest: digest,
+        checked_sha: sha,
+        checked_at: "2026-08-28T00:00:00Z",
+        candidate_sha: null,
+        imported_at: "2026-08-28T00:00:00Z",
+        include: overrides.include ?? ["SKILL.md", "scripts/**"],
+        exclude: [],
+        path_map: overrides.pathMap ?? { "SKILL.md": "SKILL.md.tmpl" },
+        transforms: overrides.transforms ?? [],
+        patches: overrides.patches ?? ["upstream-patches/example/local.patch"],
+        status: "active",
+      }],
+    }],
+    skills: [{
+      local_path: "skills/research/example",
+      origin: "adapted",
+      source_id: "fixture",
+      upstream_path: "skills/example",
+      evidence_sha: sha,
+    }],
+    external_records: [],
+    not_vendored: {},
+  }, { allowFileRepositories: true });
+  return manifest.sources[0].artifacts[0];
+}
+
+describe("canonical artifact paths", () => {
+  test("accepts the template, references, and scripts; rejects everything else", () => {
+    expect(isCanonicalArtifactPath("SKILL.md.tmpl")).toBe(true);
+    expect(isCanonicalArtifactPath("references/runtime-spec.md")).toBe(true);
+    expect(isCanonicalArtifactPath("scripts/lib/x.py")).toBe(true);
+    expect(isCanonicalArtifactPath("SKILL.md")).toBe(false);
+    expect(isCanonicalArtifactPath("scripts")).toBe(false);
+    expect(isCanonicalArtifactPath("assets/demo.mp4")).toBe(false);
+    expect(isCanonicalArtifactPath("agents/openai.yaml")).toBe(false);
+  });
+
+  test("round-trips scripts/** through transform, write, and walk with both file modes", () => {
+    const artifact = fixtureArtifact();
+    const transformed = transformSelection([
+      { path: "SKILL.md", mode: "100644", bytes: Buffer.from("---\nname: example\n---\n") },
+      { path: "scripts/lib/x.py", mode: "100644", bytes: Buffer.from("print('ok')\n") },
+      { path: "scripts/run.sh", mode: "100755", bytes: Buffer.from("#!/bin/sh\n") },
+    ], artifact);
+    expect(transformed.map((entry) => [entry.path, entry.mode])).toEqual([
+      ["scripts/lib/x.py", "100644"],
+      ["scripts/run.sh", "100755"],
+      ["SKILL.md.tmpl", "100644"],
+    ]);
+
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-canonical-roundtrip-"));
+    try {
+      writeEntries(temporary, transformed);
+      const walked = walkLocal(temporary);
+      expect(digestTree(walked)).toBe(digestTree(transformed));
+      expect(walked.find((entry) => entry.path === "scripts/run.sh")?.mode).toBe("100755");
+      expect(walked.find((entry) => entry.path === "scripts/lib/x.py")?.mode).toBe("100644");
+      fs.mkdirSync(path.join(temporary, "scripts/lib/__pycache__"), { recursive: true });
+      fs.writeFileSync(path.join(temporary, "scripts/lib/__pycache__/x.cpython-314.pyc"), Buffer.from([0, 1, 2]));
+      expect(digestTree(walkLocal(temporary))).toBe(digestTree(transformed));
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
+  test("still rejects a transformed path outside the prefixes", () => {
+    const artifact = fixtureArtifact({ pathMap: { "SKILL.md": "SKILL.md.tmpl", "assets/": "assets/" } });
+    expect(() => transformSelection([
+      { path: "SKILL.md", mode: "100644", bytes: Buffer.from("---\nname: example\n---\n") },
+      { path: "assets/demo.mp4", mode: "100644", bytes: Buffer.from("demo") },
+    ], artifact)).toThrow("outside canonical template content");
+  });
+
+  test("applies a patch that touches scripts/** and rejects one that does not", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-canonical-patch-"));
+    try {
+      const accepted = "upstream-patches/example/scripts.patch";
+      const rejected = "upstream-patches/example/assets.patch";
+      fs.mkdirSync(path.join(temporary, "upstream-patches/example"), { recursive: true });
+      fs.writeFileSync(
+        path.join(temporary, accepted),
+        [
+          "diff --git a/scripts/lib/x.py b/scripts/lib/x.py",
+          "index 1111111..2222222 100644",
+          "--- a/scripts/lib/x.py",
+          "+++ b/scripts/lib/x.py",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(temporary, rejected),
+        [
+          "diff --git a/assets/demo.mp4 b/assets/demo.mp4",
+          "index 1111111..2222222 100644",
+          "--- a/assets/demo.mp4",
+          "+++ b/assets/demo.mp4",
+          "",
+        ].join("\n"),
+      );
+      expect(patchEntries(temporary, fixtureArtifact({ patches: [accepted] }))).toHaveLength(1);
+      expect(() => patchEntries(temporary, fixtureArtifact({ patches: [rejected] })))
+        .toThrow("outside canonical template content");
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("replace-literal transform", () => {
+  test("rejects unknown keys, missing hits, and non-canonical paths at parse time", () => {
+    expect(() => fixtureArtifact({
+      transforms: [{ kind: "replace-literal", path: "references/runtime-spec.md", from: "/x", to: "/y" }],
+    })).toThrow("missing key 'minimum_occurrences'");
+    expect(() => fixtureArtifact({
+      transforms: [{
+        kind: "replace-literal",
+        path: "references/runtime-spec.md",
+        from: "/x",
+        to: "/y",
+        minimum_occurrences: 1,
+        extra: true,
+      }],
+    })).toThrow("unknown key 'extra'");
+    expect(() => fixtureArtifact({
+      transforms: [{
+        kind: "replace-literal",
+        path: "assets/demo.md",
+        from: "/x",
+        to: "/y",
+        minimum_occurrences: 1,
+      }],
+    })).toThrow("must be SKILL.md.tmpl or under references/ or scripts/");
+  });
+
+  test("rewrites a mapped path and fails closed when the literal is missing", () => {
+    const artifact = fixtureArtifact({
+      pathMap: { "SKILL.md": "references/runtime-spec.md" },
+      transforms: [{
+        kind: "replace-literal",
+        path: "references/runtime-spec.md",
+        from: "/last30days",
+        to: "/trove-research:trove-pulse",
+        minimum_occurrences: 1,
+      }],
+    });
+    const rewritten = transformSelection([{
+      path: "SKILL.md",
+      mode: "100644",
+      bytes: Buffer.from("Use `/last30days` then `/last30days` again.\n"),
+    }], artifact);
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0].path).toBe("references/runtime-spec.md");
+    expect(rewritten[0].bytes.toString("utf8")).toBe(
+      "Use `/trove-research:trove-pulse` then `/trove-research:trove-pulse` again.\n",
+    );
+
+    const missing = fixtureArtifact({
+      transforms: [{
+        kind: "replace-literal",
+        path: "SKILL.md.tmpl",
+        from: "{{USER_TOPIC}}",
+        to: "<topic>",
+        minimum_occurrences: 1,
+      }],
+    });
+    expect(() => transformSelection([{
+      path: "SKILL.md",
+      mode: "100644",
+      bytes: Buffer.from("python {{SKILL_DIR}}/scripts/last30days.py\n"),
+    }], missing)).toThrow("found 0 time(s)");
+  });
+
+  test("accepts the CN placeholder rewrite on SKILL.md.tmpl", () => {
+    const artifact = fixtureArtifact({
+      transforms: [
+        {
+          kind: "replace-literal",
+          path: "SKILL.md.tmpl",
+          from: "python {{SKILL_DIR}}",
+          to: "python3 ${CLAUDE_SKILL_DIR}",
+          minimum_occurrences: 1,
+        },
+        {
+          kind: "replace-literal",
+          path: "SKILL.md.tmpl",
+          from: "{{USER_TOPIC}}",
+          to: "<topic>",
+          minimum_occurrences: 1,
+        },
+      ],
+    });
+    const rewritten = transformSelection([{
+      path: "SKILL.md",
+      mode: "100644",
+      bytes: Buffer.from("python {{SKILL_DIR}}/scripts/last30days.py \"{{USER_TOPIC}}\"\n"),
+    }], artifact);
+    expect(rewritten[0].bytes.toString("utf8")).toBe(
+      "python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py \"<topic>\"\n",
+    );
+  });
+});
+
+describe("local_only and per-artifact policy", () => {
+  test("omits local_only paths from the lock digest but still validates them", () => {
+    const sha = "a".repeat(40);
+    const placeholder = `sha256:${"b".repeat(64)}`;
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-local-only-"));
+    try {
+      const local = path.join(temporary, "skills/research/example");
+      fs.mkdirSync(path.join(local, "references"), { recursive: true });
+      fs.writeFileSync(path.join(local, "SKILL.md.tmpl"), "wrapper\n");
+      fs.writeFileSync(path.join(local, "references/runtime-spec.md"), "spec\n");
+      const owned: TreeEntry[] = [
+        { path: "references/runtime-spec.md", mode: "100644", bytes: Buffer.from("spec\n") },
+      ];
+      const manifest = parseUpstreamManifest({
+        version: 2,
+        policy: {
+          maximum_file_bytes: 1024,
+          maximum_artifact_bytes: 4096,
+          allow_binary: false,
+          allow_generated: false,
+        },
+        sources: [{
+          id: "fixture",
+          repository: "file:///fixture",
+          ref: "main",
+          license: { expression: "MIT", evidence: "LICENSE" },
+          artifacts: [{
+            id: "example",
+            upstream_path: "skills/example",
+            local_path: "skills/research/example",
+            base_sha: sha,
+            base_tree_digest: placeholder,
+            local_tree_digest: digestTree(owned),
+            patch_digest: digestTree([]),
+            checked_sha: sha,
+            checked_at: "2026-08-28T00:00:00Z",
+            candidate_sha: null,
+            imported_at: "2026-08-28T00:00:00Z",
+            include: ["SKILL.md", "references/**"],
+            exclude: [],
+            path_map: { "SKILL.md": "references/runtime-spec.md" },
+            transforms: [],
+            patches: [],
+            local_only: ["SKILL.md.tmpl"],
+            status: "active",
+          }],
+        }],
+        skills: [{
+          local_path: "skills/research/example",
+          origin: "adapted",
+          source_id: "fixture",
+          upstream_path: "skills/example",
+          evidence_sha: sha,
+        }],
+        external_records: [],
+        not_vendored: {},
+      }, { allowFileRepositories: true });
+      const artifact = manifest.sources[0].artifacts[0];
+      expect(lockEntries(walkLocal(local), artifact).map((entry) => entry.path))
+        .toEqual(["references/runtime-spec.md"]);
+      expect(() => checkOffline(temporary, manifest)).not.toThrow();
+      fs.writeFileSync(path.join(local, "SKILL.md.tmpl"), "wrapper edited\n");
+      expect(() => checkOffline(temporary, manifest)).not.toThrow();
+      fs.writeFileSync(path.join(local, "references/runtime-spec.md"), "spec edited\n");
+      expect(() => checkOffline(temporary, manifest)).toThrow("local tree digest does not match manifest");
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a per-artifact policy that lowers a limit and preserves defaults when omitted", () => {
+    const sha = "a".repeat(40);
+    const digest = `sha256:${"b".repeat(64)}`;
+    const base = {
+      version: 2,
+      policy: {
+        maximum_file_bytes: 1024,
+        maximum_artifact_bytes: 4096,
+        allow_binary: false,
+        allow_generated: false,
+      },
+      sources: [{
+        id: "fixture",
+        repository: "file:///fixture",
+        ref: "main",
+        license: { expression: "MIT", evidence: "LICENSE" },
+        artifacts: [{
+          id: "example",
+          upstream_path: "skills/example",
+          local_path: "skills/research/example",
+          base_sha: sha,
+          base_tree_digest: digest,
+          local_tree_digest: digest,
+          patch_digest: digest,
+          checked_sha: sha,
+          checked_at: "2026-08-28T00:00:00Z",
+          candidate_sha: null,
+          imported_at: "2026-08-28T00:00:00Z",
+          include: ["SKILL.md"],
+          exclude: [],
+          path_map: { "SKILL.md": "SKILL.md.tmpl" },
+          transforms: [],
+          patches: [],
+          status: "active",
+        }],
+      }],
+      skills: [{
+        local_path: "skills/research/example",
+        origin: "adapted",
+        source_id: "fixture",
+        upstream_path: "skills/example",
+        evidence_sha: sha,
+      }],
+      external_records: [],
+      not_vendored: {},
+    };
+    const lowered = structuredClone(base);
+    ((lowered.sources[0].artifacts[0]) as Record<string, unknown>).policy = { maximum_file_bytes: 1 };
+    expect(() => parseUpstreamManifest(lowered, { allowFileRepositories: true }))
+      .toThrow("must not lower the manifest maximum_file_bytes");
+
+    const raised = structuredClone(base);
+    ((raised.sources[0].artifacts[0]) as Record<string, unknown>).policy = {
+      maximum_file_bytes: 524288,
+      maximum_artifact_bytes: 8388608,
+    };
+    const parsed = parseUpstreamManifest(raised, { allowFileRepositories: true });
+    expect(effectivePolicy(parsed, parsed.sources[0].artifacts[0])).toEqual({
+      maximumFileBytes: 524288,
+      maximumArtifactBytes: 8388608,
+      allowBinary: false,
+      allowGenerated: false,
+    });
+    const omitted = parseUpstreamManifest(base, { allowFileRepositories: true });
+    expect(effectivePolicy(omitted, omitted.sources[0].artifacts[0])).toEqual(omitted.policy);
   });
 });
 
@@ -555,5 +964,12 @@ describe("upstream workflow policy", () => {
     expect(serialized).toContain("gh pr list");
     expect(JSON.stringify(workflow.concurrency)).toContain("upstream-sync-update");
     expect(JSON.stringify(workflow.concurrency)).not.toContain("inputs.artifact");
+  });
+
+  test("describes the update artifact input as free-form", () => {
+    const inputs = (workflow.on as { workflow_dispatch: { inputs: Record<string, { description?: string; default?: string }> } })
+      .workflow_dispatch.inputs;
+    expect(inputs.artifact.default).toBe("trove-react-view-transitions");
+    expect(inputs.artifact.description?.toLowerCase()).toContain("free-form");
   });
 });

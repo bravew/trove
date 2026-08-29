@@ -31,6 +31,10 @@ plugins/*/output/
 .DS_Store
 Thumbs.db
 
+# Python bytecode from running vendored engines locally
+__pycache__/
+*.pyc
+
 # Editor
 *.swp
 *.swo

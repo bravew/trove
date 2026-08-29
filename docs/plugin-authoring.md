@@ -109,7 +109,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [testing, unit-test, e2e]
-category: development                    # development | design | product | security | infrastructure | observability
+category: development                    # development | design | product | security | infrastructure | observability | research
 roles: [dev]                             # dev | design | pm | devops
 
 skills:
