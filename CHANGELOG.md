@@ -94,6 +94,14 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.9.10] - 2026-09-10
+
+### What's Changed
+* feat: first-class GitHub Copilot support, quality gates, external intake, and upstream pilots by @bravew in https://github.com/bravew/trove/pull/7
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.8.29...v2026.9.10
+
 ## [2026.8.29] - 2026-08-29
 
 ### What's Changed

@@ -1,7 +1,7 @@
 {
   "name": "trove-security",
   "description": "Security review and vulnerability scanning",
-  "version": "2026.8.29",
+  "version": "2026.9.10",
   "skills": [
     "./.agents/skills/trove-security-review",
     "./.agents/skills/trove-secret-scan"
