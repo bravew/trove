@@ -7,7 +7,7 @@ Trove workflow bootstrap starts with the `trove-workflow` plugin.
 ## Host Paths
 
 - Claude Code: `plugins/trove-workflow/hooks/session-start.sh` emits `hookSpecificOutput.additionalContext`.
-- Copilot CLI: current GitHub docs say `sessionStart` command-hook output is not processed. Trove relies on scoped `AGENTS.md` for non-interactive Copilot use and can use a prompt-style `sessionStart` hook only for new interactive sessions.
+- Copilot CLI: the native `trove-workflow` plugin installs `using-trove` as a skill. Local command hooks run, but their output is not inserted as model context. Prompt hooks can add context only for interactive `sessionStart`; programmatic mode skips them. The cloud coding agent reads repository hooks from `.github/hooks/*.json` instead of local plugin hooks.
 - Cursor: the hook remains in the plugin manifest, `output/cursor/.agents/skills/using-trove/SKILL.md` is emitted as a native skill, and `output/cursor/rules/using-trove.mdc` is always-apply while Cursor hook context is unreliable.
 - Codex and generic AGENTS.md hosts: scoped `AGENTS.md` files contain a bootstrap pointer to `.agents/skills/using-trove/SKILL.md`.
 - OpenCode: `output/opencode/plugins/trove-workflow/index.ts` prepends the anchor through the host plugin surface.
@@ -15,7 +15,7 @@ Trove workflow bootstrap starts with the `trove-workflow` plugin.
 
 ## Opt-out
 
-Set `TROVE_BOOTSTRAP=0` to silence the SessionStart hook. Plugin authors can set `bootstrap.sessionStart: false` in `plugin.yaml` when a plugin has a SessionStart hook that should not contribute a discipline anchor.
+Set `TROVE_BOOTSTRAP=0` to silence the command SessionStart hook on hosts that execute it. Plugin authors can set `bootstrap.sessionStart: false` in `plugin.yaml` when a plugin has a SessionStart hook that should not contribute a discipline anchor.
 
 ## Size Budget
 

@@ -14,7 +14,7 @@ Related: `scripts/lib/projection.ts` (per-host field allowlists),
 
 | Profile | Emitted frontmatter | Used by |
 |---|---|---|
-| `strict` | `name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools` | Codex, OpenCode, Gemini, GitHub Copilot, AGENTS.md, uploads |
+| `strict` | `name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools` | Codex, OpenCode, Gemini, AGENTS.md, uploads; Copilot starts here and narrows to its four documented fields |
 | `claude` | spec fields plus Claude Code's documented fields (`paths`, `when_to_use`, invocation controls, `context`, `model`, `hooks`, …) | Claude Code |
 | `cursor` | `name`, `description`, `paths`, `disable-model-invocation`, `icon`, `color`, `metadata` | Cursor |
 
@@ -32,7 +32,7 @@ and folds into `description` for strict hosts, which have no equivalent field.
 | OpenAI Codex | `output/codex/.agents/skills/<skill>/SKILL.md`, `plugins/*/.codex-plugin/plugin.json` | `~/.agents/skills/<skill>/` | `~/.agents/skills/<skill>/SKILL.md` (USER scope) | Agent Skills spec fields | in-repo spec gate in `bun run validate`; `tests/acceptance/setup-links.sh` | developers.openai.com/codex/skills, /plugins/build/plugins | 2026-08-28 |
 | OpenCode | `output/opencode/.agents/skills/<skill>/SKILL.md`, `output/opencode/plugins/<plugin>/index.ts` | `~/.config/opencode/skills/<skill>/` | project: `.opencode/skills`, `.claude/skills`, `.agents/skills`; global: `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` | `name`, `description`, `license`, `compatibility`, `metadata` — "unknown frontmatter fields are ignored" | in-repo spec gate; `tests/acceptance/setup-links.sh` | opencode.ai/docs/skills | 2026-08-28 |
 | Gemini CLI | `output/gemini/.agents/skills/<skill>/SKILL.md`, `output/gemini/plugins/<plugin>/` (extension) | `gemini extensions link`, else `~/.gemini/extensions/<plugin>/` | extensions from `<home>/.gemini/extensions`, skills inside one from `skills/<name>/SKILL.md`; workspace `.agents/skills` takes precedence over `.gemini/skills` | Agent Skills spec fields | in-repo spec gate; manifest checks in `bun run validate` | geminicli.com/docs/cli/skills, /docs/extensions/reference | 2026-08-28 |
-| GitHub Copilot CLI | `output/copilot/.agents/skills/<skill>/SKILL.md`, `plugins/*/.plugin/plugin.json`, `plugins/*/.copilot/skills/`, `.github/plugin/marketplace.json` | `copilot plugin`, else explicit `--host agents` fallback | project: `.github/skills`, `.claude/skills`, `.agents/skills`; personal: `~/.copilot/skills`, `~/.agents/skills`; plugin manifest: `.plugin/plugin.json` first, `.claude-plugin/plugin.json` last | `name`, `description`, `license`, `allowed-tools`; Trove initially omits tool pre-approval | `tests/copilot-contract.test.ts`; native artifact validation; isolated install smoke follows in checkpoint 4 | docs.github.com/copilot/reference/copilot-cli-reference/cli-plugin-reference, /how-tos/copilot-cli/customize-copilot/agents/agent-skills | 2026-09-09 |
+| GitHub Copilot CLI | `output/copilot/.agents/skills/<skill>/SKILL.md`, `plugins/*/.plugin/plugin.json`, `plugins/*/.copilot/skills/`, `.github/plugin/marketplace.json` | `copilot plugin`; `./setup --host copilot`; explicit `--host agents` fallback | project: `.github/skills`, `.claude/skills`, `.agents/skills`; personal: `~/.copilot/skills`, `~/.agents/skills`; plugin manifest: `.plugin/plugin.json` first, `.claude-plugin/plugin.json` last | `name`, `description`, `license`, `allowed-tools`; Trove initially omits tool pre-approval | `tests/copilot-contract.test.ts`; native artifact validation; `tests/acceptance/setup-links.sh`; isolated install smoke follows in checkpoint 4 | docs.github.com/copilot/reference/copilot-cli-reference/cli-plugin-reference, /how-tos/copilot-cli/customize-copilot/agents/agent-skills | 2026-09-09 |
 | Generic (AGENTS.md) | `output/agents/AGENTS.md` + `output/agents/plugins/<plugin>/AGENTS.md` | copied into project roots | nearest-scope `AGENTS.md` | n/a — prose only | `tests/projection.test.ts` | AGENTS.md convention (Copilot, Windsurf, Aider, Junie) | 2026-08-28 |
 
 Copilot CLI 1.0.69 is the minimum version tested for this contract. It exposes
@@ -56,4 +56,7 @@ from `.github/hooks/*.json`. Prompt hooks run only for interactive
 `./setup` records every symlink it creates in `~/.trove/installed-links.tsv`,
 never overwrites an entry it did not create, and `./setup --uninstall` removes
 exactly what it installed. `tests/acceptance/setup-links.sh` proves all three in
-a disposable `HOME`.
+a disposable `HOME`. Copilot plugin ownership is recorded separately in
+`installed-copilot-plugins.txt`; a marketplace sentinel is written only when
+setup registered it. Existing plugins are left user-owned, role changes remove
+only setup-owned plugins, and marketplace removal never uses `--force`.

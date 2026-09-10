@@ -1,12 +1,10 @@
 # Trove
 
-Open-source plugin marketplace for AI coding assistants. Author skills once in Markdown — ship them to **Claude Code**, **Cursor**, **OpenAI Codex**, **OpenCode**, **Gemini CLI**, and any tool that reads `AGENTS.md`.
+Open-source plugin marketplace for AI coding assistants. Author skills once in Markdown — ship them to **Claude Code**, **Cursor**, **OpenAI Codex**, **GitHub Copilot CLI**, **OpenCode**, **Gemini CLI**, and any tool that reads `AGENTS.md`.
 
-**7 first-party plugins, 53 first-party skills, 6 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
+**7 first-party plugins, 53 first-party skills, 7 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
 
 ## Install
-
-Copilot CLI reads the generic `AGENTS.md` fallback. Current GitHub docs do not process command output from `sessionStart`, so headless Copilot sessions cannot use the same runtime `additionalContext` path as Claude Code.
 
 ```bash
 # Claude Code
@@ -19,12 +17,17 @@ cursor plugin marketplace add bravew/trove
 cursor plugin install trove-dev@trove
 cursor plugin install trove-workflow@trove
 
+# GitHub Copilot CLI
+copilot plugin marketplace add bravew/trove
+copilot plugin install trove-dev@trove
+copilot plugin install trove-workflow@trove
+
 # Universal — clones, auto-detects supported local installers
 git clone https://github.com/bravew/trove.git ~/.trove
 cd ~/.trove && ./setup
 ```
 
-The universal `setup` script installs to Claude Code, Cursor, Codex, OpenCode, Gemini CLI, and Copilot/AGENTS.md. Pass repeated `--host claude` / `--host cursor` / `--host codex` / `--host opencode` / `--host gemini` / `--host copilot` flags to scope, or `--role dev` / `--role design` / `--role pm` to install only role-specific plugins. Every symlink it creates is recorded, existing non-Trove entries are never overwritten, and `./setup --uninstall` reverses exactly what was installed.
+The universal `setup` script installs to Claude Code, Cursor, Codex, GitHub Copilot CLI, OpenCode, and Gemini CLI. Pass repeated `--host claude` / `--host cursor` / `--host codex` / `--host copilot` / `--host opencode` / `--host gemini` flags to scope, or `--role dev` / `--role design` / `--role pm` to select Copilot plugins by role. Use `--host agents` for the generic `AGENTS.md` output. Setup records the links, Copilot plugins, and marketplace registration it creates; existing user entries are never claimed, and `./setup --uninstall` reverses only owned state.
 
 ## Upgrade
 
@@ -41,6 +44,11 @@ Match the upgrade command to how you installed:
 # Cursor marketplace install — open the Plugins panel and Update,
 # or remove + re-add via `cursor plugin marketplace add bravew/trove`.
 
+# GitHub Copilot CLI
+copilot plugin marketplace update trove
+copilot plugin update trove-dev@trove
+copilot plugin update trove-workflow@trove
+
 # Universal ./setup clone (recommended for most users)
 cd ~/.trove && git pull && ./setup
 # or, equivalently, the install-aware upgrader:
@@ -48,7 +56,7 @@ cd ~/.trove && git pull && ./setup
 ./bin/trove doctor                          # read-only health check
 ```
 
-`trove upgrade` detects the install type (git-backed clone vs. vendored copy) and refuses to act when uncertain — see [docs/self-upgrade.md](docs/self-upgrade.md). Upgrades never touch your `~/.claude/skills/`, `~/.claude/commands/`, or other user-authored config; plugin contents live in host-managed namespaces (`trove-dev:*`) or the namespaced `~/.claude/skills/trove/` symlink directory.
+`trove upgrade` detects the install type (git-backed clone vs. vendored copy) and refuses to act when uncertain — see [docs/self-upgrade.md](docs/self-upgrade.md). Setup leaves user-authored host entries alone and records the state it owns under `~/.trove/`.
 
 ## Plugins
 
@@ -73,7 +81,8 @@ Optional MCP connector metadata lives on role plugins such as `trove-design`, `t
 | OpenAI Codex | ✅ | — | — | ✅ | native |
 | OpenCode | ✅ | bootstrap plugin | — | — | `~/.config/opencode/skills` |
 | Gemini CLI | ✅ via extension | bootstrap context | — | ✅ via extension | `~/.gemini/extensions` |
-| Copilot / Windsurf / Aider / Junie | `AGENTS.md` fallback | — | — | — | manual |
+| GitHub Copilot CLI | ✅ native plugin skills | local command hooks; interactive prompt hooks | ✅ | ✅ | native |
+| Windsurf / Aider / Junie | `AGENTS.md` fallback | — | — | — | manual |
 
 Full feature matrix in [docs/cross-platform.md](docs/cross-platform.md); discovery roots, honored frontmatter, and the source and date each was verified against in [docs/host-matrix.md](docs/host-matrix.md).
 
@@ -135,6 +144,7 @@ marketplace.yaml                          ─┘
                                                                   ├─ Claude Code:  in-place SKILL.md, .claude-plugin/marketplace.json
                                                                   ├─ Cursor:       output/cursor/.agents/skills/<skill>/SKILL.md + filtered rules
                                                                   ├─ Codex:        output/codex/.agents/skills/<skill>/SKILL.md
+                                                                  ├─ Copilot CLI:  plugins/<plugin>/{.plugin,.copilot}/ + .github/plugin/marketplace.json
                                                                   ├─ OpenCode:     output/opencode/.agents/skills + plugins/<plugin>/index.ts
                                                                   ├─ Gemini CLI:   output/gemini/.agents/skills + plugins/<plugin>/{skills,GEMINI.md}
                                                                   └─ AGENTS.md:    output/agents/AGENTS.md + per-plugin scoped files

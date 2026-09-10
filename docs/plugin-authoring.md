@@ -18,6 +18,8 @@ plugins/trove-testing/
 ├── README.md            # plugin docs
 ├── skills/              # Claude/Codex SKILL.md files copied here at build time
 ├── .agents/skills/      # Cursor-projected SKILL.md files copied here at build time
+├── .copilot/skills/     # Copilot-projected skills and supporting files
+├── .plugin/plugin.json  # native Copilot plugin manifest
 ├── hooks/               # shell scripts for lifecycle events
 ├── agents/              # agent definitions (Claude/Cursor)
 ├── commands/            # legacy Claude slash commands; prefer skills
@@ -74,14 +76,15 @@ bun run validate      # frontmatter, naming, hooks, MCP, secrets
 > as the source when it has its *own* `SKILL.md.tmpl` — i.e. a skill authored
 > directly in the plugin, such as the `trove-dev` deprecation-alias stubs. A
 > plugin-local dir holding only a generated `SKILL.md` is the copy destination,
-> never the source. (Note: only `build:skills` has a CI freshness check today;
-> `build:plugins` freshness is a tracked TODO, so re-run `bun run build` and
-> commit the refreshed bundles when you change an existing skill.)
+> never the source. Every generator supports `--dry-run`; CI checks the
+> committed bundles before any build can repair them.
 >
 > Cursor gets a separate bundle copy at
 > `plugins/<plugin>/.agents/skills/<name>/SKILL.md`. Its plugin manifest points
 > there so Cursor sees only Cursor-supported frontmatter while Claude and Codex
 > keep using `plugins/<plugin>/skills/<name>/`.
+> Copilot gets a third bundle at `.copilot/skills/<name>/`, with its documented
+> four-field frontmatter subset and supporting files.
 
 ### 5. Test locally
 
@@ -89,6 +92,10 @@ bun run validate      # frontmatter, naming, hooks, MCP, secrets
 # Claude Code — point at your local checkout
 /plugin marketplace add /path/to/trove
 /plugin install trove-testing@trove
+
+# GitHub Copilot CLI — native local marketplace
+copilot plugin marketplace add /path/to/trove
+copilot plugin install trove-testing@trove
 
 # Or symlink for fast iteration on a single skill
 # Personal skills are discovered at ~/.claude/skills/<skill>/SKILL.md — a
@@ -114,11 +121,11 @@ roles: [dev]                             # dev | design | pm | devops
 
 skills:
   - path: ./skills/trove-unit-test        # relative to plugin root
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, copilot, agents, gemini]
     auto_attach:
       globs: ["**/*.test.ts"]            # mirrors the skill's own activation.globs
 
-# Lifecycle hooks (Claude Code surface; partial Cursor support; ignored elsewhere).
+# Lifecycle hooks project to Claude, Cursor, and local Copilot CLI manifests.
 hooks:
   PostToolUse:
     - matcher: "Write|Edit"
@@ -141,8 +148,8 @@ platforms:
 ```
 
 Supported skill `platforms:` keys are `claude`, `cursor`, `codex`, `agents`,
-`opencode`, and `gemini`. Most ordinary skills should target
-`[claude, cursor, codex, agents]`; add `opencode` when the skill should be
+`copilot`, `opencode`, and `gemini`. Most ordinary skills should target
+`[claude, cursor, codex, copilot, agents]`; add `opencode` when the skill should be
 available through the generated OpenCode plugin. `gemini` is currently used
 for workflow bootstrap context rather than general skill invocation.
 

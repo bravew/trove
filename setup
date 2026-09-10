@@ -8,7 +8,7 @@
 #   ./setup --host claude      # Claude Code only
 #   ./setup --host cursor      # Cursor only
 #   ./setup --host codex       # Codex only
-#   ./setup --host copilot     # Copilot CLI AGENTS fallback
+#   ./setup --host copilot     # Copilot CLI native plugins
 #   ./setup --host opencode    # OpenCode only
 #   ./setup --host gemini      # Gemini CLI only
 #   ./setup --host cursor --host codex
@@ -56,6 +56,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$ROLE_ARG" in
+  all|dev|design|pm|devops) ;;
+  *) err "Unknown role: $ROLE_ARG"; exit 1 ;;
+esac
+
 # ── Link bookkeeping ─────────────────────────────────────────
 #
 # Every symlink this installer creates is recorded, so `--uninstall` can undo
@@ -64,6 +69,8 @@ done
 # Trove skill wins, and we say so.
 TROVE_STATE_DIR="${TROVE_HOME:-$HOME/.trove}"
 LINK_MANIFEST="$TROVE_STATE_DIR/installed-links.tsv"
+COPILOT_PLUGIN_MANIFEST="$TROVE_STATE_DIR/installed-copilot-plugins.txt"
+COPILOT_MARKETPLACE_SENTINEL="$TROVE_STATE_DIR/copilot-marketplace-owned"
 LINK_HOST=""
 
 owned_by_trove() {
@@ -150,8 +157,74 @@ uninstall_links() {
   ok "Removed $removed link(s); left $kept entry/entries that were no longer ours"
 }
 
+copilot_plugin_installed() {
+  local inventory
+  inventory=$(copilot plugin list 2>/dev/null)
+  grep -Eq "^[[:space:]]*•[[:space:]]+$1@trove[[:space:]]" <<< "$inventory"
+}
+
+copilot_plugin_owned() {
+  [[ -f "$COPILOT_PLUGIN_MANIFEST" ]] && grep -Fxq "$1" "$COPILOT_PLUGIN_MANIFEST"
+}
+
+write_copilot_plugin_manifest() {
+  mkdir -p "$TROVE_STATE_DIR"
+  if [[ "$#" -gt 0 ]]; then
+    printf '%s\n' "$@" | sort -u > "$COPILOT_PLUGIN_MANIFEST"
+  else
+    rm -f "$COPILOT_PLUGIN_MANIFEST"
+  fi
+}
+
+copilot_marketplace_line() {
+  copilot plugin marketplace list 2>/dev/null | grep -E '^[[:space:]]*•[[:space:]]+trove[[:space:]]+\(' || true
+}
+
+uninstall_copilot() {
+  command -v copilot &>/dev/null || return 0
+  local removed=0 kept=0 plugin remaining=()
+  if [[ -f "$COPILOT_PLUGIN_MANIFEST" ]]; then
+    while IFS= read -r plugin; do
+      [[ -n "$plugin" ]] || continue
+      if copilot_plugin_installed "$plugin"; then
+        if copilot plugin uninstall "$plugin@trove" >/dev/null 2>&1; then
+          removed=$((removed + 1))
+        else
+          remaining+=("$plugin")
+          kept=$((kept + 1))
+        fi
+      fi
+    done < "$COPILOT_PLUGIN_MANIFEST"
+    if [[ "${#remaining[@]}" -gt 0 ]]; then
+      write_copilot_plugin_manifest "${remaining[@]}"
+    else
+      write_copilot_plugin_manifest
+    fi
+  fi
+
+  if [[ -f "$COPILOT_MARKETPLACE_SENTINEL" ]]; then
+    local marketplace_line owned_source
+    marketplace_line=$(copilot_marketplace_line)
+    owned_source=$(cat "$COPILOT_MARKETPLACE_SENTINEL")
+    if [[ -z "$marketplace_line" ]]; then
+      rm -f "$COPILOT_MARKETPLACE_SENTINEL"
+    elif [[ "$marketplace_line" != *"Local: $owned_source)"* ]]; then
+      rm -f "$COPILOT_MARKETPLACE_SENTINEL"
+      kept=$((kept + 1))
+      warn "Leaving Copilot marketplace 'trove' because its registration is no longer ours"
+    elif copilot plugin marketplace remove trove >/dev/null 2>&1; then
+      rm -f "$COPILOT_MARKETPLACE_SENTINEL"
+    else
+      kept=$((kept + 1))
+      warn "Leaving Copilot marketplace 'trove' because it still has plugins"
+    fi
+  fi
+  ok "Removed $removed Copilot plugin(s); left $kept Copilot entry/entries"
+}
+
 if [[ "$UNINSTALL" -eq 1 ]]; then
   uninstall_links
+  uninstall_copilot
   exit 0
 fi
 
@@ -403,14 +476,68 @@ setup_gemini() {
 setup_copilot() {
   header "Copilot CLI"
 
-  warn "Copilot CLI sessionStart command output is not processed by current GitHub docs; using AGENTS.md fallback."
-
   if ! command -v copilot &>/dev/null; then
     warn "copilot CLI not found. Skipping."
     return 0
   fi
 
-  setup_agents
+  local marketplace_line
+  marketplace_line=$(copilot_marketplace_line)
+  if [[ -n "$marketplace_line" && "$marketplace_line" != *"Local: $SCRIPT_DIR)"* ]]; then
+    err "Copilot marketplace 'trove' already points somewhere else: $marketplace_line"
+    return 1
+  fi
+
+  if [[ -z "$marketplace_line" ]]; then
+    copilot plugin marketplace add "$SCRIPT_DIR" >/dev/null
+    mkdir -p "$TROVE_STATE_DIR"
+    printf '%s\n' "$SCRIPT_DIR" > "$COPILOT_MARKETPLACE_SENTINEL"
+    ok "Marketplace registered"
+  else
+    copilot plugin marketplace update trove >/dev/null
+    ok "Marketplace refreshed"
+  fi
+
+  local selected=() plugin
+  while IFS= read -r plugin; do
+    [[ -n "$plugin" ]] && selected+=("$plugin")
+  done < <(bun "$SCRIPT_DIR/scripts/select-plugins.ts" "$ROLE_ARG" copilot)
+
+  local retained=()
+  if [[ -f "$COPILOT_PLUGIN_MANIFEST" ]]; then
+    while IFS= read -r plugin; do
+      [[ -n "$plugin" ]] || continue
+      if [[ " ${selected[*]} " == *" $plugin "* ]]; then
+        retained+=("$plugin")
+      elif copilot_plugin_installed "$plugin"; then
+        copilot plugin uninstall "$plugin@trove" >/dev/null
+      fi
+    done < "$COPILOT_PLUGIN_MANIFEST"
+  fi
+  if [[ "${#retained[@]}" -gt 0 ]]; then
+    write_copilot_plugin_manifest "${retained[@]}"
+  else
+    write_copilot_plugin_manifest
+  fi
+
+  local installed=0 updated=0 skipped=0
+  for plugin in "${selected[@]}"; do
+    if copilot_plugin_installed "$plugin"; then
+      if copilot_plugin_owned "$plugin"; then
+        copilot plugin update "$plugin@trove" >/dev/null
+        updated=$((updated + 1))
+      else
+        warn "Skipping $plugin: already installed outside this setup"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
+    copilot plugin install "$plugin@trove" >/dev/null
+    retained+=("$plugin")
+    write_copilot_plugin_manifest "${retained[@]}"
+    installed=$((installed + 1))
+  done
+  ok "$installed Copilot plugin(s) installed, $updated updated, $skipped left user-owned"
 }
 
 # ── Generic (AGENTS.md) setup ────────────────────────────────

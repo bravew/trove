@@ -38,6 +38,53 @@ exit 1
 STUB
 chmod +x "$FAKE_BIN/claude"
 
+# Stateful Copilot stub. It exposes the singular 1.0.69 command surface and
+# records marketplace/plugin state under the disposable COPILOT_HOME.
+cat > "$FAKE_BIN/copilot" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$COPILOT_HOME"
+marketplace="$COPILOT_HOME/marketplace"
+plugins="$COPILOT_HOME/plugins"
+touch "$plugins"
+case "$*" in
+  "plugin marketplace list")
+    if [[ -f "$marketplace" ]]; then
+      printf 'Registered marketplaces:\n  • trove (Local: %s)\n' "$(cat "$marketplace")"
+    fi
+    ;;
+  "plugin marketplace add "*)
+    printf '%s\n' "${4}" > "$marketplace"
+    ;;
+  "plugin marketplace update trove") ;;
+  "plugin marketplace remove trove")
+    if grep -q '@trove$' "$plugins"; then exit 1; fi
+    rm -f "$marketplace"
+    ;;
+  "plugin list")
+    if [[ -s "$plugins" ]]; then
+      echo "Installed plugins:"
+      while IFS= read -r plugin; do printf '  • %s (vtest)\n' "$plugin"; done < "$plugins"
+    else
+      echo "No plugins installed."
+    fi
+    ;;
+  "plugin install "*)
+    plugin="${3}"
+    grep -Fxq "$plugin" "$plugins" || printf '%s\n' "$plugin" >> "$plugins"
+    ;;
+  "plugin update "*) ;;
+  "plugin uninstall "*)
+    plugin="${3}"
+    tmp="$COPILOT_HOME/plugins.tmp"
+    grep -Fxv "$plugin" "$plugins" > "$tmp" || true
+    mv "$tmp" "$plugins"
+    ;;
+  *) echo "unexpected copilot invocation: $*" >&2; exit 2 ;;
+esac
+STUB
+chmod +x "$FAKE_BIN/copilot"
+
 echo "── Installing into a disposable HOME ──"
 # A pre-existing personal skill that Trove must not clobber.
 mkdir -p "$FAKE_HOME/.claude/skills/trove-python"
@@ -74,11 +121,31 @@ env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" PATH="$FAKE_BIN:$PATH" \
 after=$(wc -l < "$FAKE_HOME/.trove/installed-links.tsv")
 check "re-running does not duplicate manifest rows" '[ "$before" -eq "$after" ]'
 
+echo "── Copilot native marketplace ──"
+COPILOT_TEST_HOME="$TMP/copilot"
+mkdir -p "$COPILOT_TEST_HOME"
+printf '%s\n' "trove-product@trove" > "$COPILOT_TEST_HOME/plugins"
+env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" COPILOT_HOME="$COPILOT_TEST_HOME" PATH="$FAKE_BIN:$PATH" \
+  "$REPO/setup" --host copilot --role design >"$TMP/copilot-design.log" 2>&1 ||
+  { cat "$TMP/copilot-design.log"; echo "Copilot design setup failed"; exit 1; }
+check "role filtering installs only the selected Copilot plugin" \
+  'grep -Fxq "trove-design@trove" "$COPILOT_TEST_HOME/plugins" && ! grep -Fxq "trove-dev@trove" "$COPILOT_TEST_HOME/plugins"'
+check "setup does not claim an existing Copilot plugin" \
+  'grep -Fxq "trove-product@trove" "$COPILOT_TEST_HOME/plugins" && ! grep -Fxq "trove-product" "$FAKE_HOME/.trove/installed-copilot-plugins.txt"'
+
+env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" COPILOT_HOME="$COPILOT_TEST_HOME" PATH="$FAKE_BIN:$PATH" \
+  "$REPO/setup" --host copilot --role dev >"$TMP/copilot-dev.log" 2>&1 ||
+  { cat "$TMP/copilot-dev.log"; echo "Copilot dev setup failed"; exit 1; }
+check "changing roles removes the previously owned Copilot selection" \
+  '! grep -Fxq "trove-design@trove" "$COPILOT_TEST_HOME/plugins"'
+check "the dev role converges to its four native plugins" \
+  '[ "$(wc -l < "$FAKE_HOME/.trove/installed-copilot-plugins.txt" | tr -d " ")" -eq 4 ]'
+
 echo "── Reversibility ──"
 check "the installer records what it linked" \
   '[ -s "$FAKE_HOME/.trove/installed-links.tsv" ]'
 
-env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" PATH="$FAKE_BIN:$PATH" \
+env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" COPILOT_HOME="$COPILOT_TEST_HOME" PATH="$FAKE_BIN:$PATH" \
   "$REPO/setup" --uninstall >"$TMP/uninstall.log" 2>&1
 
 check "uninstall removes the links it created" \
@@ -87,6 +154,10 @@ check "uninstall leaves the user's own skill alone" \
   '[ -f "$FAKE_HOME/.claude/skills/trove-python/SKILL.md" ]'
 check "uninstall clears the manifest" \
   '[ ! -e "$FAKE_HOME/.trove/installed-links.tsv" ]'
+check "uninstall removes only Copilot plugins setup owned" \
+  '[ "$(cat "$COPILOT_TEST_HOME/plugins")" = "trove-product@trove" ]'
+check "uninstall leaves the shared Copilot marketplace when user plugins need it" \
+  '[ -f "$COPILOT_TEST_HOME/marketplace" ]'
 
 echo ""
 echo "$pass passed, $fail failed"

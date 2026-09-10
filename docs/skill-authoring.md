@@ -43,7 +43,7 @@ allowed-tools:                     # optional Claude-only field; stripped for ot
 | `activation.manual` | If `true`, never auto-attach regardless of globs | Build, routing index |
 | `triggers` | Natural-phrasing prompts for routing | Routing index, AGENTS.md summaries |
 | `benefits-from` | Advisory cross-skill pairings | Validate (cycle check), CLI `info`, routing reverse-lookup |
-| `allowed-tools` | Restrict the agent's tool surface (Claude only) | Claude only — stripped from Cursor/Codex/AGENTS |
+| `allowed-tools` | Restrict the agent's tool surface (Claude only) | Claude only — stripped from Cursor/Codex/Copilot/AGENTS |
 | `paths` *(legacy v1)* | Same as `activation.globs` — comma-separated string | Still read; emit `activation.globs` for new skills |
 
 `triggers:` are flexibly matched by the host, **not** exact slash-command names. Keep them short (2–4), favor natural phrasing, avoid overlap with sibling skills, don't stuff aliases — cap is 4.
@@ -58,6 +58,7 @@ Skills inside `trove-*` plugins are named with a `trove-` prefix (e.g., `trove-s
 |---|---|---|
 | Claude Code | `plugin:skill` qualified form | Not needed — but kept for cross-host consistency |
 | OpenAI Codex | None — flat `$skill-name` invocation | Prefix prevents collisions across plugins |
+| GitHub Copilot CLI | First-found flat skill namespace | Prefix prevents collisions and makes shadowing visible |
 | Cursor | None — flat skill/rule names | Prefix prevents collisions across plugins |
 | OpenCode | None — generated `use_skill` takes flat skill names | Prefix prevents collisions across plugins |
 | Gemini CLI | Extension context only for bootstrap today | Prefix keeps generated context grep-able and future-proof |
@@ -129,6 +130,7 @@ The build emits host-native artifacts from the canonical template (full table in
 - **Claude Code** → `skills/<category>/<skill>/SKILL.md` (in place)
 - **Cursor** → `output/cursor/.agents/skills/<skill>/SKILL.md` plus `output/cursor/rules/<skill>.mdc` only for glob/always-on context
 - **OpenAI Codex** → `output/codex/.agents/skills/<skill>/SKILL.md`
+- **GitHub Copilot CLI** → `plugins/<plugin>/.copilot/skills/<skill>/SKILL.md` through the native marketplace manifest
 - **OpenCode** → `output/opencode/.agents/skills/<skill>/SKILL.md` plus plugin bootstrap TS where applicable
 - **Gemini CLI** → `output/gemini/.agents/skills/<skill>/SKILL.md`, bundled into each extension at `output/gemini/plugins/<plugin>/skills/`, with `GEMINI.md` for the bootstrap anchor
 - **Generic AGENTS.md** → contributes a section to `output/agents/plugins/<plugin>/AGENTS.md`

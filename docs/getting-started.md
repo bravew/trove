@@ -1,6 +1,6 @@
 # Getting Started
 
-The Trove delivers coding skills, workflow bootstrap, hooks, agents, and MCP server hookups to your AI coding assistant. One marketplace, six projection surfaces — Claude Code, Cursor, OpenAI Codex, OpenCode, Gemini CLI, and any tool that reads `AGENTS.md` (Copilot, Windsurf, Aider, Junie).
+Trove delivers coding skills, workflow bootstrap, hooks, agents, and MCP server hookups to your AI coding assistant. One marketplace projects to Claude Code, Cursor, OpenAI Codex, GitHub Copilot CLI, OpenCode, Gemini CLI, and generic `AGENTS.md` hosts.
 
 ## Install
 
@@ -28,6 +28,21 @@ cursor plugin install trove-dev@trove
 cursor plugin install trove-workflow@trove
 ```
 
+### GitHub Copilot CLI
+
+```bash
+copilot plugin marketplace add bravew/trove
+copilot plugin marketplace browse trove
+copilot plugin install trove-dev@trove
+copilot plugin install trove-workflow@trove
+# Later: copilot plugin uninstall trove-dev@trove
+# Remove the catalog after its plugins are gone: copilot plugin marketplace remove trove
+```
+
+For local development, replace `bravew/trove` with an absolute path to this
+checkout. Copilot reads `.github/plugin/marketplace.json`, then each plugin's
+`.plugin/plugin.json` and `.copilot/skills/` bundle.
+
 ### Universal — auto-detect
 
 ```bash
@@ -35,17 +50,20 @@ git clone https://github.com/bravew/trove.git ~/.trove
 cd ~/.trove && ./setup
 ```
 
-The `setup` script auto-detects supported local installers: Claude Code,
-Cursor, Codex, Copilot/AGENTS.md, and generic AGENTS.md. Scope it with flags:
+The `setup` script auto-detects supported local installers. Scope it with flags:
 
 ```bash
 ./setup --host claude                # only Claude Code
 ./setup --host cursor --host codex   # multiple hosts
-./setup --role dev                   # only dev plugins
+./setup --host copilot --role dev    # native Copilot plugins for developers
+./setup --host agents                # explicit generic AGENTS.md fallback
 ```
 
-OpenCode and Gemini artifacts are generated under `output/opencode/` and
-`output/gemini/` for host-specific installation.
+Repeated Copilot setup refreshes the local marketplace and converges the
+plugins owned by setup to the selected role. It does not claim an existing
+plugin. `./setup --uninstall` removes only the marketplace, plugins, and links
+recorded under `~/.trove/`; if another plugin still uses the marketplace, the
+marketplace remains registered.
 
 ## What you get
 
@@ -87,6 +105,11 @@ To force a refresh:
 cursor plugin marketplace add bravew/trove
 cursor plugin install trove-dev@trove
 cursor plugin install trove-workflow@trove
+
+# GitHub Copilot CLI
+copilot plugin marketplace update trove
+copilot plugin update trove-dev@trove
+copilot plugin update trove-workflow@trove
 
 # Universal install
 cd ~/.trove && git pull && ./setup
