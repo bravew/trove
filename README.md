@@ -133,6 +133,43 @@ bun run scaffold:skill -- --plugin trove-dev --name trove-debug
 ./bin/trove config list   # ~/.trove/config.yaml — local prefs
 ```
 
+### Test a change locally
+
+Verify the artifacts first — no host required:
+
+```bash
+bun run build
+bun run validate
+bun test
+bun run verify:generated          # rebuild + fail if a committed artifact was stale
+bun run validate:claude-manifests # claude plugin validate --strict, every plugin
+```
+
+`verify:generated` is the gate CI blocks on: it catches a `.tmpl` edit whose generated output was never committed.
+
+Then install the marketplace from the checkout itself — every host takes an absolute path where it takes a GitHub slug:
+
+```bash
+/plugin marketplace add /abs/path/to/trove     # Claude Code; then /plugin install trove-dev@trove
+cursor  plugin marketplace add /abs/path/to/trove
+copilot plugin marketplace add /abs/path/to/trove   # reads .github/plugin/marketplace.json
+./setup --host claude --role dev               # symlink installer for hosts without a marketplace
+./setup --uninstall                            # reverses only what setup created
+```
+
+After a rebuild, `/plugin marketplace update trove` re-reads the regenerated manifest. To keep a live config untouched, point the host at a throwaway config dir first — `CLAUDE_CONFIG_DIR=/tmp/trove-test claude` — and add the marketplace inside that session.
+
+Behavior and install-layout checks:
+
+```bash
+bun run test:acceptance:artifacts  # deterministic bootstrap-anchor artifacts
+bun run test:acceptance:setup      # installer link layout in a disposable HOME
+bun run test:acceptance:copilot    # copilot install smoke
+RUN_CLAUDE_ACCEPTANCE_LIVE=1 bun run test:acceptance claude   # live host evidence
+```
+
+Skill quality runs through `bun run eval:changed` (needs `ANTHROPIC_API_KEY`; falls back to a structure-only check without one). See [docs/bootstrap.md](docs/bootstrap.md) for the acceptance harness and [docs/eval-system.md](docs/eval-system.md) for rubrics.
+
 **Tech stack:** Bun ≥1.0 runtime, TypeScript, YAML manifests, `@anthropic-ai/sdk` for LLM-as-judge evals. Zero non-stdlib dependencies in the CLI surface.
 
 ## Architecture
