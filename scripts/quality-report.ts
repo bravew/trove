@@ -95,20 +95,12 @@ const skills = scopeKind === "changed" ? skillsAffectedByFiles(ROOT, files) : ma
 const plugins = pluginsForSkills(skills);
 const checks: QualityCheck[] = [];
 
-checks.push(commandCheck("trove-validation", "bun", ["run", "validate"]));
+// Freshness first: it builds the tree, which `bun run validate` needs in order to
+// see the per-host outputs. A fresh checkout has no build-only `output/`, so the
+// generators' --dry-run modes cannot be run against it directly.
+checks.push(commandCheck("artifact-freshness", "bun", ["run", "verify:generated"]));
 
-const freshnessCommands = ["build:skills", "build:plugins", "build:marketplace", "build:routing", "build:deps"];
-const freshnessFindings: QualityFinding[] = [];
-for (const script of freshnessCommands) {
-  const result = run("bun", ["run", script, "--", "--dry-run"]);
-  if (result.status !== 0) freshnessFindings.push({
-    source: "artifact-freshness",
-    severity: "error",
-    rule: `${script}-stale`,
-    message: result.output.trim().split("\n").slice(-5).join(" ").slice(0, 1200),
-  });
-}
-checks.push({ id: "artifact-freshness", status: freshnessFindings.length ? "failed" : "passed", blocking: true, findings: freshnessFindings });
+checks.push(commandCheck("trove-validation", "bun", ["run", "validate"]));
 
 const structure = validateEvalStructure(ROOT, skills);
 checks.push({

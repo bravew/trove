@@ -14,6 +14,7 @@ bun run build                 # Full 3-stage build (skills → plugins → marke
 bun run build:skills          # Stage 1 only: resolve templates → SKILL.md
 bun run build:plugins         # Stage 2 only: assemble plugin manifests + copy skills
 bun run build:marketplace     # Stage 3 only: generate per-platform marketplace.json + catalog.json
+bun run verify:generated      # Build, then fail if it had to repair a committed artifact
 bun run validate              # Validate all structure, naming, frontmatter, secrets
 bun run validate:plugins      # Validate plugins only
 bun run validate:market       # Validate marketplace only
@@ -142,5 +143,5 @@ LLM-as-judge evaluation: `evals/judge-prompts/code-quality-judge.md` scores 0–
 
 ### CI/CD (`.github/workflows/`)
 
-- **validate.yml** (PR/push): validate → build → build:skills --dry-run (freshness check) → eval:gate (main only)
+- **validate.yml** (PR/push): copilot install smoke → verify:generated (build, clean-worktree freshness gate, generator determinism dry-runs) → validate → eval:gate (main only)
 - **release.yml** (push to main): build → validate → eval:gate → auto-bump VERSION → commit + tag → force-push to `canary` branch

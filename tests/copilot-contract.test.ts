@@ -11,6 +11,7 @@ import {
   COPILOT_SKILL_FIELDS,
   validateCopilotSkillFrontmatter,
 } from "../scripts/lib/agent-skills-spec";
+import { pathWithoutLocalBin } from "../scripts/lib/pinned-cli-path";
 import {
   COPILOT_HOOK_EVENTS,
   COPILOT_HOOK_LIMITS,
@@ -91,15 +92,34 @@ test("validation and release block on pinned native install checks before build"
     expect(versions.length).toBeGreaterThan(0);
     expect(new Set(versions)).toEqual(new Set(["1.3.11"]));
   }
+  // The native install smoke runs on the pristine checkout, before the build that
+  // `verify:generated` performs, so it proves the committed artifacts install on
+  // their own. `verify:generated` is the only build in these jobs, and it fails on
+  // any committed artifact the build had to repair.
   for (const workflow of [validate, release]) {
-    const build = workflow.indexOf("      - run: bun run build\n");
-    expect(workflow.indexOf("@github/copilot@1.0.69")).toBeLessThan(build);
-    expect(workflow.indexOf("Check generated artifact freshness before build")).toBeLessThan(build);
+    const smoke = workflow.indexOf("      - run: bun run test:acceptance:copilot\n");
+    const verify = workflow.indexOf("      - run: bun run verify:generated\n");
+    expect(smoke).toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(smoke);
+    expect(workflow.indexOf("@github/copilot@1.0.69")).toBeLessThan(smoke);
+    expect(workflow.indexOf("      - run: bun run validate\n")).toBeGreaterThan(verify);
   }
-  expect(release.indexOf("bun run test:acceptance:copilot")).toBeLessThan(
-    release.indexOf("      - run: bun run build\n"),
-  );
-  expect(validate).toContain("bun run test:acceptance:copilot");
   expect(validate).toContain("@github/copilot@latest");
   expect(validate).toContain("COPILOT_EXPECTED_VERSION: latest");
+});
+
+test("every path to the CLI resolves the pinned copy, not node_modules/.bin", () => {
+  // @microsoft/vally-cli ships its own @github/copilot, and `bun run` puts
+  // node_modules/.bin first, so resolving on the inherited PATH silently runs a
+  // different CLI than the one the workflows pin.
+  const smoke = fs.readFileSync(path.join(ROOT, "tests", "acceptance", "copilot-install-smoke.sh"), "utf8");
+  expect(smoke).toContain('grep -vxF "$ROOT/node_modules/.bin"');
+  expect(smoke).not.toContain('COPILOT_BIN="${COPILOT_BIN:-copilot}"');
+
+  const localBin = path.join(ROOT, "node_modules", ".bin");
+  const inherited = [localBin, "/usr/local/bin", "/usr/bin"].join(path.delimiter);
+  expect(pathWithoutLocalBin(ROOT, inherited)).toBe(["/usr/local/bin", "/usr/bin"].join(path.delimiter));
+  expect(pathWithoutLocalBin(ROOT, "/usr/bin")).toBe("/usr/bin");
+  expect(fs.readFileSync(path.join(ROOT, "scripts", "external-plugin-gate.ts"), "utf8"))
+    .toContain("PATH: pathWithoutLocalBin(ROOT)");
 });

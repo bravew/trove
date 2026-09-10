@@ -30,6 +30,7 @@ import {
   type IsoDate,
 } from "./lib/external-plugin";
 import { WRITER_ARTIFACT_SCHEMA } from "./lib/writer-provenance";
+import { pathWithoutLocalBin } from "./lib/pinned-cli-path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const args = process.argv.slice(2);
@@ -58,7 +59,7 @@ function bounded(command: string, commandArgs: string[], cwd: string, timeoutSec
     timeout: timeoutSeconds * 1000,
     maxBuffer: 8 * 1024 * 1024,
     env: {
-      PATH: process.env.PATH ?? "",
+      PATH: pathWithoutLocalBin(ROOT),
       HOME: cwd,
       // Untrusted clone: no ambient credential of any kind reaches git or the
       // CLI, and git must never stop for an interactive prompt.

@@ -16,6 +16,7 @@
     "build:routing": "bun run scripts/gen-routing.ts",
     "build:deps": "bun run scripts/gen-deps.ts",
     "dev": "bun run build --watch",
+    "verify:generated": "scripts/verify-generated-artifacts.sh",
     "validate": "bun run scripts/validate.ts",
     "validate:plugins": "bun run scripts/validate.ts --plugins",
     "validate:market": "bun run scripts/validate.ts --marketplace",

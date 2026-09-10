@@ -76,8 +76,8 @@ bun run validate      # frontmatter, naming, hooks, MCP, secrets
 > as the source when it has its *own* `SKILL.md.tmpl` — i.e. a skill authored
 > directly in the plugin, such as the `trove-dev` deprecation-alias stubs. A
 > plugin-local dir holding only a generated `SKILL.md` is the copy destination,
-> never the source. Every generator supports `--dry-run`; CI checks the
-> committed bundles before any build can repair them.
+> never the source. `bun run verify:generated` builds and then requires a clean
+> worktree, so CI fails on any committed bundle the build had to repair.
 >
 > Cursor gets a separate bundle copy at
 > `plugins/<plugin>/.agents/skills/<name>/SKILL.md`. Its plugin manifest points

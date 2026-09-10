@@ -20,7 +20,11 @@ Pull request and scheduled artifacts are retained for 90 days.
 ## Blocking rules
 
 Trove validation errors, stale generated files, missing required eval suites,
-new Vally failures, and Copilot install failures are hard blockers. Warnings
+new Vally failures, and Copilot install failures are hard blockers. The
+freshness check runs `bun run verify:generated`, which builds the tree — both
+because a stale committed artifact is only visible as the change the build had to
+make, and because `bun run validate` needs the per-host `output/` a fresh
+checkout does not carry. Warnings
 remain in the report and do not fail the job. Model scoring is separate from
 the deterministic structural gate and is marked unavailable when it did not
 run.

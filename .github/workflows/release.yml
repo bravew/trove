@@ -42,22 +42,16 @@ jobs:
       - run: npm install -g @github/copilot@1.0.69
         name: Install pinned Copilot CLI
 
-      - run: |
-          bun run build:skills -- --dry-run
-          bun run build:plugins -- --dry-run
-          bun run build:marketplace -- --dry-run
-          bun run build:routing -- --dry-run
-          bun run build:deps -- --dry-run
-        name: Check generated artifact freshness before build
-
       - run: bun run eval:structure
         name: Check deterministic eval structure
 
+      # Runs before the build so it proves the committed artifacts install on
+      # their own, which is how a host that clones the repo sees them.
       - run: bun run test:acceptance:copilot
         name: Isolated native Copilot marketplace smoke
 
-      - run: bun run build
-        name: Build all stages
+      - run: bun run verify:generated
+        name: Build and check committed generated artifact freshness
 
       - run: bun run validate
         name: Validate outputs

@@ -7,7 +7,18 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BASE_TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 FIXTURE_ROOT="$(mktemp -d "$BASE_TMP/trove-copilot-smoke.XXXXXX")"
 EXPECTED_CLI_VERSION="${COPILOT_EXPECTED_VERSION:-1.0.69}"
-COPILOT_BIN="${COPILOT_BIN:-copilot}"
+
+# `bun run` prepends the repository's node_modules/.bin to PATH, and
+# @microsoft/vally-cli pulls in its own @github/copilot there. Resolving `copilot`
+# from that PATH runs the transitive copy instead of the pinned CLI this contract
+# is written against, so drop that entry before resolving the binary.
+repo_path_without_local_bin() {
+  printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$ROOT/node_modules/.bin" | paste -sd: -
+}
+PINNED_PATH="$(repo_path_without_local_bin)"
+if [[ -z "${COPILOT_BIN:-}" ]]; then
+  COPILOT_BIN="$(PATH="$PINNED_PATH" command -v copilot || true)"
+fi
 
 cleanup() {
   [[ "${KEEP_COPILOT_FIXTURE:-}" == "1" ]] || rm -rf "$FIXTURE_ROOT"
@@ -42,7 +53,10 @@ isolated() {
     "$@"
 }
 
-command -v "$COPILOT_BIN" >/dev/null || { echo "copilot CLI not found: $COPILOT_BIN" >&2; exit 127; }
+PATH="$PINNED_PATH" command -v "$COPILOT_BIN" >/dev/null || {
+  echo "copilot CLI not found outside node_modules/.bin: ${COPILOT_BIN:-copilot}" >&2
+  exit 127
+}
 actual_version="$(isolated "$COPILOT_BIN" --version | sed -nE 's/.* ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n1)"
 if [[ "$EXPECTED_CLI_VERSION" != "latest" && "$actual_version" != "$EXPECTED_CLI_VERSION" ]]; then
   echo "Expected Copilot CLI $EXPECTED_CLI_VERSION, got ${actual_version:-unknown}" >&2
