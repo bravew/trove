@@ -711,6 +711,24 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
     if (name.length > 64) {
       warn(`${relPath}: skill name '${name}' exceeds 64 chars`);
     }
+
+    // Publisher prefix. Unlike commands — which exist only inside a plugin
+    // namespace and are warned about the opposite way at the `plugin.yaml`
+    // check above — a skill name is also its install directory, and half the
+    // install paths put that directory in a flat root shared with every other
+    // publisher: `~/.agents/skills/` (Codex), `~/.config/opencode/skills/`
+    // (OpenCode), and the `~/.claude/skills/` fallback. There is no namespace
+    // to fall back on there, and hosts resolve first-found, so an unprefixed
+    // name is silently shadowed rather than reported.
+    // Rationale and measurements: dev-doc/2026-09-skill-name-prefix-plan.md
+    if (!name.startsWith("trove-") && !name.startsWith("using-")) {
+      error(
+        `${relPath}: skill name '${name}' must start with 'trove-' — a skill name is its ` +
+          `install directory in flat, publisher-shared roots (Codex, OpenCode, and the ` +
+          `~/.claude/skills fallback), where an unprefixed name is silently shadowed. ` +
+          `See dev-doc/2026-09-skill-name-prefix-plan.md`,
+      );
+    }
   }
 
   const body = content.slice(fmEnd + 4);

@@ -64,7 +64,11 @@ Skills inside `trove-*` plugins are named with a `trove-` prefix (e.g., `trove-s
 | Gemini CLI | Extension context only for bootstrap today | Prefix keeps generated context grep-able and future-proof |
 | AGENTS.md | Per-plugin file path | Not needed for invocation, kept for grep-ability |
 
-Removing the prefix to clean up the Claude form would require per-host folder namespacing in the build pipeline (substantial refactor) and a breaking change for users. The cost-benefit doesn't favor that today.
+The prefix is not a style choice — it is the install directory. The Agent Skills spec requires `name` to match its parent directory, and `./setup` links that directory into flat, publisher-shared roots: `~/.agents/skills/` (Codex), `~/.config/opencode/skills/` (OpenCode), and the `~/.claude/skills/` fallback. Those hosts resolve **first-found**, so a colliding name is silently shadowed at runtime rather than reported — the wrong skill runs and produces plausible output.
+
+Measured: stripping `trove-` from all 54 skill names collides with four skills in `github/awesome-copilot` alone — `docs-sync-audit`, `refactor`, `security-review`, `test-gap-audit`. Two of those are Trove's own adapted forks of that catalog (`upstream.yaml`), so an unprefixed name would make fork and upstream indistinguishable on disk.
+
+`bun run validate` enforces the prefix as an error (`scripts/validate.ts`); `using-` anchors are the one exemption. Contrast the **command** rule in the same validator, which warns on a redundant prefix — commands live only inside a plugin namespace and are never installed into a shared root, so the asymmetry is deliberate. Full analysis, options considered, and the measurements: [dev-doc/2026-09-skill-name-prefix-plan.md](../dev-doc/2026-09-skill-name-prefix-plan.md).
 
 **Watch for the upstream fix.** Anthropic is tracking [`require-namespace: true`](https://github.com/anthropics/claude-code/issues/43695) — a frontmatter field that suppresses the unqualified short form on Claude Code. When that ships, set it on prefixed skills to drop the stutter without renaming anything: `/trove-workflow:trove-ship` would still resolve and the prefix continues to namespace on Codex/Cursor.
 

@@ -43,6 +43,19 @@ Plugin hooks run in the local CLI only; the cloud agent loads repository hooks
 from `.github/hooks/*.json`. Prompt hooks run only for interactive
 `sessionStart`, while command hooks can be exercised with fixture payloads.
 
+## Naming
+
+A skill `name` must equal its parent directory name (Agent Skills spec), and
+`./setup` links that directory into the install target above. Four of those
+targets are flat roots shared with every other publisher — Codex
+`~/.agents/skills/`, OpenCode `~/.config/opencode/skills/`, Copilot personal
+`~/.copilot/skills`, and the `~/.claude/skills/` fallback — with no namespace
+available and first-found resolution. The `trove-` prefix is what keeps a name
+unique there, so it is enforced as an error by `bun run validate`. Commands are
+the opposite case and are warned about the *redundant* prefix instead: they
+exist only inside a plugin namespace. Analysis:
+`dev-doc/2026-09-skill-name-prefix-plan.md`.
+
 ## Fields that are deliberately not emitted
 
 | Field | Where | Why |
