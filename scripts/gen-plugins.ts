@@ -16,9 +16,11 @@ import YAML from "yaml";
 import { getMarketplaceHosts } from "../hosts/index";
 import type { PluginYaml } from "../hosts/types";
 import { isUnownedSupportName } from "./lib/support-files";
+import { checkGeneratedFreshness } from "./lib/generated-freshness";
 
-const ROOT = path.resolve(import.meta.dir, "..");
+const ROOT = process.env.TROVE_GENERATOR_ROOT ?? path.resolve(import.meta.dir, "..");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
+const DRY_RUN = process.argv.includes("--dry-run");
 
 /**
  * Per-plugin manifest `version` is derived from the marketplace's `VERSION`
@@ -40,7 +42,7 @@ const PLUGINS_DIR = path.join(ROOT, "plugins");
 const MARKETPLACE_VERSION = fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim();
 
 /** Platforms a skill targets when `plugin.yaml` does not say. */
-const DEFAULT_PLATFORMS = ["claude", "cursor", "codex", "agents"];
+const DEFAULT_PLATFORMS = ["claude", "cursor", "codex", "agents", "copilot"];
 
 interface PluginGenerationContext {
   cursorRuleCount: number;
@@ -114,6 +116,24 @@ function transformHooksForCursor(
       const wrapped: Record<string, unknown> = {};
       if (entry.matcher !== undefined) wrapped.matcher = entry.matcher;
       wrapped.hooks = [{ type: "command", command: cursorCommand }];
+      return wrapped;
+    });
+  }
+  return out;
+}
+
+function transformHooksForCopilot(
+  hooks: Record<string, Array<{ matcher?: string; command: string; description?: string }>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [event, entries] of Object.entries(hooks)) {
+    out[event] = entries.map((entry) => {
+      const wrapped: Record<string, unknown> = {};
+      if (entry.matcher !== undefined) wrapped.matcher = entry.matcher;
+      wrapped.hooks = [{
+        type: "command",
+        command: entry.command.replace(/\$\{(?:CLAUDE_|COPILOT_)?PLUGIN_ROOT\}/g, "${PLUGIN_ROOT}"),
+      }];
       return wrapped;
     });
   }
@@ -280,6 +300,35 @@ function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
     shortDescription: plugin.description,
   };
 
+  return json;
+}
+
+function generateCopilotPluginJson(plugin: PluginYaml): Record<string, unknown> {
+  const json: Record<string, unknown> = {
+    name: plugin.name,
+    description: plugin.description,
+    version: MARKETPLACE_VERSION,
+    author: plugin.author,
+  };
+  if (plugin.homepage) json.homepage = plugin.homepage;
+  if (plugin.license) json.license = plugin.license;
+  if (plugin.keywords?.length) json.keywords = plugin.keywords;
+  if (plugin.category) json.category = plugin.category;
+
+  const skills = (plugin.skills ?? [])
+    .filter((skill) => (skill.platforms ?? DEFAULT_PLATFORMS).includes("copilot"))
+    .map((skill) => `./.copilot/skills/${path.basename(skill.path)}`);
+  if (skills.length > 0) json.skills = skills;
+
+  const commands = (plugin.commands ?? [])
+    .filter((command) => !command.platforms || command.platforms.includes("copilot"))
+    .map((command) => `./commands/${path.basename(command.path)}`);
+  if (commands.length > 0) json.commands = commands;
+  if (plugin.agents?.length) json.agents = plugin.agents.map((agent) => agent.path);
+  if (plugin.hooks && Object.keys(plugin.hooks).length > 0) json.hooks = "./.copilot/hooks.json";
+  if (filterRegisterableMcpServers(
+    plugin.mcp_servers as Record<string, { optional?: boolean } & Record<string, unknown>> | undefined,
+  )) json.mcpServers = "./.copilot/mcp.json";
   return json;
 }
 
@@ -491,6 +540,8 @@ function writeGeminiArtifacts(pluginName: string, plugin: PluginYaml): void {
 function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
   if (!plugin.skills) return;
 
+  pruneUnlistedBundledSkills(pluginName, plugin);
+
   for (const skill of plugin.skills) {
     const skillName = path.basename(skill.path);
     const skillSourceDir = findSkillSource(skillName, pluginName);
@@ -501,6 +552,9 @@ function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
     }
 
     const destDir = path.join(PLUGINS_DIR, pluginName, "skills", skillName);
+    if (path.resolve(skillSourceDir) !== path.resolve(destDir)) {
+      fs.rmSync(destDir, { recursive: true, force: true });
+    }
     fs.mkdirSync(destDir, { recursive: true });
 
     // Copy the generated SKILL.md (from .tmpl if exists, otherwise direct)
@@ -523,6 +577,28 @@ function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
         copyDirRecursive(src, path.join(destDir, subdir));
       }
     }
+  }
+}
+
+/**
+ * Drops bundled skill directories the manifest no longer lists.
+ *
+ * The Cursor and Copilot copies wipe their whole destination root first, but
+ * this one cannot: for Claude the source directory can *be* the destination,
+ * so a blanket wipe would delete the canonical skill. Removing a skill from
+ * plugin.yaml therefore used to leave its bundle behind, and the freshness
+ * dry-run saw nothing wrong because it only compares files a generator writes.
+ */
+function pruneUnlistedBundledSkills(pluginName: string, plugin: PluginYaml): void {
+  const skillsRoot = path.join(PLUGINS_DIR, pluginName, "skills");
+  if (!fs.existsSync(skillsRoot)) return;
+  const listed = new Set((plugin.skills ?? []).map((skill) => path.basename(skill.path)));
+  for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || listed.has(entry.name)) continue;
+    const orphan = path.join(skillsRoot, entry.name);
+    if (findSkillSource(entry.name, pluginName) === orphan) continue;
+    fs.rmSync(orphan, { recursive: true, force: true });
+    console.log(`  PRUNED: plugins/${pluginName}/skills/${entry.name}`);
   }
 }
 
@@ -559,6 +635,46 @@ function copyCursorSkillsToPlugin(pluginName: string, plugin: PluginYaml): void 
 
   if (copied > 0) {
     console.log(`  COPIED: ${copied} cursor skill(s) to plugins/${pluginName}/.agents/skills/`);
+  }
+}
+
+function copyCopilotSkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
+  const destRoot = path.join(PLUGINS_DIR, pluginName, ".copilot", "skills");
+  fs.rmSync(destRoot, { recursive: true, force: true });
+  const generatedRoot = path.join(ROOT, "output", "copilot", ".agents", "skills");
+  if (!plugin.skills?.length || !fs.existsSync(generatedRoot)) return;
+
+  let copied = 0;
+  for (const skill of plugin.skills) {
+    if (!(skill.platforms ?? DEFAULT_PLATFORMS).includes("copilot")) continue;
+    const skillName = path.basename(skill.path);
+    const source = path.join(generatedRoot, skillName);
+    if (!fs.existsSync(path.join(source, "SKILL.md"))) continue;
+    copyDirRecursive(source, path.join(destRoot, skillName));
+    copied++;
+  }
+  if (copied > 0) console.log(`  COPIED: ${copied} copilot skill(s) to plugins/${pluginName}/.copilot/skills/`);
+}
+
+function writeCopilotComponentFiles(pluginName: string, plugin: PluginYaml): void {
+  const outputDir = path.join(PLUGINS_DIR, pluginName, ".copilot");
+  if (plugin.hooks && Object.keys(plugin.hooks).length > 0) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outputDir, "hooks.json"),
+      JSON.stringify(transformHooksForCopilot(plugin.hooks), null, 2) + "\n",
+    );
+  } else {
+    fs.rmSync(path.join(outputDir, "hooks.json"), { force: true });
+  }
+  const mcp = filterRegisterableMcpServers(
+    plugin.mcp_servers as Record<string, { optional?: boolean } & Record<string, unknown>> | undefined,
+  );
+  if (mcp) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, "mcp.json"), JSON.stringify({ mcpServers: mcp }, null, 2) + "\n");
+  } else {
+    fs.rmSync(path.join(outputDir, "mcp.json"), { force: true });
   }
 }
 
@@ -678,11 +794,50 @@ const GENERATORS: Record<string, PluginJsonGenerator> = {
   claude: (plugin) => generateClaudePluginJson(plugin),
   cursor: generateCursorPluginJson,
   codex: (plugin) => generateCodexPluginJson(plugin),
+  copilot: (plugin) => generateCopilotPluginJson(plugin),
 };
 
 // ─── Main ───────────────────────────────────────────────────
 
 const pluginNames = findPlugins();
+if (DRY_RUN) {
+  const perPlugin = pluginNames.flatMap((name) => [
+    `plugins/${name}/skills`,
+    `plugins/${name}/commands`,
+    `plugins/${name}/rules`,
+    `plugins/${name}/.agents/skills`,
+    `plugins/${name}/.claude-plugin`,
+    `plugins/${name}/.cursor-plugin`,
+    `plugins/${name}/.codex-plugin`,
+    `plugins/${name}/.plugin`,
+    `plugins/${name}/.copilot`,
+  ]);
+  const generatedSkillBundles = pluginNames.flatMap((name) => {
+    const plugin = readPluginYaml(name);
+    return (plugin.skills ?? [])
+      .map((skill) => path.basename(skill.path))
+      .filter((skillName) => {
+        const localTemplate = path.join(PLUGINS_DIR, name, "skills", skillName, "SKILL.md.tmpl");
+        return !fs.existsSync(localTemplate);
+      })
+      .map((skillName) => `plugins/${name}/skills/${skillName}`);
+  });
+  const clean = [
+    ...perPlugin.filter((entry) => !entry.endsWith("/skills") || entry.includes("/.agents/")),
+    ...generatedSkillBundles,
+  ];
+  const stale = checkGeneratedFreshness({
+    root: ROOT,
+    scriptPath: import.meta.path,
+    seedPaths: ["VERSION", "plugins", "skills", "commands", "output"],
+    managedPaths: [...perPlugin, "output/opencode/plugins", "output/gemini/plugins"],
+    cleanPaths: [...clean, "output/opencode/plugins", "output/gemini/plugins"],
+  });
+  for (const file of stale) console.error(`STALE: ${file}`);
+  if (stale.length > 0) process.exit(1);
+  console.log("FRESH: plugin artifacts");
+  process.exit(0);
+}
 console.log(`Found ${pluginNames.length} plugins: ${pluginNames.join(", ")}\n`);
 
 for (const pluginName of pluginNames) {
@@ -694,6 +849,8 @@ for (const pluginName of pluginNames) {
   // by build:skills, which is sequenced before build:plugins in `bun run build`.
   copySkillsToPlugin(pluginName, plugin);
   copyCursorSkillsToPlugin(pluginName, plugin);
+  copyCopilotSkillsToPlugin(pluginName, plugin);
+  writeCopilotComponentFiles(pluginName, plugin);
   const cursorRuleCount = copyRulesToPlugin(pluginName, plugin);
   copyCommandsToPlugin(pluginName, plugin);
 

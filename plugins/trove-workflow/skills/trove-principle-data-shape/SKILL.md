@@ -7,8 +7,6 @@ user-invocable: true
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
-
 # Principle: Foundational Thinking
 
 Get the data shape right before writing logic. Structural decisions protect option value: a data-structure change made late is a rewrite; made early it is often a one-line diff.

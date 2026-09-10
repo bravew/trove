@@ -1,0 +1,7 @@
+{
+  "name": "trove",
+  "metadata": { "version": "2026.8.29" },
+  "plugins": [
+    { "name": "fixture-plugin", "source": "./plugins/fixture-plugin", "version": "2026.8.29" }
+  ]
+}

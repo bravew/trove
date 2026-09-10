@@ -28,7 +28,7 @@ import { isUnownedSupportName } from "./lib/support-files";
 import { lintDecisionGates } from "./lib/decision-gate";
 import { validateV2Frontmatter } from "./schema";
 import { detectCycles, buildForwardGraph } from "./lib/dep-graph";
-import { validateHooks } from "./lib/hooks";
+import { validateCopilotHookManifest, validateHooks } from "./lib/hooks";
 import { validateMcpMetadata } from "./lib/mcp";
 import {
   collectSkillRegistrations,
@@ -39,7 +39,9 @@ import {
   SPEC_REVISION,
   SPEC_URL,
   validateAgentSkillFrontmatter,
+  validateCopilotSkillFrontmatter,
 } from "./lib/agent-skills-spec";
+import { validateCopilotPluginManifest } from "./lib/copilot-contract";
 import { checkOffline } from "./lib/upstream-sync";
 import { loadUpstreamManifest, validateManifestInventory } from "./lib/upstream-manifest";
 
@@ -709,6 +711,24 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
     if (name.length > 64) {
       warn(`${relPath}: skill name '${name}' exceeds 64 chars`);
     }
+
+    // Publisher prefix. Unlike commands — which exist only inside a plugin
+    // namespace and are warned about the opposite way at the `plugin.yaml`
+    // check above — a skill name is also its install directory, and half the
+    // install paths put that directory in a flat root shared with every other
+    // publisher: `~/.agents/skills/` (Codex), `~/.config/opencode/skills/`
+    // (OpenCode), and the `~/.claude/skills/` fallback. There is no namespace
+    // to fall back on there, and hosts resolve first-found, so an unprefixed
+    // name is silently shadowed rather than reported.
+    // Rationale and measurements: dev-doc/2026-09-skill-name-prefix-plan.md
+    if (!name.startsWith("trove-") && !name.startsWith("using-")) {
+      error(
+        `${relPath}: skill name '${name}' must start with 'trove-' — a skill name is its ` +
+          `install directory in flat, publisher-shared roots (Codex, OpenCode, and the ` +
+          `~/.claude/skills fallback), where an unprefixed name is silently shadowed. ` +
+          `See dev-doc/2026-09-skill-name-prefix-plan.md`,
+      );
+    }
   }
 
   const body = content.slice(fmEnd + 4);
@@ -843,6 +863,80 @@ function validateStrictAgentSkills(): void {
   ok(`${checked} strict Agent Skills artifact(s) checked across ${hosts.length} host(s)`);
 }
 
+function validateCopilotArtifacts(): void {
+  console.log("\n── GitHub Copilot Native Artifacts ──");
+  const version = fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim();
+  const marketplacePath = path.join(ROOT, ".github", "plugin", "marketplace.json");
+  if (!fs.existsSync(marketplacePath)) {
+    error("Copilot marketplace is missing .github/plugin/marketplace.json");
+    return;
+  }
+  const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf-8")) as {
+    metadata?: { version?: string };
+    plugins?: Array<{ name?: string; source?: string }>;
+  };
+  if (marketplace.metadata?.version !== version) {
+    error(`Copilot marketplace version must equal VERSION (${version})`);
+  }
+
+  let manifests = 0;
+  let skills = 0;
+  for (const entry of marketplace.plugins ?? []) {
+    if (!entry.name || !entry.source) {
+      error("Copilot marketplace entries require name and source");
+      continue;
+    }
+    const pluginRoot = path.resolve(ROOT, entry.source);
+    if (!pluginRoot.startsWith(`${PLUGINS_DIR}${path.sep}`)) {
+      error(`Copilot marketplace '${entry.name}' source escapes plugins/: ${entry.source}`);
+      continue;
+    }
+    const manifestPath = path.join(pluginRoot, ".plugin", "plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      error(`${entry.name}: missing .plugin/plugin.json`);
+      continue;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    for (const finding of validateCopilotPluginManifest(manifest, pluginRoot)) {
+      error(`${entry.name} ${finding.field}: ${finding.message}`);
+    }
+    if (manifest.version !== version) error(`${entry.name}: manifest version must equal VERSION (${version})`);
+
+    for (const skillDir of Array.isArray(manifest.skills) ? manifest.skills : []) {
+      if (typeof skillDir !== "string") continue;
+      const skillPath = path.resolve(pluginRoot, skillDir, "SKILL.md");
+      if (!fs.existsSync(skillPath)) {
+        error(`${entry.name}: missing bundled skill ${path.relative(ROOT, skillPath)}`);
+        continue;
+      }
+      const content = fs.readFileSync(skillPath, "utf-8");
+      const end = content.indexOf("\n---", 4);
+      if (!content.startsWith("---\n") || end === -1) {
+        error(`${path.relative(ROOT, skillPath)}: missing or unclosed frontmatter`);
+        continue;
+      }
+      const frontmatter = YAML.parse(content.slice(4, end)) as Record<string, unknown>;
+      for (const issue of validateCopilotSkillFrontmatter(frontmatter, path.basename(skillDir)).errors) {
+        error(`${path.relative(ROOT, skillPath)}: ${issue.field}: ${issue.message}`);
+      }
+      skills++;
+    }
+
+    if (typeof manifest.hooks === "string") {
+      const hookPath = path.resolve(pluginRoot, manifest.hooks);
+      if (fs.existsSync(hookPath)) {
+        const hooks = JSON.parse(fs.readFileSync(hookPath, "utf-8"));
+        for (const finding of validateCopilotHookManifest(hooks)) {
+          if (finding.severity === "error") error(`${entry.name}: ${finding.message}`);
+          else warn(`${entry.name}: ${finding.message}`);
+        }
+      }
+    }
+    manifests++;
+  }
+  ok(`${manifests} native manifest(s) and ${skills} bundled skill(s) validated at version ${version}`);
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 console.log("Trove — Validation");
@@ -871,6 +965,7 @@ if (validateAll) {
   validateUpstreamLocks();
   validateSkillTemplates();
   validateStrictAgentSkills();
+  validateCopilotArtifacts();
   validateBootstrapHostOutputs();
 
   const anchors = collectSessionStartAnchors();

@@ -52,6 +52,118 @@ export const HOOK_EVENTS = [
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
+/** Copilot CLI hook spellings verified against the 1.0.69 contract. */
+export const COPILOT_HOOK_EVENTS = [
+  "sessionStart", "SessionStart",
+  "sessionEnd", "SessionEnd",
+  "userPromptSubmitted", "UserPromptSubmit",
+  "userPromptTransformed",
+  "preToolUse", "PreToolUse",
+  "postToolUse", "PostToolUse",
+  "postToolUseFailure", "PostToolUseFailure",
+  "agentStop", "Stop",
+  "subagentStart",
+  "subagentStop", "SubagentStop",
+  "errorOccurred", "ErrorOccurred",
+  "preCompact", "PreCompact",
+  "permissionRequest", "PermissionRequest",
+  "notification",
+] as const;
+
+export type CopilotHookEvent = (typeof COPILOT_HOOK_EVENTS)[number];
+
+export const COPILOT_HOOK_LIMITS = {
+  defaultTimeoutSeconds: 30,
+  maximumOutputBytes: 10 * 1024 * 1024,
+  maximumAdditionalContextBytes: 10 * 1024,
+  maximumAgentStopContinuations: 8,
+} as const;
+
+export type CopilotHookOutcome = "success" | "warn" | "deny" | "fail-open";
+
+/** Model the documented command-hook exit and timeout behavior. */
+export function copilotHookOutcome(
+  event: CopilotHookEvent,
+  result: { kind: "timeout" } | { kind: "exit"; code: number },
+): CopilotHookOutcome {
+  if (result.kind === "timeout") return "fail-open";
+  if (result.code === 0) return "success";
+  const guardsPermission = event === "permissionRequest" || event === "PermissionRequest" ||
+    event === "preToolUse" || event === "PreToolUse";
+  if (guardsPermission && (result.code === 2 || event === "preToolUse" || event === "PreToolUse")) {
+    return "deny";
+  }
+  return result.code === 2 ? "warn" : "fail-open";
+}
+
+export function validateCopilotHookEvents(hooks: unknown): HookFinding[] {
+  if (hooks === undefined || hooks === null) return [];
+  if (typeof hooks !== "object" || Array.isArray(hooks)) {
+    return [{ severity: "error", message: "Copilot hooks must be an object keyed by event name" }];
+  }
+  const allowed = new Set<string>(COPILOT_HOOK_EVENTS);
+  return Object.keys(hooks as Record<string, unknown>)
+    .filter((event) => !allowed.has(event))
+    .map((event) => ({
+      severity: "error" as const,
+      message: `unknown Copilot hook event '${event}' (valid: ${COPILOT_HOOK_EVENTS.join(", ")})`,
+    }));
+}
+
+const COPILOT_PLUGIN_ROOT_VARIABLES = new Set([
+  "PLUGIN_ROOT",
+  "COPILOT_PLUGIN_ROOT",
+  "CLAUDE_PLUGIN_ROOT",
+]);
+const SECRET_ENV_NAME = /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY)/;
+
+/** Validate Copilot's nested hooks.json surface without executing commands. */
+export function validateCopilotHookManifest(hooks: unknown): HookFinding[] {
+  const findings = validateCopilotHookEvents(hooks);
+  if (typeof hooks !== "object" || hooks === null || Array.isArray(hooks)) {
+    return findings;
+  }
+
+  for (const [event, groups] of Object.entries(hooks as Record<string, unknown>)) {
+    if (!Array.isArray(groups)) {
+      findings.push({ severity: "error", message: `Copilot hook event '${event}' must map to an array` });
+      continue;
+    }
+    for (const [groupIndex, group] of groups.entries()) {
+      if (typeof group !== "object" || group === null || Array.isArray(group)) {
+        findings.push({ severity: "error", message: `Copilot hooks.${event}[${groupIndex}] must be an object` });
+        continue;
+      }
+      const entries = (group as Record<string, unknown>).hooks;
+      if (!Array.isArray(entries)) {
+        findings.push({ severity: "error", message: `Copilot hooks.${event}[${groupIndex}].hooks must be an array` });
+        continue;
+      }
+      for (const [entryIndex, entry] of entries.entries()) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+        const command = (entry as Record<string, unknown>).command;
+        if (typeof command !== "string") continue;
+        for (const match of command.matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)) {
+          const variable = match[1];
+          if (SECRET_ENV_NAME.test(variable)) {
+            findings.push({
+              severity: "error",
+              message: `Copilot hooks.${event}[${groupIndex}].hooks[${entryIndex}] interpolates secret-bearing \${${variable}}`,
+            });
+          }
+          if (variable.endsWith("PLUGIN_ROOT") && !COPILOT_PLUGIN_ROOT_VARIABLES.has(variable)) {
+            findings.push({
+              severity: "error",
+              message: `Copilot hooks.${event}[${groupIndex}].hooks[${entryIndex}] uses unknown plugin root \${${variable}}`,
+            });
+          }
+        }
+      }
+    }
+  }
+  return findings;
+}
+
 const TOOL_MATCHER_EVENTS = new Set<string>([
   "PreToolUse",
   "PostToolUse",

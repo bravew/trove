@@ -5,8 +5,6 @@ description: "Laziness Protocol — aim for the most result with the least code 
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
-
 # Principle: Laziness Protocol
 
 Aim for the most result with the least code and complexity. The best change is often a deletion.

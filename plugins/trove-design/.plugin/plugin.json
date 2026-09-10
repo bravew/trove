@@ -1,0 +1,23 @@
+{
+  "name": "trove-design",
+  "description": "Designer skills: Figma review, accessibility, design systems",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "design",
+    "figma",
+    "accessibility",
+    "design-system"
+  ],
+  "category": "design",
+  "skills": [
+    "./.copilot/skills/trove-design-review",
+    "./.copilot/skills/trove-a11y",
+    "./.copilot/skills/trove-component-spec",
+    "./.copilot/skills/trove-visual-parity"
+  ]
+}

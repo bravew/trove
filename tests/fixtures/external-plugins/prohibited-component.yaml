@@ -1,0 +1,22 @@
+schemaVersion: trove.external-plugin.v1
+name: prohibited-component
+description: Declares a hook component that the intake policy prohibits outright
+submitter: example-submitter
+source:
+  host: github.com
+  repository: example-org/example-skills
+  subdirectory: .
+  sha: "1111111111111111111111111111111111111111"
+license:
+  expression: MIT
+  evidence: LICENSE
+components:
+  - skills
+  - hooks
+review:
+  disposition: proposed
+  reviewer: null
+  revision: null
+  reviewedAt: null
+  nextReviewAt: null
+  note: null

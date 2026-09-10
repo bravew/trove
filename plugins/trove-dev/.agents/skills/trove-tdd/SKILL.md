@@ -5,8 +5,6 @@ description: "Write a focused regression test that fails before the fix and pass
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
-
 ## Session Init
 
 This skill ships Trove conventions. Prefer existing project patterns over generic best practices when they conflict.

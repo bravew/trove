@@ -43,7 +43,7 @@ allowed-tools:                     # optional Claude-only field; stripped for ot
 | `activation.manual` | If `true`, never auto-attach regardless of globs | Build, routing index |
 | `triggers` | Natural-phrasing prompts for routing | Routing index, AGENTS.md summaries |
 | `benefits-from` | Advisory cross-skill pairings | Validate (cycle check), CLI `info`, routing reverse-lookup |
-| `allowed-tools` | Restrict the agent's tool surface (Claude only) | Claude only — stripped from Cursor/Codex/AGENTS |
+| `allowed-tools` | Restrict the agent's tool surface (Claude only) | Claude only — stripped from Cursor/Codex/Copilot/AGENTS |
 | `paths` *(legacy v1)* | Same as `activation.globs` — comma-separated string | Still read; emit `activation.globs` for new skills |
 
 `triggers:` are flexibly matched by the host, **not** exact slash-command names. Keep them short (2–4), favor natural phrasing, avoid overlap with sibling skills, don't stuff aliases — cap is 4.
@@ -58,12 +58,17 @@ Skills inside `trove-*` plugins are named with a `trove-` prefix (e.g., `trove-s
 |---|---|---|
 | Claude Code | `plugin:skill` qualified form | Not needed — but kept for cross-host consistency |
 | OpenAI Codex | None — flat `$skill-name` invocation | Prefix prevents collisions across plugins |
+| GitHub Copilot CLI | First-found flat skill namespace | Prefix prevents collisions and makes shadowing visible |
 | Cursor | None — flat skill/rule names | Prefix prevents collisions across plugins |
 | OpenCode | None — generated `use_skill` takes flat skill names | Prefix prevents collisions across plugins |
 | Gemini CLI | Extension context only for bootstrap today | Prefix keeps generated context grep-able and future-proof |
 | AGENTS.md | Per-plugin file path | Not needed for invocation, kept for grep-ability |
 
-Removing the prefix to clean up the Claude form would require per-host folder namespacing in the build pipeline (substantial refactor) and a breaking change for users. The cost-benefit doesn't favor that today.
+The prefix is not a style choice — it is the install directory. The Agent Skills spec requires `name` to match its parent directory, and `./setup` links that directory into flat, publisher-shared roots: `~/.agents/skills/` (Codex), `~/.config/opencode/skills/` (OpenCode), and the `~/.claude/skills/` fallback. Those hosts resolve **first-found**, so a colliding name is silently shadowed at runtime rather than reported — the wrong skill runs and produces plausible output.
+
+Measured: stripping `trove-` from all 54 skill names collides with four skills in `github/awesome-copilot` alone — `docs-sync-audit`, `refactor`, `security-review`, `test-gap-audit`. Two of those are Trove's own adapted forks of that catalog (`upstream.yaml`), so an unprefixed name would make fork and upstream indistinguishable on disk.
+
+`bun run validate` enforces the prefix as an error (`scripts/validate.ts`); `using-` anchors are the one exemption. Contrast the **command** rule in the same validator, which warns on a redundant prefix — commands live only inside a plugin namespace and are never installed into a shared root, so the asymmetry is deliberate. Full analysis, options considered, and the measurements: [dev-doc/2026-09-skill-name-prefix-plan.md](../dev-doc/2026-09-skill-name-prefix-plan.md).
 
 **Watch for the upstream fix.** Anthropic is tracking [`require-namespace: true`](https://github.com/anthropics/claude-code/issues/43695) — a frontmatter field that suppresses the unqualified short form on Claude Code. When that ships, set it on prefixed skills to drop the stutter without renaming anything: `/trove-workflow:trove-ship` would still resolve and the prefix continues to namespace on Codex/Cursor.
 
@@ -129,6 +134,7 @@ The build emits host-native artifacts from the canonical template (full table in
 - **Claude Code** → `skills/<category>/<skill>/SKILL.md` (in place)
 - **Cursor** → `output/cursor/.agents/skills/<skill>/SKILL.md` plus `output/cursor/rules/<skill>.mdc` only for glob/always-on context
 - **OpenAI Codex** → `output/codex/.agents/skills/<skill>/SKILL.md`
+- **GitHub Copilot CLI** → `plugins/<plugin>/.copilot/skills/<skill>/SKILL.md` through the native marketplace manifest
 - **OpenCode** → `output/opencode/.agents/skills/<skill>/SKILL.md` plus plugin bootstrap TS where applicable
 - **Gemini CLI** → `output/gemini/.agents/skills/<skill>/SKILL.md`, bundled into each extension at `output/gemini/plugins/<plugin>/skills/`, with `GEMINI.md` for the bootstrap anchor
 - **Generic AGENTS.md** → contributes a section to `output/agents/plugins/<plugin>/AGENTS.md`

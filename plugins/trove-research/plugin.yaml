@@ -11,10 +11,10 @@ roles: [pm, dev]
 
 skills:
   - path: ./skills/trove-pulse
-    platforms: [claude, cursor, codex, agents, gemini, opencode]
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
   - path: ./skills/trove-pulse-cn
-    platforms: [claude, cursor, codex, agents, gemini, opencode]
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:

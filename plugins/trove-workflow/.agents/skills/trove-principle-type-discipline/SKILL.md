@@ -5,8 +5,6 @@ description: "Type System Discipline — treat the type checker as a proof assis
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
-
 # Principle: Type System Discipline
 
 The type checker is a proof assistant. Spend the budget so wrong states don't compile.

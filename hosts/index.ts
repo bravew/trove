@@ -11,8 +11,9 @@ import codex from "./codex";
 import agents from "./agents";
 import opencode from "./opencode";
 import gemini from "./gemini";
+import copilot from "./copilot";
 
-export const ALL_HOSTS: HostConfig[] = [claude, cursor, codex, agents, opencode, gemini];
+export const ALL_HOSTS: HostConfig[] = [claude, cursor, codex, agents, opencode, gemini, copilot];
 
 export const HOST_MAP: Record<string, HostConfig> = Object.fromEntries(
   ALL_HOSTS.map((h) => [h.name, h]),
@@ -36,5 +37,5 @@ export function getMarketplaceHosts(): HostConfig[] {
   return ALL_HOSTS.filter((h) => h.features.marketplace);
 }
 
-export { claude, cursor, codex, agents, opencode, gemini };
+export { claude, cursor, codex, agents, opencode, gemini, copilot };
 export type { HostConfig, HostName } from "./types";

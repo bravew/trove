@@ -53,7 +53,7 @@ External plugins live as JSON stubs in `curated/`. Each requires a SHA pin on `s
         │
         ▼  open PR against main
    ┌──────────────┐
-   │  validate.yml │   bun run validate → build → build:skills --dry-run (freshness)
+   │  validate.yml │   copilot smoke → verify:generated (build + freshness) → validate
    └──────────────┘
         │
         ▼  peer review

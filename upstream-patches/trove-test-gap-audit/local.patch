@@ -1,0 +1,48 @@
+diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
+index 0dd63d6..2047852 100644
+--- a/SKILL.md.tmpl
++++ b/SKILL.md.tmpl
+@@ -1,7 +1,25 @@
+ ---
+ name: trove-test-gap-audit
+-description: Run a read-only audit for missing, weak, stale, or mis-scoped test coverage. If the user does not name a scope, audit the full repository and identify important code paths, routes, features, services, workflows, and contracts that lack proper tests. If the user names a feature, PR, branch, route, workflow, service, bug fix, API, security-sensitive path, or risky code change, focus only on that specific scope. Use when the user asks what tests are missing, whether coverage is enough, what regression tests to add, or how to prove a change is safe. This is not a general bug audit and not a security review; it evaluates whether behavior is covered by tests.
++description: |
++  Read-only audit for missing, weak, stale, or mis-scoped test coverage. Audits the
++  whole repository when no scope is named, or one feature, PR, branch, route,
++  service, or risky change when it is. Use when asked what tests are missing,
++  whether coverage is enough, or what regression tests would prove a change safe.
++  This is not a bug hunt and not a security review; use trove-tdd to write the test
++  it recommends.
++preamble-tier: 2
++user-invocable: true
++triggers:
++  - what tests are missing
++  - is our coverage enough
++  - what regression tests should we add
++  - audit test coverage
++benefits-from:
++  - trove-tdd
+ license: MIT
++metadata:
++  source: github/awesome-copilot
++  upstream-skill: test-gap-audit
+ ---
+ 
+ {{PREAMBLE}}
+@@ -164,11 +182,11 @@ When the user asks to add tests:
+ 
+ ## Related Skills
+ 
+-This skill is one of seven review skills that share a single report contract:
+-every finding carries a `P0`-`P3` severity and a `path:line` you can open.
+-`docs-sync-audit` is the other one in this repository. The remaining five cover
+-launch readiness, security, repo structure, improvement ideas, and pull
+-request communication, at https://github.com/specialone0007/review-skills.
++This skill shares one report contract with the other Trove audit skills: every
++finding carries a `P0`-`P3` severity and a `path:line` you can open. It reports
++gaps; `trove-tdd` writes the failing test that closes one. Route to
++`trove-docs-sync-audit` for documentation drift and `trove-review` for a code
++review of the diff.
+ 
+ ## Agent Portability Notes
+ 

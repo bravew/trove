@@ -1,0 +1,6 @@
+{
+  "name": "Fixture_Plugin",
+  "version": "2026.8.29",
+  "skills": ["../outside"],
+  "strict": true
+}

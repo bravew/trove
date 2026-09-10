@@ -6,8 +6,8 @@ serves the skill's purpose.
 
 | Tier | When to use | Tokens (approx) | Contents |
 |:---:|---|---:|---|
-| 1 | Quiet utility output, no session bootstrap needed | ~10 | Version stamp |
-| 2 | **Default for most skills** | ~30 | Tier 1 + ethos + project-pattern preference |
+| 1 | Quiet utility output, no session bootstrap needed | 0 | Nothing — the placeholder renders empty |
+| 2 | **Default for most skills** | ~30 | Ethos + project-pattern preference |
 | 3 | Skills that benefit from cross-skill awareness | ~55 | Tier 2 + routing/project-guidance pointer |
 | 4 | Front-door orchestrators (review pipelines, ship workflows) | ~85 | Tier 3 + delegation reminder |
 
@@ -23,7 +23,7 @@ description: …
 ```
 
 ```yaml
-{{PREAMBLE:1}}      # Tier 1 — minimal version stamp
+{{PREAMBLE:1}}      # Tier 1 — nothing; the placeholder line collapses
 {{PREAMBLE:3}}      # Tier 3 — adds routing pointer
 {{PREAMBLE:4}}      # Tier 4 — orchestrator
 ```

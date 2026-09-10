@@ -1,0 +1,8 @@
+{
+  "cliVersion": "1.0.69",
+  "marketplaceCommand": "copilot plugin marketplace add <repository>",
+  "installCommand": "copilot plugin install trove-workflow@trove",
+  "available": [".claude-plugin/plugin.json"],
+  "expected": ".claude-plugin/plugin.json",
+  "installedVersion": "2026.7.4"
+}

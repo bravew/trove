@@ -18,11 +18,16 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
 import YAML from "yaml";
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  changedFilesFromMergeBase,
+  maintainedSkills,
+  skillsAffectedByFiles,
+  validateEvalStructure,
+} from "./lib/eval-structure";
 
-const ROOT = path.resolve(import.meta.dir, "..");
+const ROOT = process.env.TROVE_EVAL_ROOT ?? path.resolve(import.meta.dir, "..");
 const EVALS_DIR = path.join(ROOT, "evals", "skill-evals");
 const JUDGE_PROMPT_PATH = path.join(ROOT, "evals", "judge-prompts", "code-quality-judge.md");
 const SKILLS_DIR = path.join(ROOT, "skills");
@@ -30,6 +35,8 @@ const SKILLS_DIR = path.join(ROOT, "skills");
 const args = process.argv.slice(2);
 const gateOnly = args.includes("--gate");
 const changedOnly = args.includes("--changed");
+const structureOnly = args.includes("--structure");
+const option = (name: string): string | undefined => args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.EVAL_MODEL || "claude-sonnet-5";
@@ -143,21 +150,10 @@ function findSkillMd(skillName: string): string | null {
 // ─── Changed skills detection ──────────────────────────────
 
 function getChangedSkills(): Set<string> {
-  try {
-    const diff = execSync("git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD", {
-      encoding: "utf-8",
-      cwd: ROOT,
-    });
-    const changed = new Set<string>();
-    for (const line of diff.split("\n")) {
-      const match = line.match(/skills\/[\w-]+\/([\w-]+)\//);
-      if (match) changed.add(match[1]);
-    }
-    return changed;
-  } catch (e) {
-    console.warn(`⚠ Could not detect changed skills: ${(e as Error).message}`);
-    return new Set();
-  }
+  const base = option("base") ?? process.env.EVAL_BASE_REF ?? "origin/main";
+  const head = option("head") ?? process.env.EVAL_HEAD_REF ?? "HEAD";
+  const files = changedFilesFromMergeBase(ROOT, base, head);
+  return new Set(skillsAffectedByFiles(ROOT, files));
 }
 
 // ─── LLM Judge ─────────────────────────────────────────────
@@ -275,56 +271,30 @@ Score each criterion 0-10 and compute a weighted average. Return JSON only:
 
 let suites = findEvalSuites();
 
-if (suites.length === 0) {
-  console.log("No eval suites found in evals/skill-evals/.");
-  console.log("Create eval tasks with:\n  mkdir -p evals/skill-evals/<skill-name>/tasks/");
-  console.log("  # Add .md task files and rubric.yaml");
-  process.exit(0);
-}
-
 // Filter to changed skills if requested
+let requiredSkills = maintainedSkills(ROOT);
 if (changedOnly) {
   const changed = getChangedSkills();
   if (changed.size === 0) {
     console.log("No changed skills detected. Nothing to evaluate.");
     process.exit(0);
   }
+  requiredSkills = [...changed].sort();
   suites = suites.filter((s) => changed.has(s));
   console.log(`Changed skills: ${Array.from(changed).join(", ")}`);
-  if (suites.length === 0) {
-    console.log("No eval suites for changed skills. Skipping.");
-    process.exit(0);
-  }
 }
+
+const structure = validateEvalStructure(ROOT, requiredSkills);
+if (structure.errors.length > 0) {
+  for (const error of structure.errors) console.error(`✗ ${error}`);
+  process.exit(1);
+}
+console.log(`✓ Eval structure valid for ${structure.skills.length} required skill(s).`);
+if (structureOnly) process.exit(0);
 
 // Check API key
 if (!API_KEY) {
-  console.warn("⚠ ANTHROPIC_API_KEY not set. Running in dry-run mode (structure check only).\n");
-
-  // Validate structure even without API key
-  let structureErrors = 0;
-  for (const suite of suites) {
-    const tasks = loadTasks(suite);
-    const rubric = loadRubric(suite);
-    const skillMd = findSkillMd(suite);
-
-    console.log(`── ${suite} ──`);
-    if (tasks.length === 0) { console.log(`  ⚠ No tasks found`); structureErrors++; }
-    else console.log(`  ✓ ${tasks.length} task(s)`);
-
-    if (!rubric) { console.log(`  ⚠ No rubric.yaml`); structureErrors++; }
-    else console.log(`  ✓ rubric.yaml (${Object.keys(rubric.criteria).length} criteria, min: ${rubric.min_pass_score})`);
-
-    if (!skillMd) { console.log(`  ⚠ SKILL.md not found`); structureErrors++; }
-    else console.log(`  ✓ ${path.relative(ROOT, skillMd)}`);
-  }
-
-  if (structureErrors > 0 && gateOnly) {
-    console.error(`\n✗ ${structureErrors} structural issue(s). Fix before release.`);
-    process.exit(1);
-  }
-
-  console.log("\n✓ Eval structure check complete (no API key — skipped LLM scoring).");
+  console.log("MODEL_RESULT=skipped reason=missing_api_key");
   process.exit(0);
 }
 

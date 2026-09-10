@@ -27,8 +27,10 @@ import {
   type PluginAttachment,
   type TemplateFile,
 } from "./lib/skill-parser";
+import { checkGeneratedFreshness } from "./lib/generated-freshness";
 
-const ROOT = path.resolve(import.meta.dir, "..");
+const ROOT = process.env.TROVE_GENERATOR_ROOT ?? path.resolve(import.meta.dir, "..");
+const DRY_RUN = process.argv.includes("--dry-run");
 
 // ─── Load marketplace.yaml ──────────────────────────────────
 
@@ -249,7 +251,7 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
           skillNames = pluginYaml.skills.map((s) => path.basename(s.path));
           const platformSet = new Set<string>();
           for (const skill of pluginYaml.skills) {
-            for (const p of skill.platforms || ["claude", "cursor", "codex", "agents"]) {
+            for (const p of skill.platforms || ["claude", "cursor", "codex", "agents", "copilot"]) {
               platformSet.add(p);
             }
           }
@@ -282,11 +284,35 @@ const GENERATORS: Record<string, (m: MarketplaceYaml) => unknown> = {
   claude: generateClaudeMarketplace,
   cursor: (m) => generatePlatformMarketplace(m, "cursor"),
   codex: generateCodexMarketplace,
+  copilot: (m) => generatePlatformMarketplace(m, "copilot"),
 };
 
 // ─── Main ───────────────────────────────────────────────────
 
 const marketplace = loadMarketplaceYaml();
+if (DRY_RUN) {
+  const managed = [
+    ".claude-plugin/marketplace.json",
+    ".cursor-plugin/marketplace.json",
+    ".agents/plugins/marketplace.json",
+    ".github/plugin/marketplace.json",
+    "catalog.json",
+    "output/codex/.agents/AGENTS.md",
+    "output/codex/.agents/plugins",
+    "output/agents",
+  ];
+  const stale = checkGeneratedFreshness({
+    root: ROOT,
+    scriptPath: import.meta.path,
+    seedPaths: ["VERSION", "marketplace.yaml", "plugins", "skills", "output"],
+    managedPaths: managed,
+    cleanPaths: managed,
+  });
+  for (const file of stale) console.error(`STALE: ${file}`);
+  if (stale.length > 0) process.exit(1);
+  console.log("FRESH: marketplace artifacts");
+  process.exit(0);
+}
 console.log(`Marketplace: ${marketplace.name} v${marketplace.metadata.version}`);
 console.log(`Plugins: ${marketplace.plugins.length}\n`);
 
@@ -370,7 +396,7 @@ function assembleScopedAgents(
   for (const plugin of plugins) {
     const sectionsForPlugin: AgentsSection[] = [];
     for (const skill of plugin.yaml.skills ?? []) {
-      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents"];
+      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents", "copilot"];
       if (!platforms.includes(host.name)) continue;
 
       const skillName = path.basename(skill.path);

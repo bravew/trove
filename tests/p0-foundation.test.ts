@@ -44,6 +44,9 @@ test("hosts: capabilities reflect intended projection surfaces", () => {
   // Codex — inline skill, no rule files, treats AGENTS.md as fallback
   expect(byName.codex.capabilities.supportsInlineSkill).toBe(true);
   expect(byName.codex.capabilities.supportsAgentsMd).toBe(true);
+  expect(byName.copilot.skillProjection).toBe("strict");
+  expect(byName.copilot.capabilities.supportsInlineSkill).toBe(true);
+  expect(byName.copilot.capabilities.supportsToolAllowlistMetadata).toBe(false);
   // Generic agents — AGENTS.md only
   expect(byName.agents.capabilities.supportsAgentsMd).toBe(true);
   expect(byName.agents.capabilities.supportsInlineSkill).toBe(false);
@@ -61,8 +64,15 @@ test("resolvers: VERSION returns marketplace version from context", () => {
 test("resolvers: PREAMBLE defaults to tier 2 with no skill or args", () => {
   const result = resolvers.PREAMBLE({ marketplaceVersion: "1.2.3", projectRoot: ROOT });
   expect(result.mode).toBe("inline");
-  expect(result.value).toContain("Trove · v1.2.3");
   expect(result.value).toContain("Session Init");
+  // The repository version is not stamped into skill bodies: it belongs to the
+  // plugin manifest, and repeating it here rewrote every skill on every release.
+  expect(result.value).not.toContain("1.2.3");
+});
+
+test("resolvers: tier 1 renders nothing at all", () => {
+  const result = resolvers.PREAMBLE({ marketplaceVersion: "1.2.3", projectRoot: ROOT, args: ["1"] });
+  expect(result.value).toBe("");
 });
 
 test("resolvers: PREAMBLE explicit arg overrides skill frontmatter", () => {
@@ -79,9 +89,9 @@ test("resolvers: PREAMBLE explicit arg overrides skill frontmatter", () => {
       v2: { preambleTier: 4 },
     },
   });
-  // tier-1 has no Session Init heading
+  // tier-1 is empty now that its only content was the version stamp
   expect(result.value).not.toContain("Session Init");
-  expect(result.value).toContain("Trove");
+  expect(result.value).toBe("");
 });
 
 test("resolvers: PREAMBLE reads tier from skill frontmatter when no arg", () => {
@@ -226,8 +236,9 @@ test("snapshot: trove-python projects identically into Claude SKILL.md", () => {
   expect(out).not.toMatch(/^activation:/m);
   expect(out).not.toMatch(/^triggers:/m);
   expect(out).not.toMatch(/^benefits-from:/m);
-  // Body shape: tier-2 preamble + content.
-  expect(out).toContain("Trove · v");
+  // Body shape: tier-2 preamble + content, carrying no version stamp.
+  expect(out).toContain("## Session Init");
+  expect(out).not.toMatch(/Trove · v/);
   expect(out).toContain("Python / FastAPI Conventions");
 });
 

@@ -11,18 +11,18 @@ roles: [design]
 
 skills:
   - path: ./skills/trove-design-review
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
 
   - path: ./skills/trove-a11y
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.html"]
 
   - path: ./skills/trove-component-spec
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
 
   - path: ./skills/trove-visual-parity
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
 
 mcp_servers:
   # Figma — design integration (Streamable HTTP + OAuth, no env vars)

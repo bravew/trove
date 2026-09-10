@@ -1,0 +1,21 @@
+schemaVersion: trove.external-plugin.v1
+name: example-skills
+description: Example third-party skill bundle used only as an intake fixture
+submitter: example-submitter
+source:
+  host: github.com
+  repository: example-org/example-skills
+  subdirectory: plugins/example-skills
+  sha: "1111111111111111111111111111111111111111"
+license:
+  expression: MIT
+  evidence: LICENSE
+components:
+  - skills
+review:
+  disposition: approved
+  reviewer: example-maintainer
+  revision: "1111111111111111111111111111111111111111"
+  reviewedAt: "2026-09-01T00:00:00.000Z"
+  nextReviewAt: "2027-03-03T00:00:00.000Z"
+  note: null

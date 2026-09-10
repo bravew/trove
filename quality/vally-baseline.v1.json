@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "trove.vally-baseline.v1",
+  "tool": "@microsoft/vally-cli@0.15.0",
+  "findings": [
+    "trove-commit|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-explain|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 20.",
+    "trove-pulse-cn|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-pulse|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-release-notes|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-review|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-review|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 85.",
+    "trove-security-review|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 55.",
+    "trove-ship|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
+    "trove-ship|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 51.",
+    "trove-why|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 22."
+  ]
+}

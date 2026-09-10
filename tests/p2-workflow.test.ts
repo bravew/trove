@@ -19,10 +19,12 @@ beforeAll(buildOnceForTests, 120_000);
 
 // ─── Preamble tiers ────────────────────────────────────────
 
-test("preamble: tier-2 default injected with version stamp", () => {
+test("preamble: tier-2 default injected without a version stamp", () => {
   // trove-python uses {{PREAMBLE}} (no arg) — must produce tier 2 content.
+  // A version here would rewrite every skill body on every release; the version
+  // a host reads lives in the plugin manifest.
   const skill = fs.readFileSync(path.join(ROOT, "skills", "coding", "trove-python", "SKILL.md"), "utf-8");
-  expect(skill).toMatch(/Trove · v\d+\.\d+\.\d+/);
+  expect(skill).not.toMatch(/Trove · v\d+\.\d+\.\d+/);
   expect(skill).toContain("## Session Init");
   expect(skill).toContain("Prefer existing project patterns");
 });
@@ -33,10 +35,9 @@ test("preamble: tier files exist for all four tiers", () => {
   }
 });
 
-test("preamble: tier-1 omits Session Init section", () => {
+test("preamble: tier-1 is empty — no session bootstrap and no version stamp", () => {
   const tier1 = fs.readFileSync(path.join(ROOT, "templates", "preamble-tier-1.md"), "utf-8");
-  expect(tier1).toContain("Trove");
-  expect(tier1).not.toContain("Session Init");
+  expect(tier1.trim()).toBe("");
 });
 
 test("preamble: tier-3 adds routing pointer, tier-4 adds delegation reminder", () => {

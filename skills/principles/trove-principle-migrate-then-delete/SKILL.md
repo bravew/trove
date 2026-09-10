@@ -7,8 +7,6 @@ user-invocable: true
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
-
 # Principle: Migrate Callers Then Delete Legacy APIs
 
 For an internal API with no external consumers, migrate and delete in one wave. Don't leave a compatibility shim behind "for safety" — the shim becomes permanent.

@@ -50,6 +50,11 @@ export function findTemplates(skillsDir: string = path.join(ROOT, "skills")): Te
   }
 
   walk(skillsDir);
+  // Same filesystem-ordering hazard as `loadPlugins` below: every generator that
+  // walks templates inherits this order, and `deps.json` records it as object key
+  // order, so an unsorted walk makes the committed artifact differ between APFS
+  // and ext4.
+  templates.sort((a, b) => a.path.localeCompare(b.path));
   return templates;
 }
 
@@ -93,7 +98,7 @@ export function buildSkillToPlugins(plugins: PluginInfo[]): Map<string, PluginAt
   for (const plugin of plugins) {
     for (const skill of plugin.yaml.skills ?? []) {
       const skillName = path.basename(skill.path);
-      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents"];
+      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents", "copilot"];
       const attachment: PluginAttachment = {
         pluginName: plugin.name,
         pluginDescription: plugin.description,
@@ -129,7 +134,10 @@ export function resolvePlaceholders(
     projectRoot: partialContext?.projectRoot ?? defaults.projectRoot,
   };
 
-  return content.replace(/\{\{(\w+(?::[^}]+)?)\}\}/g, (_match, fullKey: string) => {
+  // The trailing newlines are captured so an empty expansion — tier 1 renders
+  // nothing now that the version stamp is gone — collapses instead of leaving a
+  // ragged gap where the placeholder line used to be.
+  return content.replace(/\{\{(\w+(?::[^}]+)?)\}\}(\n*)/g, (_match, fullKey: string, trailing: string) => {
     const parts = fullKey.split(":");
     const resolverName = parts[0];
     const args = parts.slice(1);
@@ -144,7 +152,7 @@ export function resolvePlaceholders(
       args: args.length > 0 ? args : undefined,
     };
     const result = resolver(ctx);
-    return result.value;
+    return result.value === "" ? "" : `${result.value}${trailing}`;
   });
 }
 

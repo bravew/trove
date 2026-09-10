@@ -1,0 +1,23 @@
+{
+  "name": "trove-product",
+  "description": "PM skills: specs, user stories, release notes, triage",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "product",
+    "spec",
+    "user-story",
+    "release-notes",
+    "triage"
+  ],
+  "category": "product",
+  "skills": [
+    "./.copilot/skills/trove-spec",
+    "./.copilot/skills/trove-user-story",
+    "./.copilot/skills/trove-release-notes"
+  ]
+}

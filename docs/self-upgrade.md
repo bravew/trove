@@ -66,6 +66,11 @@ cursor plugin marketplace add bravew/trove
 cursor plugin install trove-dev@trove
 cursor plugin install trove-workflow@trove
 
+# GitHub Copilot CLI
+copilot plugin marketplace update trove
+copilot plugin update trove-dev@trove
+copilot plugin update trove-workflow@trove
+
 # Codex / local projection
 cd ~/.trove && git pull && ./setup --host codex
 ```
@@ -96,4 +101,5 @@ by design; upgrade refuses to act when uncertain.
 
 - No automatic rollback on failure (manual: `git reflog` for git-backed installs).
 - No background polling — `update_check: true` only reminds when CLIs run.
-- No host-native marketplace upgrade orchestration (that's host territory).
+- `trove upgrade` does not update host-managed plugins; use the commands above
+  or rerun `./setup` for setup-owned Copilot plugins.

@@ -126,7 +126,7 @@ export interface HostConfig {
   stripPluginFields: string[];
 }
 
-export type HostName = "claude" | "cursor" | "codex" | "agents" | "opencode" | "gemini";
+export type HostName = "claude" | "cursor" | "codex" | "agents" | "opencode" | "gemini" | "copilot";
 
 export interface PluginYaml {
   name: string;

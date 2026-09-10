@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
+import { maintainedSkills } from "../scripts/lib/eval-structure";
 import {
   checkOffline,
   digestTree,
@@ -52,8 +53,10 @@ describe("upstream manifest boundary", () => {
     const manifest = loadUpstreamManifest(ROOT);
     expect(() => validateManifestInventory(manifest, ROOT)).not.toThrow();
     expect(manifest.version).toBe(2);
-    expect(manifest.skills).toHaveLength(53);
-    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(11);
+    // Derived from the catalog so adopting a skill does not require editing a
+    // count here; validateManifestInventory already proves the two agree.
+    expect(manifest.skills).toHaveLength(maintainedSkills(ROOT).length);
+    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(13);
   });
 
   test("scopes the English pulse slash-command rewrite to backtick form", () => {
@@ -1146,6 +1149,20 @@ describe("upstream workflow policy", () => {
     expect(serialized).toContain("gh pr list");
     expect(JSON.stringify(workflow.concurrency)).toContain("upstream-sync-update");
     expect(JSON.stringify(workflow.concurrency)).not.toContain("inputs.artifact");
+  });
+
+  test("keeps the sync token off every step that processes upstream clones", () => {
+    expect(JSON.stringify(update.env ?? {})).not.toContain("UPSTREAM_SYNC_TOKEN");
+    const tokenSteps = (update.steps as Record<string, unknown>[]).filter(
+      (step) => JSON.stringify(step.env ?? {}).includes("UPSTREAM_SYNC_TOKEN"),
+    );
+    expect(tokenSteps).toHaveLength(1);
+    expect(JSON.stringify(tokenSteps[0]?.run ?? "")).toContain("gh pr create");
+    for (const step of update.steps as Record<string, unknown>[]) {
+      const run = typeof step.run === "string" ? step.run : "";
+      if (!run.includes("sync:upstream")) continue;
+      expect(JSON.stringify(step.env ?? {})).not.toContain("UPSTREAM_SYNC_TOKEN");
+    }
   });
 
   test("describes the update artifact input as free-form", () => {

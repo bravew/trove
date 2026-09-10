@@ -1,0 +1,21 @@
+{
+  "name": "trove-research",
+  "description": "Research skills: last-30-days pulse across global and Chinese social platforms",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "social",
+    "trends",
+    "competitive-analysis"
+  ],
+  "category": "research",
+  "skills": [
+    "./.copilot/skills/trove-pulse",
+    "./.copilot/skills/trove-pulse-cn"
+  ]
+}

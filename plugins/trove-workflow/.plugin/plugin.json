@@ -1,0 +1,43 @@
+{
+  "name": "trove-workflow",
+  "description": "Workflow methodology skills and session bootstrap",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "workflow",
+    "methodology",
+    "bootstrap",
+    "planning"
+  ],
+  "category": "workflow",
+  "skills": [
+    "./.copilot/skills/using-trove",
+    "./.copilot/skills/trove-autoplan",
+    "./.copilot/skills/trove-ship",
+    "./.copilot/skills/trove-brainstorm",
+    "./.copilot/skills/trove-debug",
+    "./.copilot/skills/trove-plan",
+    "./.copilot/skills/trove-execute-plan",
+    "./.copilot/skills/trove-verify",
+    "./.copilot/skills/trove-dispatch",
+    "./.copilot/skills/trove-receive-review",
+    "./.copilot/skills/trove-worktree",
+    "./.copilot/skills/trove-write-skill",
+    "./.copilot/skills/trove-unslop",
+    "./.copilot/skills/trove-why",
+    "./.copilot/skills/trove-refactor",
+    "./.copilot/skills/trove-show-work",
+    "./.copilot/skills/trove-reflect",
+    "./.copilot/skills/trove-arena",
+    "./.copilot/skills/trove-principle-laziness",
+    "./.copilot/skills/trove-principle-data-shape",
+    "./.copilot/skills/trove-principle-type-discipline",
+    "./.copilot/skills/trove-principle-migrate-then-delete",
+    "./.copilot/skills/trove-principle-idempotency",
+    "./.copilot/skills/trove-principle-encode-in-structure"
+  ],
+  "hooks": "./.copilot/hooks.json"
+}

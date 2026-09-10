@@ -1,0 +1,6 @@
+{
+  "canonical": ["skills/coding/trove-typescript/references/patterns.md"],
+  "eval": ["evals/skill-evals/trove-typescript/rubric.yaml"],
+  "plugin": ["plugins/trove-security/hooks/security-check.sh"],
+  "global": ["hosts/copilot.ts"]
+}

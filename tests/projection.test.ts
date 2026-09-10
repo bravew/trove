@@ -167,6 +167,29 @@ test("plugin manifests: Claude and Cursor hook commands use their own root env v
   expect(cursorCommand).toBe("${CURSOR_PLUGIN_ROOT}/hooks/session-start.sh");
 });
 
+test("copilot: emits native manifests, strict skills, and vendor-neutral hook roots", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "plugins", "trove-workflow", ".plugin", "plugin.json"), "utf-8"),
+  );
+  expect(manifest.skills).toContain("./.copilot/skills/using-trove");
+  expect(manifest.hooks).toBe("./.copilot/hooks.json");
+  const hooks = fs.readFileSync(
+    path.join(ROOT, "plugins", "trove-workflow", ".copilot", "hooks.json"),
+    "utf-8",
+  );
+  expect(hooks).toContain("${PLUGIN_ROOT}/hooks/session-start.sh");
+  expect(hooks).not.toContain("CLAUDE_PLUGIN_ROOT");
+
+  const skill = fs.readFileSync(
+    path.join(ROOT, "plugins", "trove-workflow", ".copilot", "skills", "using-trove", "SKILL.md"),
+    "utf-8",
+  );
+  const frontmatter = skill.slice(4, skill.indexOf("\n---", 4));
+  expect(frontmatter).not.toMatch(/^allowed-tools:/m);
+  expect(frontmatter).not.toMatch(/^compatibility:/m);
+  expect(frontmatter).not.toMatch(/^metadata:/m);
+});
+
 test("cursor plugin manifest points to Cursor-projected SKILL.md files", () => {
   const cursor = JSON.parse(
     fs.readFileSync(path.join(ROOT, "plugins", "trove-dev", ".cursor-plugin", "plugin.json"), "utf-8"),

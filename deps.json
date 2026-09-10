@@ -1,38 +1,83 @@
 {
   "benefitsFrom": {
-    "trove-release-notes": [
-      "trove-unslop"
+    "trove-a11y": [],
+    "trove-architect": [
+      "trove-explain",
+      "trove-plan",
+      "trove-principle-data-shape",
+      "trove-principle-type-discipline"
     ],
-    "trove-spec": [
-      "trove-unslop",
+    "trove-arena": [
+      "trove-architect",
+      "trove-worktree"
+    ],
+    "trove-autoplan": [
+      "trove-release-notes",
+      "trove-spec",
       "trove-user-story"
     ],
-    "trove-user-story": [
-      "trove-unslop"
-    ],
-    "trove-pulse-cn": [],
-    "trove-pulse": [],
-    "trove-secret-scan": [],
-    "trove-terraform": [],
-    "trove-docker": [],
-    "trove-security-review": [
-      "trove-secret-scan"
-    ],
+    "trove-brainstorm": [],
     "trove-cdk": [
       "trove-principle-idempotency"
     ],
-    "trove-write-skill": [],
+    "trove-commit": [
+      "trove-unslop"
+    ],
+    "trove-component-spec": [],
     "trove-debug": [
       "trove-tdd"
     ],
+    "trove-design-review": [],
+    "trove-dispatch": [],
+    "trove-docker": [],
+    "trove-docs-sync-audit": [],
     "trove-execute-plan": [
       "trove-plan",
       "trove-verify"
     ],
-    "trove-worktree": [],
-    "trove-brainstorm": [],
-    "trove-commit": [
+    "trove-explain": [],
+    "trove-lambda": [
+      "trove-principle-idempotency"
+    ],
+    "trove-perf": [
+      "trove-verify"
+    ],
+    "trove-plan": [
+      "trove-brainstorm"
+    ],
+    "trove-principle-data-shape": [],
+    "trove-principle-encode-in-structure": [],
+    "trove-principle-idempotency": [],
+    "trove-principle-laziness": [],
+    "trove-principle-migrate-then-delete": [],
+    "trove-principle-type-discipline": [],
+    "trove-pulse": [],
+    "trove-pulse-cn": [],
+    "trove-python": [],
+    "trove-react": [],
+    "trove-react-best-practices": [],
+    "trove-react-native": [],
+    "trove-react-view-transitions": [],
+    "trove-receive-review": [],
+    "trove-refactor": [
+      "trove-principle-migrate-then-delete",
+      "trove-tdd",
+      "trove-verify"
+    ],
+    "trove-reflect": [
+      "trove-principle-encode-in-structure",
+      "trove-write-skill"
+    ],
+    "trove-release-notes": [
       "trove-unslop"
+    ],
+    "trove-review": [
+      "trove-secret-scan",
+      "trove-security-review"
+    ],
+    "trove-secret-scan": [],
+    "trove-security-review": [
+      "trove-secret-scan"
     ],
     "trove-ship": [
       "trove-commit",
@@ -40,81 +85,102 @@
       "trove-security-review",
       "trove-unslop"
     ],
-    "trove-autoplan": [
-      "trove-release-notes",
-      "trove-spec",
+    "trove-show-work": [],
+    "trove-spec": [
+      "trove-unslop",
       "trove-user-story"
     ],
-    "trove-why": [
-      "trove-explain"
-    ],
-    "trove-reflect": [
-      "trove-principle-encode-in-structure",
-      "trove-write-skill"
-    ],
-    "trove-arena": [
-      "trove-architect",
-      "trove-worktree"
-    ],
-    "trove-verify": [],
-    "trove-plan": [
-      "trove-brainstorm"
-    ],
-    "trove-unslop": [],
-    "trove-explain": [],
-    "trove-dispatch": [],
-    "trove-refactor": [
-      "trove-principle-migrate-then-delete",
-      "trove-tdd",
+    "trove-swift": [],
+    "trove-tdd": [
       "trove-verify"
     ],
-    "trove-receive-review": [],
-    "trove-show-work": [],
-    "using-trove": [],
-    "trove-react-native": [],
+    "trove-terraform": [],
+    "trove-test-gap-audit": [
+      "trove-tdd"
+    ],
     "trove-typescript": [
       "trove-principle-type-discipline",
       "trove-react"
     ],
-    "trove-react-best-practices": [],
-    "trove-vue": [],
-    "trove-swift": [],
-    "trove-perf": [
-      "trove-verify"
+    "trove-unslop": [],
+    "trove-user-story": [
+      "trove-unslop"
     ],
-    "trove-architect": [
-      "trove-explain",
-      "trove-plan",
-      "trove-principle-data-shape",
-      "trove-principle-type-discipline"
-    ],
-    "trove-lambda": [
-      "trove-principle-idempotency"
-    ],
-    "trove-tdd": [
-      "trove-verify"
-    ],
-    "trove-react": [],
-    "trove-react-view-transitions": [],
-    "trove-python": [],
-    "trove-principle-data-shape": [],
-    "trove-principle-encode-in-structure": [],
-    "trove-principle-laziness": [],
-    "trove-principle-idempotency": [],
-    "trove-principle-migrate-then-delete": [],
-    "trove-principle-type-discipline": [],
+    "trove-verify": [],
     "trove-visual-parity": [
       "trove-component-spec"
     ],
-    "trove-component-spec": [],
-    "trove-a11y": [],
-    "trove-design-review": [],
-    "trove-review": [
-      "trove-secret-scan",
-      "trove-security-review"
-    ]
+    "trove-vue": [],
+    "trove-why": [
+      "trove-explain"
+    ],
+    "trove-worktree": [],
+    "trove-write-skill": [],
+    "using-trove": []
   },
   "benefitsOf": {
+    "trove-architect": [
+      "trove-arena"
+    ],
+    "trove-brainstorm": [
+      "trove-plan"
+    ],
+    "trove-commit": [
+      "trove-ship"
+    ],
+    "trove-component-spec": [
+      "trove-visual-parity"
+    ],
+    "trove-explain": [
+      "trove-architect",
+      "trove-why"
+    ],
+    "trove-plan": [
+      "trove-architect",
+      "trove-execute-plan"
+    ],
+    "trove-principle-data-shape": [
+      "trove-architect"
+    ],
+    "trove-principle-encode-in-structure": [
+      "trove-reflect"
+    ],
+    "trove-principle-idempotency": [
+      "trove-cdk",
+      "trove-lambda"
+    ],
+    "trove-principle-migrate-then-delete": [
+      "trove-refactor"
+    ],
+    "trove-principle-type-discipline": [
+      "trove-architect",
+      "trove-typescript"
+    ],
+    "trove-react": [
+      "trove-typescript"
+    ],
+    "trove-release-notes": [
+      "trove-autoplan"
+    ],
+    "trove-review": [
+      "trove-ship"
+    ],
+    "trove-secret-scan": [
+      "trove-review",
+      "trove-security-review"
+    ],
+    "trove-security-review": [
+      "trove-review",
+      "trove-ship"
+    ],
+    "trove-spec": [
+      "trove-autoplan"
+    ],
+    "trove-tdd": [
+      "trove-debug",
+      "trove-refactor",
+      "trove-test-gap-audit"
+    ],
     "trove-unslop": [
       "trove-commit",
       "trove-release-notes",
@@ -126,78 +192,17 @@
       "trove-autoplan",
       "trove-spec"
     ],
-    "trove-secret-scan": [
-      "trove-review",
-      "trove-security-review"
-    ],
-    "trove-principle-idempotency": [
-      "trove-cdk",
-      "trove-lambda"
-    ],
-    "trove-tdd": [
-      "trove-debug",
-      "trove-refactor"
-    ],
-    "trove-plan": [
-      "trove-architect",
-      "trove-execute-plan"
-    ],
     "trove-verify": [
       "trove-execute-plan",
       "trove-perf",
       "trove-refactor",
       "trove-tdd"
     ],
-    "trove-review": [
-      "trove-ship"
-    ],
-    "trove-commit": [
-      "trove-ship"
-    ],
-    "trove-security-review": [
-      "trove-review",
-      "trove-ship"
-    ],
-    "trove-spec": [
-      "trove-autoplan"
-    ],
-    "trove-release-notes": [
-      "trove-autoplan"
-    ],
-    "trove-explain": [
-      "trove-architect",
-      "trove-why"
-    ],
-    "trove-write-skill": [
-      "trove-reflect"
-    ],
-    "trove-principle-encode-in-structure": [
-      "trove-reflect"
-    ],
     "trove-worktree": [
       "trove-arena"
     ],
-    "trove-architect": [
-      "trove-arena"
-    ],
-    "trove-brainstorm": [
-      "trove-plan"
-    ],
-    "trove-principle-migrate-then-delete": [
-      "trove-refactor"
-    ],
-    "trove-react": [
-      "trove-typescript"
-    ],
-    "trove-principle-type-discipline": [
-      "trove-architect",
-      "trove-typescript"
-    ],
-    "trove-principle-data-shape": [
-      "trove-architect"
-    ],
-    "trove-component-spec": [
-      "trove-visual-parity"
+    "trove-write-skill": [
+      "trove-reflect"
     ]
   },
   "cycles": [],

@@ -1,0 +1,8 @@
+{
+  "name": "fixture-plugin",
+  "description": "Copilot contract fixture",
+  "version": "2026.8.29",
+  "skills": ["./skill.valid.md"],
+  "agents": ["./agents/reviewer.md"],
+  "hooks": "./hooks/hooks.json"
+}

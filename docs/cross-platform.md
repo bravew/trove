@@ -2,15 +2,15 @@
 
 ## Platform Support Matrix
 
-| Feature | Claude Code | Cursor | Codex | OpenCode | Gemini CLI | AGENTS.md hosts |
-|---------|:-----------:|:------:|:-----:|:--------:|:----------:|:--------------:|
-| **Skills** | Full | Native Agent Skills + scoped rules | Full | Full | Bootstrap context | AGENTS.md |
-| **Bootstrap anchor** | SessionStart | `.mdc` fallback + hook manifest | Scoped `AGENTS.md` + skill | TS plugin system prompt | `GEMINI.md` extension context | Scoped `AGENTS.md` |
-| **Hooks / plugins** | Full | Partial | Native plugins | TS plugin | Extension manifest | No |
-| **Agents** | Full | Subagents | No | No | No | No |
-| **MCP servers** | Full | Full | Full | No | Extension-supported | No |
-| **Marketplace** | Native | Native | Native | Generated plugin | Generated extension | Manual |
-| **Auto-update** | Yes | Yes | Yes | Host-dependent | Host-dependent | No |
+| Feature | Claude Code | Cursor | Codex | Copilot CLI | OpenCode | Gemini CLI | AGENTS.md hosts |
+|---------|:-----------:|:------:|:-----:|:-----------:|:--------:|:----------:|:--------------:|
+| **Skills** | Full | Native Agent Skills + scoped rules | Full | Native plugin skills | Full | Bootstrap context | AGENTS.md |
+| **Bootstrap anchor** | SessionStart | `.mdc` fallback + hook manifest | Scoped `AGENTS.md` + skill | Installed skill; prompt hooks are interactive only | TS plugin system prompt | `GEMINI.md` extension context | Scoped `AGENTS.md` |
+| **Hooks / plugins** | Full | Partial | Native plugins | Native local plugins | TS plugin | Extension manifest | No |
+| **Agents** | Full | Subagents | No | Native | No | No | No |
+| **MCP servers** | Full | Full | Full | Native | No | Extension-supported | No |
+| **Marketplace** | Native | Native | Native | Native | Generated plugin | Generated extension | Manual |
+| **Auto-update** | Yes | Yes | Yes | Yes | Host-dependent | Host-dependent | No |
 
 > Discovery roots, honored frontmatter, the source consulted for each, and the
 > date it was verified live in [host-matrix.md](./host-matrix.md). Update that
@@ -26,6 +26,7 @@ kinds. Each host declares its projection kinds in `hosts/<name>.ts`:
 | Claude Code | `skill` | `skills/<category>/<skill>/SKILL.md` (in place) |
 | Cursor | `skill` + filtered `rule` | `output/cursor/.agents/skills/<skill>/SKILL.md` + `output/cursor/rules/<skill>.mdc` for glob/always-on rules |
 | Codex | `skill` | `output/codex/.agents/skills/<skill>/SKILL.md` |
+| GitHub Copilot CLI | `skill` | `plugins/<plugin>/.copilot/skills/<skill>/SKILL.md`, referenced by `.plugin/plugin.json` and `.github/plugin/marketplace.json` |
 | OpenCode | `skill` + plugin template | `output/opencode/.agents/skills/<skill>/SKILL.md` + `output/opencode/plugins/<plugin>/index.ts` |
 | Gemini CLI | `skill` + `gemini-extension` | `output/gemini/.agents/skills/<skill>/SKILL.md`, bundled into `output/gemini/plugins/<plugin>/skills/` alongside `gemini-extension.json` + `GEMINI.md` |
 | Generic (AGENTS.md) | `agents-section` | `output/agents/AGENTS.md` + `output/agents/plugins/<plugin>/AGENTS.md` |
@@ -75,7 +76,7 @@ Codex frontmatter is intentionally minimal: `name` and `description` only.
 
 ### Scoped AGENTS.md
 
-Tools that consume `AGENTS.md` (GitHub Copilot, Windsurf, Aider, JetBrains
+Tools that consume `AGENTS.md` (Windsurf, Aider, JetBrains
 Junie) use **nearest-scope precedence**: the closest file to the working
 directory wins. The build mirrors that model:
 
@@ -116,6 +117,22 @@ plugin's on-demand skills.
 The same files are also written to `output/gemini/.agents/skills/`, the
 workspace discovery root Gemini prefers over `.gemini/skills/`.
 
+### GitHub Copilot CLI plugins
+
+Copilot discovers `.plugin/plugin.json` before Claude-compatible fallback
+manifests. Trove points the manifest at `.copilot/skills/`, optional agents,
+`${PLUGIN_ROOT}` command hooks, and non-optional MCP servers. Project and
+personal skills or agents use first-found precedence and can shadow a plugin
+component with the same name; MCP servers use last-found precedence.
+
+Plugin hooks run in the local CLI. A prompt hook can contribute context only
+at interactive `sessionStart`; programmatic mode skips prompt hooks. Command
+hook stdout is parsed as JSON, and Trove's `sessionStart` hook emits
+`additionalContext`. The cloud coding agent uses
+repository hooks from `.github/hooks/*.json` and does not load a local CLI
+plugin's hooks. Trove also ships `using-trove` as an installed skill so the
+workflow remains discoverable outside command-hook context injection.
+
 ## Frontmatter projection per host
 
 Frontmatter is **rebuilt** from an explicit per-host allowlist in
@@ -124,18 +141,18 @@ list simply never appears. Authoring vocabulary (`preamble-tier`, `activation`,
 `triggers`, `benefits-from`, `host-overrides`) is a build input and reaches no
 host.
 
-| Authoring field | Claude | Cursor skill | Cursor rule | Strict hosts (Codex, OpenCode, Gemini) | Generic section |
-|---|---|---|---|---|---|
-| `name:` | Keep | Keep | Drop | Keep | Section heading |
-| `description:` | Flatten to one line | Flatten | Flatten | Flatten, plus folded trigger language | Italicized one-liner |
-| `activation.globs` | -> `paths:` | -> `paths:` | -> `globs:` | Omitted (no equivalent field) | Omitted |
-| `triggers` | -> `when_to_use:` | Omitted | Omitted | Folded into `description` | Omitted |
-| `activation.manual: true` | -> `disable-model-invocation: true` | -> `disable-model-invocation: true` | Omitted | Omitted | Omitted |
-| `user-invocable:` | Keep | **Omitted** — Cursor has no equivalent, and it is not the same as manual-only | Read for always-on selection | Omitted | Omitted |
-| `allowed-tools` | Keep (YAML list) | Omitted | Omitted | Omitted — the spec's space-separated encoding cannot represent `Bash(git *)` | Omitted |
-| `license`, `compatibility`, `metadata` | Keep | `metadata` only | Omitted | Keep | Omitted |
-| `context:`, `model:`, `effort:` | Keep | Omitted | Omitted | Omitted | Omitted |
-| `${CLAUDE_SKILL_DIR}` | Keep | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Strip |
+| Authoring field | Claude | Cursor skill | Cursor rule | Strict hosts (Codex, OpenCode, Gemini) | Copilot CLI | Generic section |
+|---|---|---|---|---|---|---|
+| `name:` | Keep | Keep | Drop | Keep | Keep | Section heading |
+| `description:` | Flatten to one line | Flatten | Flatten | Flatten, plus folded trigger language | Same strict projection | Italicized one-liner |
+| `activation.globs` | -> `paths:` | -> `paths:` | -> `globs:` | Omitted | Omitted | Omitted |
+| `triggers` | -> `when_to_use:` | Omitted | Omitted | Folded into `description` | Folded into `description` | Omitted |
+| `activation.manual: true` | -> `disable-model-invocation: true` | -> `disable-model-invocation: true` | Omitted | Omitted | Omitted | Omitted |
+| `user-invocable:` | Keep | Omitted | Read for always-on selection | Omitted | Omitted | Omitted |
+| `allowed-tools` | Keep (YAML list) | Omitted | Omitted | Omitted | Omitted initially; no pre-approval | Omitted |
+| `license`, `compatibility`, `metadata` | Keep | `metadata` only | Omitted | Keep | `license` only | Omitted |
+| `context:`, `model:`, `effort:` | Keep | Omitted | Omitted | Omitted | Omitted | Omitted |
+| `${CLAUDE_SKILL_DIR}` | Keep | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Rewrite -> `[skill-dir]` | Strip |
 
 ## Build pipeline
 
@@ -146,6 +163,7 @@ SKILL.md.tmpl
        ├─ Cursor        → output/cursor/.agents/skills/<skill>/SKILL.md
        │                  + output/cursor/rules/<skill>.mdc where needed
        ├─ OpenAI Codex  → output/codex/.agents/skills/<skill>/SKILL.md
+       ├─ Copilot CLI   → plugins/<plugin>/.copilot/skills/<skill>/SKILL.md
        ├─ OpenCode      → output/opencode/.agents/skills/<skill>/SKILL.md + plugin TS
        ├─ Gemini CLI    → output/gemini/.agents/skills/<skill>/SKILL.md
        │                  + output/gemini/plugins/<plugin>/{skills/,GEMINI.md}

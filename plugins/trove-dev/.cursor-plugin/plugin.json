@@ -1,7 +1,7 @@
 {
   "name": "trove-dev",
   "description": "Developer skills: coding patterns, code review, git workflow, debugging",
-  "version": "2026.7.4",
+  "version": "2026.8.29",
   "skills": [
     "./.agents/skills/trove-python",
     "./.agents/skills/trove-react",
@@ -11,6 +11,8 @@
     "./.agents/skills/trove-vue",
     "./.agents/skills/trove-swift",
     "./.agents/skills/trove-lambda",
+    "./.agents/skills/trove-test-gap-audit",
+    "./.agents/skills/trove-docs-sync-audit",
     "./.agents/skills/trove-review",
     "./.agents/skills/trove-commit",
     "./.agents/skills/trove-explain",

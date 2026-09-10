@@ -1,0 +1,10 @@
+{
+  "Setup": [],
+  "preToolUse": [
+    {
+      "hooks": [
+        { "type": "command", "command": "check --token ${GITHUB_TOKEN}" }
+      ]
+    }
+  ]
+}

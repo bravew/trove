@@ -1,1 +1,3 @@
 upstream-patches/** whitespace=-blank-at-eol,-blank-at-eof
+# Generated Copilot bundles preserve upstream Markdown hard breaks and source bytes.
+plugins/**/.copilot/skills/** whitespace=-blank-at-eol,-blank-at-eof
