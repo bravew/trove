@@ -68,6 +68,15 @@ jobs:
           VERSION=$(cat VERSION)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      # The version stamp reaches the generated manifests only through a build,
+      # so the release has to rebuild after the bump. Without this the commit
+      # declares the new VERSION while shipping artifacts built from the old one,
+      # which is how main came to carry 2026.8.29 over 2026.7.4 artifacts.
+      # `verify:generated` above already proved the tree was current beforehand,
+      # so everything this build rewrites is the bump and nothing else.
+      - run: bun run build
+        name: Restamp generated artifacts at the new version
+
       - name: Update CHANGELOG.md
         # Prepend a new entry using the same auto-generated body GitHub
         # puts in the Release below, so CHANGELOG.md and the Releases

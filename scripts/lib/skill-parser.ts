@@ -134,7 +134,10 @@ export function resolvePlaceholders(
     projectRoot: partialContext?.projectRoot ?? defaults.projectRoot,
   };
 
-  return content.replace(/\{\{(\w+(?::[^}]+)?)\}\}/g, (_match, fullKey: string) => {
+  // The trailing newlines are captured so an empty expansion — tier 1 renders
+  // nothing now that the version stamp is gone — collapses instead of leaving a
+  // ragged gap where the placeholder line used to be.
+  return content.replace(/\{\{(\w+(?::[^}]+)?)\}\}(\n*)/g, (_match, fullKey: string, trailing: string) => {
     const parts = fullKey.split(":");
     const resolverName = parts[0];
     const args = parts.slice(1);
@@ -149,7 +152,7 @@ export function resolvePlaceholders(
       args: args.length > 0 ? args : undefined,
     };
     const result = resolver(ctx);
-    return result.value;
+    return result.value === "" ? "" : `${result.value}${trailing}`;
   });
 }
 

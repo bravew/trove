@@ -192,7 +192,7 @@ Resolved by `scripts/resolvers/index.ts` at build time:
 | Placeholder | Resolves to |
 |-------------|-------------|
 | `{{PREAMBLE}}` | Tier-2 preamble (default) |
-| `{{PREAMBLE:1}}` | Tier 1 — minimal version stamp |
+| `{{PREAMBLE:1}}` | Tier 1 — renders nothing |
 | `{{PREAMBLE:3}}` | Tier 3 — adds routing pointer |
 | `{{PREAMBLE:4}}` | Tier 4 — orchestrator delegation reminder |
 | `{{VERSION}}` | Contents of the marketplace `VERSION` file |

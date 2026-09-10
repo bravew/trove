@@ -7,8 +7,6 @@ user-invocable: true
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.8.29
-
 # Principle: Laziness Protocol
 
 Aim for the most result with the least code and complexity. The best change is often a deletion.

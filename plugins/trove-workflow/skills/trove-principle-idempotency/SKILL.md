@@ -7,8 +7,6 @@ user-invocable: true
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.8.29
-
 # Principle: Make Operations Idempotent
 
 An operation should converge to the correct end state no matter how many times it runs or where it starts from.

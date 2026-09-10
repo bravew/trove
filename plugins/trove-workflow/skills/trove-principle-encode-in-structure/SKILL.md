@@ -7,8 +7,6 @@ user-invocable: true
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.8.29
-
 # Principle: Encode Lessons in Structure
 
 When the same instruction has to be written twice, the instruction is the symptom. Encode the lesson in structure so it enforces itself.
