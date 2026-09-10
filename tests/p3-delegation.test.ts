@@ -29,6 +29,16 @@ function loadDeps(): {
   return JSON.parse(fs.readFileSync(path.join(ROOT, "deps.json"), "utf-8"));
 }
 
+test("deps: keys are sorted so the committed artifact is filesystem-independent", () => {
+  // `fs.readdirSync` is filesystem-ordered, so an unsorted template walk made
+  // deps.json differ between a dev machine on APFS and CI on ext4.
+  const deps = loadDeps();
+  for (const map of [deps.benefitsFrom, deps.benefitsOf]) {
+    const keys = Object.keys(map);
+    expect(keys).toEqual([...keys].sort());
+  }
+});
+
 test("deps: artifact exists and lists every skill in benefitsFrom", () => {
   const deps = loadDeps();
   expect(deps.benefitsFrom).toBeDefined();

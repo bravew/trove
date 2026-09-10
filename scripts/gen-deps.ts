@@ -57,21 +57,31 @@ function build(): DepsArtifact {
     }
   }
 
-  // Sort each list for deterministic output. The CLI relies on stable
-  // ordering between runs; tests assert it.
-  for (const k of Object.keys(benefitsFrom)) benefitsFrom[k] = benefitsFrom[k].sort();
-  for (const k of Object.keys(benefitsOf)) benefitsOf[k] = benefitsOf[k].sort();
+  // Sort keys and lists for deterministic output. The CLI relies on stable
+  // ordering between runs; tests assert it. Key order matters as much as list
+  // order here because it is what JSON.stringify writes into the committed
+  // artifact, and insertion order would otherwise follow the template walk.
+  const sortByKey = (value: Record<string, string[]>): Record<string, string[]> =>
+    Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key].sort()]));
+  const sortedBenefitsFrom = sortByKey(benefitsFrom);
+  const sortedBenefitsOf = sortByKey(benefitsOf);
 
   const cycles = detectCycles(
     buildForwardGraph(
-      Object.entries(benefitsFrom).map(([name, benefitsFromList]) => ({
+      Object.entries(sortedBenefitsFrom).map(([name, benefitsFromList]) => ({
         name,
         benefitsFrom: benefitsFromList,
       })),
     ),
   );
 
-  return { benefitsFrom, benefitsOf, cycles, unknownReferences };
+  return {
+    benefitsFrom: sortedBenefitsFrom,
+    benefitsOf: sortedBenefitsOf,
+    cycles,
+    unknownReferences: [...unknownReferences].sort((a, b) =>
+      a.skill.localeCompare(b.skill) || a.missing.localeCompare(b.missing)),
+  };
 }
 
 const artifact = build();

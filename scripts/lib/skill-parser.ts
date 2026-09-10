@@ -50,6 +50,11 @@ export function findTemplates(skillsDir: string = path.join(ROOT, "skills")): Te
   }
 
   walk(skillsDir);
+  // Same filesystem-ordering hazard as `loadPlugins` below: every generator that
+  // walks templates inherits this order, and `deps.json` records it as object key
+  // order, so an unsorted walk makes the committed artifact differ between APFS
+  // and ext4.
+  templates.sort((a, b) => a.path.localeCompare(b.path));
   return templates;
 }
 
