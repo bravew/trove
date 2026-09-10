@@ -96,7 +96,7 @@ plugins:
       - dev
   - name: trove-doc
     source: trove-doc
-    description: "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping"
+    description: Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping
     category: documentation
     tags:
       - documentation
