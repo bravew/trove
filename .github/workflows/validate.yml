@@ -40,6 +40,17 @@ jobs:
           bun run build:deps -- --dry-run
         name: Check generated artifact freshness before build
 
+      - run: bun run scripts/validate-agentic-workflows.ts --base="$EVAL_BASE_REF" --head="$EVAL_HEAD_REF"
+        if: github.event_name == 'pull_request'
+        name: Block hand-edited generated agentic workflows
+        env:
+          EVAL_BASE_REF: ${{ github.event.pull_request.base.sha }}
+          EVAL_HEAD_REF: ${{ github.sha }}
+
+      - run: bun run scripts/validate-agentic-workflows.ts
+        if: github.event_name == 'push'
+        name: Check generated agentic workflow sources
+
       - run: bun run eval:structure:changed -- --base="$EVAL_BASE_REF" --head="$EVAL_HEAD_REF"
         if: github.event_name == 'pull_request'
         name: Check changed-skill eval structure

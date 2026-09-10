@@ -31,6 +31,7 @@
     "external:intake": "bun run scripts/external-plugin-intake.ts",
     "external:review": "bun run scripts/external-plugin-review.ts",
     "external:rereview": "bun run scripts/external-plugin-review.ts --due",
+    "advisory:catalog": "bun run scripts/catalog-advisory.ts",
     "test:acceptance": "tests/acceptance/harness-bootstrap.sh",
     "test:acceptance:artifacts": "tests/acceptance/run-artifact-checks.sh",
     "test:acceptance:setup": "tests/acceptance/setup-links.sh",

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { skillsAffectedByFiles, validateEvalStructure } from "../scripts/lib/eval-structure";
+import { maintainedSkills, skillsAffectedByFiles, validateEvalStructure } from "../scripts/lib/eval-structure";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const fixture = JSON.parse(fs.readFileSync(
@@ -27,7 +27,8 @@ describe("deterministic eval structure", () => {
   });
 
   test("host and generator changes fan out to all maintained skills", () => {
-    expect(skillsAffectedByFiles(ROOT, fixture.global).length).toBe(53);
+    // Derived, not a literal: a new skill must not need this count edited.
+    expect(skillsAffectedByFiles(ROOT, fixture.global)).toEqual(maintainedSkills(ROOT));
   });
 
   test("all required suites have tasks and valid rubrics", () => {

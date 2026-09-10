@@ -1,0 +1,44 @@
+diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
+index f23d1d6..e95ea30 100644
+--- a/SKILL.md.tmpl
++++ b/SKILL.md.tmpl
+@@ -1,7 +1,21 @@
+ ---
+ name: trove-docs-sync-audit
+-description: Run a read-only documentation drift audit for a feature, PR, branch, release, API, configuration change, workflow, CLI, package, or repository area. Use when the user asks whether docs are stale, missing, inconsistent with code, or need updates after code changes. Checks README files, setup guides, API docs, env docs, changelogs, examples, comments, generated docs, and user-facing instructions. This is not a general code review; it compares what the docs claim against what the code does.
++description: |
++  Read-only documentation drift audit comparing what the docs claim against what the
++  code does. Covers READMEs, setup guides, API and env docs, changelogs, examples,
++  and generated docs. Use when asked whether docs are stale, missing, or inconsistent
++  after a code change. This is not a code review.
++preamble-tier: 2
++user-invocable: true
++triggers:
++  - are the docs stale
++  - do the docs match the code
++  - documentation drift
++  - what docs need updating
+ license: MIT
++metadata:
++  source: github/awesome-copilot
++  upstream-skill: docs-sync-audit
+ ---
+ 
+ {{PREAMBLE}}
+@@ -152,11 +166,11 @@ When the user asks to update docs:
+ 
+ ## Related Skills
+ 
+-This skill is one of seven review skills that share a single report contract:
+-every finding carries a `P0`-`P3` severity and a `path:line` you can open.
+-`test-gap-audit` is the other one in this repository. The remaining five cover
+-launch readiness, security, repo structure, improvement ideas, and pull
+-request communication, at https://github.com/specialone0007/review-skills.
++This skill shares one report contract with the other Trove audit skills: every
++finding carries a `P0`-`P3` severity and a `path:line` you can open. Route to
++`trove-test-gap-audit` for missing test coverage, `trove-review` for a code
++review of the diff, and `trove-doc` when the drift is confirmed and the docs
++need writing rather than auditing.
+ 
+ ## Agent Portability Notes
+ 

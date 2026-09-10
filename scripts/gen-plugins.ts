@@ -540,6 +540,8 @@ function writeGeminiArtifacts(pluginName: string, plugin: PluginYaml): void {
 function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
   if (!plugin.skills) return;
 
+  pruneUnlistedBundledSkills(pluginName, plugin);
+
   for (const skill of plugin.skills) {
     const skillName = path.basename(skill.path);
     const skillSourceDir = findSkillSource(skillName, pluginName);
@@ -575,6 +577,28 @@ function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
         copyDirRecursive(src, path.join(destDir, subdir));
       }
     }
+  }
+}
+
+/**
+ * Drops bundled skill directories the manifest no longer lists.
+ *
+ * The Cursor and Copilot copies wipe their whole destination root first, but
+ * this one cannot: for Claude the source directory can *be* the destination,
+ * so a blanket wipe would delete the canonical skill. Removing a skill from
+ * plugin.yaml therefore used to leave its bundle behind, and the freshness
+ * dry-run saw nothing wrong because it only compares files a generator writes.
+ */
+function pruneUnlistedBundledSkills(pluginName: string, plugin: PluginYaml): void {
+  const skillsRoot = path.join(PLUGINS_DIR, pluginName, "skills");
+  if (!fs.existsSync(skillsRoot)) return;
+  const listed = new Set((plugin.skills ?? []).map((skill) => path.basename(skill.path)));
+  for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || listed.has(entry.name)) continue;
+    const orphan = path.join(skillsRoot, entry.name);
+    if (findSkillSource(entry.name, pluginName) === orphan) continue;
+    fs.rmSync(orphan, { recursive: true, force: true });
+    console.log(`  PRUNED: plugins/${pluginName}/skills/${entry.name}`);
   }
 }
 

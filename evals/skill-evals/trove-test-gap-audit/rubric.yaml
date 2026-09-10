@@ -1,0 +1,18 @@
+criteria:
+  scope_respected:
+    weight: 3
+    description: "Audits the named scope only when one is given; audits the repository and picks important paths when none is"
+  gaps_grounded_in_code:
+    weight: 3
+    description: "Every reported gap cites a concrete path:line and the behavior that is untested, not a generic category"
+  risk_prioritized:
+    weight: 2
+    description: "Findings carry P0-P3 severity that reflects blast radius, not file size or alphabetical order"
+  respects_local_conventions:
+    weight: 2
+    description: "Recommended tests match the repository's existing framework, layout, and assertion style"
+  stays_an_audit:
+    weight: 2
+    description: "Reports gaps rather than writing the tests or drifting into a bug hunt or security review"
+
+min_pass_score: 7.0

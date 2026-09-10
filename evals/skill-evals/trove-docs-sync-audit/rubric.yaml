@@ -1,0 +1,18 @@
+criteria:
+  drift_is_evidenced:
+    weight: 3
+    description: "Each finding pairs the doc claim with the code that contradicts it, both with path:line"
+  distinguishes_stale_from_missing:
+    weight: 3
+    description: "Separates documentation that is wrong from documentation that was never written, and treats wrong as more urgent"
+  covers_the_right_surfaces:
+    weight: 2
+    description: "Checks README, setup, env, API, CLI, changelog, and examples rather than only the top-level README"
+  generated_docs_handled:
+    weight: 2
+    description: "Routes generated documentation back to its generator instead of proposing edits to generated output"
+  stays_an_audit:
+    weight: 2
+    description: "Reports drift rather than rewriting the docs, and does not drift into a code review"
+
+min_pass_score: 7.0

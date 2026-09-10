@@ -27,9 +27,13 @@
     "trove-release-notes": [
       "trove-unslop"
     ],
+    "trove-docs-sync-audit": [],
     "trove-review": [
       "trove-secret-scan",
       "trove-security-review"
+    ],
+    "trove-test-gap-audit": [
+      "trove-tdd"
     ],
     "trove-plan": [
       "trove-brainstorm"
@@ -141,6 +145,11 @@
       "trove-review",
       "trove-ship"
     ],
+    "trove-tdd": [
+      "trove-debug",
+      "trove-refactor",
+      "trove-test-gap-audit"
+    ],
     "trove-brainstorm": [
       "trove-plan"
     ],
@@ -149,10 +158,6 @@
       "trove-perf",
       "trove-refactor",
       "trove-tdd"
-    ],
-    "trove-tdd": [
-      "trove-debug",
-      "trove-refactor"
     ],
     "trove-principle-migrate-then-delete": [
       "trove-refactor"

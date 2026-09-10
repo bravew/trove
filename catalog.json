@@ -86,6 +86,8 @@
         "trove-vue",
         "trove-swift",
         "trove-lambda",
+        "trove-test-gap-audit",
+        "trove-docs-sync-audit",
         "trove-review",
         "trove-commit",
         "trove-explain",

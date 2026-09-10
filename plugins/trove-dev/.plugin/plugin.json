@@ -25,6 +25,8 @@
     "./.copilot/skills/trove-vue",
     "./.copilot/skills/trove-swift",
     "./.copilot/skills/trove-lambda",
+    "./.copilot/skills/trove-test-gap-audit",
+    "./.copilot/skills/trove-docs-sync-audit",
     "./.copilot/skills/trove-review",
     "./.copilot/skills/trove-commit",
     "./.copilot/skills/trove-explain",

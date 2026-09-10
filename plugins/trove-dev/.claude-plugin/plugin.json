@@ -14,6 +14,8 @@
     "./skills/trove-vue",
     "./skills/trove-swift",
     "./skills/trove-lambda",
+    "./skills/trove-test-gap-audit",
+    "./skills/trove-docs-sync-audit",
     "./skills/trove-review",
     "./skills/trove-commit",
     "./skills/trove-explain",

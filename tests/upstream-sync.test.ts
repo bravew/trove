@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
+import { maintainedSkills } from "../scripts/lib/eval-structure";
 import {
   checkOffline,
   digestTree,
@@ -52,8 +53,10 @@ describe("upstream manifest boundary", () => {
     const manifest = loadUpstreamManifest(ROOT);
     expect(() => validateManifestInventory(manifest, ROOT)).not.toThrow();
     expect(manifest.version).toBe(2);
-    expect(manifest.skills).toHaveLength(53);
-    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(11);
+    // Derived from the catalog so adopting a skill does not require editing a
+    // count here; validateManifestInventory already proves the two agree.
+    expect(manifest.skills).toHaveLength(maintainedSkills(ROOT).length);
+    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(13);
   });
 
   test("scopes the English pulse slash-command rewrite to backtick form", () => {

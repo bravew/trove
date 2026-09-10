@@ -44,6 +44,12 @@ skills:
     auto_attach:
       globs: ["**/lambda_handler.py", "**/lambda_function.py"]
 
+  - path: ./skills/trove-test-gap-audit
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
+
+  - path: ./skills/trove-docs-sync-audit
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
+
   - path: ./skills/trove-review
     platforms: [claude, cursor, codex, agents, gemini, copilot]
 

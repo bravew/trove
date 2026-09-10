@@ -209,6 +209,65 @@ sources:
         patches:
           - upstream-patches/trove-pulse-cn/local.patch
         status: active
+  - id: awesome-copilot
+    repository: https://github.com/github/awesome-copilot.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: per-skill-frontmatter
+    artifacts:
+      - id: trove-test-gap-audit
+        upstream_path: skills/test-gap-audit
+        local_path: skills/review/trove-test-gap-audit
+        base_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba
+        base_tree_digest: sha256:96f37fa7990730d7d195fed7ec238ae93124e3f02c8f8ba5f3b7b0b018cf349c
+        local_tree_digest: sha256:b395dcf03135e5a06c40e7eb468022af69d0d0a974fb2c3e3f5e1fc2d75ff48b
+        patch_digest: sha256:b584cdbc00c4f73e5eaf037470a8cbbfaa46c3dec5ee95d39d952f3f0077f038
+        checked_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba
+        checked_at: "2026-09-09T00:00:00Z"
+        candidate_sha: null
+        imported_at: "2026-09-09T00:00:00Z"
+        include:
+          - SKILL.md
+          - scripts/**
+        exclude: []
+        path_map:
+          SKILL.md: SKILL.md.tmpl
+        transforms:
+          - kind: rename-skill
+            from: test-gap-audit
+            to: trove-test-gap-audit
+          - kind: inject-preamble
+            marker: "{{PREAMBLE}}"
+        patches:
+          - upstream-patches/trove-test-gap-audit/local.patch
+        status: active
+      - id: trove-docs-sync-audit
+        upstream_path: skills/docs-sync-audit
+        local_path: skills/review/trove-docs-sync-audit
+        base_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba
+        base_tree_digest: sha256:18436e1a71d392b99e6e67506e23989f0b1316bbc7200ea5020502bc8089d16e
+        local_tree_digest: sha256:ac77f718a1ce3f8d37c1c877774926b22df1ffcde6106a6285ba74e25955da57
+        patch_digest: sha256:33ea1e99bb85328dcb44b3eeee4ea87e1c6d429aebec6d0d0c4dfa520292ea14
+        checked_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba
+        checked_at: "2026-09-09T00:00:00Z"
+        candidate_sha: null
+        imported_at: "2026-09-09T00:00:00Z"
+        include:
+          - SKILL.md
+          - scripts/**
+        exclude: []
+        path_map:
+          SKILL.md: SKILL.md.tmpl
+        transforms:
+          - kind: rename-skill
+            from: docs-sync-audit
+            to: trove-docs-sync-audit
+          - kind: inject-preamble
+            marker: "{{PREAMBLE}}"
+        patches:
+          - upstream-patches/trove-docs-sync-audit/local.patch
+        status: active
   - id: cursor-pstack
     repository: https://github.com/cursor/plugins.git
     ref: main
@@ -245,7 +304,9 @@ skills:
   - { local_path: skills/product/trove-user-story, origin: original }
   - { local_path: skills/research/trove-pulse, origin: adapted, source_id: last30days-skill, upstream_path: skills/last30days, evidence_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8 }
   - { local_path: skills/research/trove-pulse-cn, origin: adapted, source_id: last30days-skill-cn, upstream_path: skills/last30days, evidence_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f }
+  - { local_path: skills/review/trove-docs-sync-audit, origin: adapted, source_id: awesome-copilot, upstream_path: skills/docs-sync-audit, evidence_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba }
   - { local_path: skills/review/trove-review, origin: original }
+  - { local_path: skills/review/trove-test-gap-audit, origin: adapted, source_id: awesome-copilot, upstream_path: skills/test-gap-audit, evidence_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba }
   - { local_path: skills/shared/trove-cdk, origin: original }
   - { local_path: skills/shared/trove-docker, origin: original }
   - { local_path: skills/shared/trove-secret-scan, origin: original }
@@ -285,6 +346,17 @@ external_records:
     note: Hosted MCP endpoint only; there is no repository pin.
 
 not_vendored:
+  awesome-copilot:
+    # Reviewed and declined for the pilot. github-actions-hardening declares no
+    # `license:` in its SKILL.md frontmatter at the pinned revision, and this
+    # manifest verifies per-skill frontmatter evidence, so vendoring it would
+    # mean weakening the license check. Revisit if upstream adds the field.
+    - github-actions-hardening
+    - quality-playbook
+    - agentic-eval
+    - security-review
+    - suggest-awesome-github-copilot-skills
+    - copilot-usage-metrics
   vercel-agent-skills:
     - composition-patterns
     - deploy-to-vercel
