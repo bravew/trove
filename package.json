@@ -24,6 +24,9 @@
     "eval:changed": "bun run scripts/eval-runner.ts --changed",
     "eval:structure": "bun run scripts/eval-runner.ts --structure",
     "eval:structure:changed": "bun run scripts/eval-runner.ts --structure --changed",
+    "quality:report": "bun run scripts/quality-report.ts --scope=all",
+    "quality:report:changed": "bun run scripts/quality-report.ts --scope=changed",
+    "quality:render": "bun run scripts/quality-report.ts",
     "test:acceptance": "tests/acceptance/harness-bootstrap.sh",
     "test:acceptance:artifacts": "tests/acceptance/run-artifact-checks.sh",
     "test:acceptance:setup": "tests/acceptance/setup-links.sh",
@@ -40,6 +43,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@microsoft/vally-cli": "0.15.0",
     "@types/bun": "^1.3.13",
     "typescript": "^7.0.2"
   },

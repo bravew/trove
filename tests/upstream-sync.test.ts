@@ -1148,6 +1148,20 @@ describe("upstream workflow policy", () => {
     expect(JSON.stringify(workflow.concurrency)).not.toContain("inputs.artifact");
   });
 
+  test("keeps the sync token off every step that processes upstream clones", () => {
+    expect(JSON.stringify(update.env ?? {})).not.toContain("UPSTREAM_SYNC_TOKEN");
+    const tokenSteps = (update.steps as Record<string, unknown>[]).filter(
+      (step) => JSON.stringify(step.env ?? {}).includes("UPSTREAM_SYNC_TOKEN"),
+    );
+    expect(tokenSteps).toHaveLength(1);
+    expect(JSON.stringify(tokenSteps[0]?.run ?? "")).toContain("gh pr create");
+    for (const step of update.steps as Record<string, unknown>[]) {
+      const run = typeof step.run === "string" ? step.run : "";
+      if (!run.includes("sync:upstream")) continue;
+      expect(JSON.stringify(step.env ?? {})).not.toContain("UPSTREAM_SYNC_TOKEN");
+    }
+  });
+
   test("describes the update artifact input as free-form", () => {
     const inputs = (workflow.on as { workflow_dispatch: { inputs: Record<string, { description?: string; default?: string }> } })
       .workflow_dispatch.inputs;

@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BASE_TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 FIXTURE_ROOT="$(mktemp -d "$BASE_TMP/trove-copilot-smoke.XXXXXX")"
 EXPECTED_CLI_VERSION="${COPILOT_EXPECTED_VERSION:-1.0.69}"
+COPILOT_BIN="${COPILOT_BIN:-copilot}"
 
 cleanup() {
   [[ "${KEEP_COPILOT_FIXTURE:-}" == "1" ]] || rm -rf "$FIXTURE_ROOT"
@@ -41,8 +42,8 @@ isolated() {
     "$@"
 }
 
-command -v copilot >/dev/null || { echo "copilot CLI not found" >&2; exit 127; }
-actual_version="$(copilot --version | sed -nE 's/.* ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n1)"
+command -v "$COPILOT_BIN" >/dev/null || { echo "copilot CLI not found: $COPILOT_BIN" >&2; exit 127; }
+actual_version="$(isolated "$COPILOT_BIN" --version | sed -nE 's/.* ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n1)"
 if [[ "$EXPECTED_CLI_VERSION" != "latest" && "$actual_version" != "$EXPECTED_CLI_VERSION" ]]; then
   echo "Expected Copilot CLI $EXPECTED_CLI_VERSION, got ${actual_version:-unknown}" >&2
   exit 1
@@ -50,8 +51,8 @@ fi
 
 git -C "$ROOT" status --porcelain=v1 --untracked-files=all > "$FIXTURE_ROOT/status.before"
 cd "$FIXTURE_ROOT/work"
-isolated copilot plugin marketplace add "$ROOT" >/dev/null
-isolated copilot plugin marketplace browse trove > "$FIXTURE_ROOT/browse.txt"
+isolated "$COPILOT_BIN" plugin marketplace add "$ROOT" >/dev/null
+isolated "$COPILOT_BIN" plugin marketplace browse trove > "$FIXTURE_ROOT/browse.txt"
 
 plugins=()
 while IFS= read -r plugin; do
@@ -59,7 +60,7 @@ while IFS= read -r plugin; do
 done < <(bun "$ROOT/scripts/select-plugins.ts" all copilot)
 for plugin in "${plugins[@]}"; do
   grep -Fq "$plugin" "$FIXTURE_ROOT/browse.txt" || { echo "browse omitted $plugin" >&2; exit 1; }
-  isolated copilot plugin install "$plugin@trove" >/dev/null
+  isolated "$COPILOT_BIN" plugin install "$plugin@trove" >/dev/null
 done
 
 isolated bun "$ROOT/scripts/verify-copilot-install.ts" "$ROOT" "$FIXTURE_ROOT/copilot-home"

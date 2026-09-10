@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bravew/trove/schemas/quality-report.v1.schema.json",
+  "title": "Trove quality report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "repository", "scope", "rules", "tools", "checks", "hardBlockers", "dimensions", "score", "coverage", "trend"],
+  "properties": {
+    "schemaVersion": { "const": "trove.quality-report.v1" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "base": { "type": "string" },
+        "head": { "type": "string" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "files", "skills", "plugins"],
+      "properties": {
+        "kind": { "enum": ["all", "changed"] },
+        "files": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "skills": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "plugins": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "formula", "vallyBaseline"],
+      "properties": {
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "formula": { "const": "trove-score-v1" },
+        "vallyBaseline": { "const": "quality/vally-baseline.v1.json" }
+      }
+    },
+    "tools": { "type": "object", "additionalProperties": { "type": "string" } },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+    "hardBlockers": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "dimensions": { "type": "array", "items": { "$ref": "#/$defs/dimension" } },
+    "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+    "coverage": { "type": "number", "minimum": 0, "maximum": 100 },
+    "trend": { "$ref": "#/$defs/trend" }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "severity", "rule", "message"],
+      "properties": {
+        "source": { "type": "string" },
+        "severity": { "enum": ["error", "warning"] },
+        "rule": { "type": "string" },
+        "message": { "type": "string" },
+        "skill": { "type": "string" },
+        "baseline": { "type": "boolean" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "blocking", "findings"],
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "enum": ["passed", "failed", "skipped", "unavailable"] },
+        "blocking": { "type": "boolean" },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "weight", "status", "numerator", "denominator", "evidence"],
+      "properties": {
+        "id": { "type": "string" },
+        "weight": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["passed", "failed", "unavailable"] },
+        "numerator": { "type": ["number", "null"] },
+        "denominator": { "type": "number", "minimum": 0 },
+        "evidence": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "trend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "dimensionDeltas"],
+      "properties": {
+        "status": { "enum": ["compared", "unavailable", "incomparable"] },
+        "reason": { "type": "string" },
+        "dimensionDeltas": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    }
+  }
+}

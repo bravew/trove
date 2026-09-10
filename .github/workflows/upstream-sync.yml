@@ -84,7 +84,9 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+      # UPSTREAM_SYNC_TOKEN is deliberately not a job-level variable: the
+      # "Update one artifact" step clones untrusted upstream repositories, and
+      # only the pull-request step needs the credential.
       ARTIFACT: ${{ inputs.artifact }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,6 +141,7 @@ jobs:
       - name: Create pull request if needed
         if: steps.result.outputs.conclusion == 'updated'
         env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           BRANCH: ${{ steps.commit.outputs.branch }}
         run: |
           if [[ -z $(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number') ]]; then

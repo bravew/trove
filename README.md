@@ -185,6 +185,7 @@ Calendar-versioned (`YYYY.M.D`). The `release.yml` workflow owns `VERSION`, the 
 - [MCP Integration](docs/mcp-integration.md) — declare external servers; per-host projection
 - [Orchestration](docs/orchestration.md) — meta-skills, sub-agent delegation, `benefits-from` graph
 - [Eval System](docs/eval-system.md) — per-skill rubrics, LLM-as-judge, gate-blocking criteria
+- [Quality Reporting](docs/quality-reporting.md) — deterministic gates, Vally baseline, scorecard, and trends
 
 **Cross-cutting**
 - [Cross-Platform Guide](docs/cross-platform.md) — host capabilities, projection model, frontmatter projection
