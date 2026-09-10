@@ -1,0 +1,17 @@
+criteria:
+  scoped_routing:
+    weight: 2
+    description: "Uses Bases only for Obsidian .base files or explicit note views, not SQL databases, spreadsheets, or generic tables."
+  valid_schema:
+    weight: 3
+    description: "Emits parseable YAML with valid filters and views, and defines every referenced formula property."
+  correct_formulas:
+    weight: 3
+    description: "Handles absent properties and zero values correctly, uses numeric Duration fields, and preserves property namespaces."
+  preserves_vault_data:
+    weight: 3
+    description: "Scopes the view from existing note properties without silently rewriting source notes or replacing unrelated views."
+  honest_verification:
+    weight: 2
+    description: "Separates YAML and formula-reference checks from evaluation and rendering in Obsidian; identifies optional view dependencies."
+min_pass_score: 7.0

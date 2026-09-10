@@ -100,6 +100,21 @@
         "weibo",
         "xiaohongshu"
       ]
+    },
+    {
+      "name": "trove-doc",
+      "source": "./plugins/trove-doc",
+      "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
+      "category": "documentation",
+      "keywords": [
+        "documentation",
+        "obsidian",
+        "markdown",
+        "bases",
+        "json-canvas",
+        "notes",
+        "web-clip"
+      ]
     }
   ]
 }

@@ -249,6 +249,43 @@
         "trove-pulse",
         "trove-pulse-cn"
       ]
+    },
+    {
+      "name": "trove-doc",
+      "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
+      "category": "documentation",
+      "tags": [
+        "documentation",
+        "obsidian",
+        "markdown",
+        "bases",
+        "json-canvas",
+        "notes",
+        "web-clip"
+      ],
+      "roles": [
+        "dev",
+        "design",
+        "pm"
+      ],
+      "version": "2026.9.10",
+      "source": "./plugins/trove-doc",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ],
+      "skills": [
+        "trove-obsidian-markdown",
+        "trove-obsidian-bases",
+        "trove-json-canvas",
+        "trove-obsidian-cli",
+        "trove-web-clip"
+      ]
     }
   ]
 }

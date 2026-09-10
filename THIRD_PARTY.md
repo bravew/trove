@@ -53,6 +53,24 @@ Not vendored: `assets/`, `tests/`, `fixtures/`, `hooks/`, `agents/`, and the
 root development copies (the installable payload under `skills/last30days/` is
 what Trove vendors).
 
+## Obsidian skills
+
+The five skills in `trove-doc` are adapted from
+[kepano/obsidian-skills](https://github.com/kepano/obsidian-skills/tree/a1dc48e68138490d522c04cbf5822214c6eb1202)
+at `a1dc48e68138490d522c04cbf5822214c6eb1202`, under the MIT license.
+Copyright (c) 2026 Steph Ango (@kepano). Every adapted skill carries the full
+upstream notice in `references/LICENSE.md`, which is copied into host bundles.
+
+Trove retains the Markdown, Bases, JSON Canvas, and CLI scopes and exposes
+the upstream `defuddle` workflow as `trove-web-clip`. The workflows and focused
+references are maintained as local adaptations with pinned provenance in
+`upstream.yaml`; they are not enrolled in automatic byte synchronization.
+The [extraction review](dev-doc/2026-09-obsidian-skills-extraction.md) records
+the selection, behavioral changes, and official references used for corrections.
+
+Defuddle and Obsidian are optional external tools and are not vendored.
+The upstream marketplace manifests and installation instructions are not shipped.
+
 ## Curated plugin records
 
 The Sentry and Figma curated records point to external repositories at the full

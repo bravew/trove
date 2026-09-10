@@ -28,6 +28,7 @@ import {
   type TemplateFile,
 } from "./lib/skill-parser";
 import { checkGeneratedFreshness } from "./lib/generated-freshness";
+import { isUnownedSupportName } from "./lib/support-files";
 
 const ROOT = process.env.TROVE_GENERATOR_ROOT ?? path.resolve(import.meta.dir, "..");
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -365,8 +366,16 @@ console.log(`GENERATED: catalog.json`);
 
 interface AgentsSection {
   skillName: string;
+  sourceDirectory: string;
   description: string;
   body: string;
+}
+
+interface AgentsPluginArtifact {
+  outputPath: string;
+  content: string;
+  pluginName: string;
+  references: Array<{ source: string; destination: string }>;
 }
 
 function buildAgentsSection(template: TemplateFile, parsed: ParsedTemplate, host: HostConfig): AgentsSection {
@@ -377,8 +386,12 @@ function buildAgentsSection(template: TemplateFile, parsed: ParsedTemplate, host
     .filter((line) => !line.startsWith("<!-- AUTO-GENERATED") && !line.startsWith("<!-- Regenerate:"))
     .join("\n")
     .trim();
+  // Scoped files inline several skills whose reference filenames may collide.
+  // Keep each reference tree intact and qualify links by the owning skill.
+  body = body.replace(/\]\((?:\.\/)?references\//g, `](./skills/${template.skillName}/references/`);
   return {
     skillName: template.skillName,
+    sourceDirectory: path.dirname(template.path),
     description: parsed.authoring.description,
     body,
   };
@@ -390,8 +403,8 @@ function assembleScopedAgents(
   skillToPlugins: Map<string, PluginAttachment[]>,
   sections: Map<string, AgentsSection>,
   host: HostConfig,
-): { rootArtifact: { outputPath: string; content: string }; pluginArtifacts: Array<{ outputPath: string; content: string; pluginName: string }> } {
-  const pluginArtifacts: Array<{ outputPath: string; content: string; pluginName: string }> = [];
+): { rootArtifact: { outputPath: string; content: string }; pluginArtifacts: AgentsPluginArtifact[] } {
+  const pluginArtifacts: AgentsPluginArtifact[] = [];
   const rootPluginSkills: Array<{ plugin: PluginInfo; sections: AgentsSection[] }> = [];
   for (const plugin of plugins) {
     const sectionsForPlugin: AgentsSection[] = [];
@@ -443,6 +456,13 @@ function assembleScopedAgents(
       pluginName: plugin.name,
       outputPath: pluginAgentsPath,
       content,
+      references: sectionsForPlugin.flatMap((section) => {
+        const source = path.join(section.sourceDirectory, "references");
+        return fs.existsSync(source) ? [{
+          source,
+          destination: path.join(path.dirname(pluginAgentsPath), "skills", section.skillName, "references"),
+        }] : [];
+      }),
     });
   }
 
@@ -525,6 +545,12 @@ if (agentsHosts.length > 0) {
     for (const p of pluginArtifacts) {
       fs.mkdirSync(path.dirname(p.outputPath), { recursive: true });
       fs.writeFileSync(p.outputPath, p.content);
+      for (const reference of p.references) {
+        fs.cpSync(reference.source, reference.destination, {
+          recursive: true,
+          filter: (source) => !isUnownedSupportName(path.basename(source)),
+        });
+      }
       console.log(`GENERATED: ${path.relative(ROOT, p.outputPath)}`);
     }
   }
