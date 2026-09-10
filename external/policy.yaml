@@ -1,0 +1,47 @@
+# External plugin intake policy.
+#
+# Every field here is a hard gate. The intake script reads this file; no
+# threshold is duplicated in workflow YAML, so changing policy is one reviewed
+# diff rather than an edit spread across GitHub Actions expressions.
+schemaVersion: trove.external-policy.v1
+
+# Only these source hosts may appear in a record. Copilot resolves a plugin
+# from a repository, so a non-repository host has no reviewable revision.
+allowedHosts:
+  - github.com
+
+# SPDX expressions Trove will distribute. Anything else is a submitter fix,
+# not a maintainer override.
+allowedLicenses:
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - MIT
+  - MPL-2.0
+
+# Component types an external plugin may declare in its manifest. Hooks and
+# MCP servers execute code or open network egress on a contributor machine,
+# so they stay out of the first policy.
+allowedComponents:
+  - skills
+  - agents
+  - commands
+
+prohibitedComponents:
+  - hooks
+  - mcpServers
+  - lspServers
+  - extensions
+
+# Re-review cadence. Stored as explicit record data, never inferred from a
+# GitHub timestamp such as issue closure.
+reviewIntervalDays: 183
+
+# Sandbox bounds applied to every clone of untrusted content.
+sandbox:
+  maximumCloneBytes: 33554432
+  maximumFileCount: 4000
+  maximumFileBytes: 1048576
+  cloneTimeoutSeconds: 120
+  installTimeoutSeconds: 300

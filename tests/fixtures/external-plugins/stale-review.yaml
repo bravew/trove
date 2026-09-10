@@ -1,0 +1,21 @@
+schemaVersion: trove.external-plugin.v1
+name: stale-review
+description: Approved record whose explicit re-review date has already passed
+submitter: example-submitter
+source:
+  host: github.com
+  repository: example-org/example-skills
+  subdirectory: .
+  sha: "1111111111111111111111111111111111111111"
+license:
+  expression: MIT
+  evidence: LICENSE
+components:
+  - skills
+review:
+  disposition: approved
+  reviewer: example-maintainer
+  revision: "1111111111111111111111111111111111111111"
+  reviewedAt: "2025-01-01T00:00:00.000Z"
+  nextReviewAt: "2025-07-03T00:00:00.000Z"
+  note: null

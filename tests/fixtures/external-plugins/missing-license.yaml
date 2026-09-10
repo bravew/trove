@@ -1,0 +1,21 @@
+schemaVersion: trove.external-plugin.v1
+name: missing-license
+description: Declares a license expression outside the intake policy allowlist
+submitter: example-submitter
+source:
+  host: github.com
+  repository: example-org/example-skills
+  subdirectory: .
+  sha: "1111111111111111111111111111111111111111"
+license:
+  expression: LicenseRef-Proprietary
+  evidence: LICENSE
+components:
+  - skills
+review:
+  disposition: proposed
+  reviewer: null
+  revision: null
+  reviewedAt: null
+  nextReviewAt: null
+  note: null

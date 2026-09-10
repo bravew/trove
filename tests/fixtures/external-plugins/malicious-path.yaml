@@ -1,0 +1,21 @@
+schemaVersion: trove.external-plugin.v1
+name: malicious-path
+description: Points its subdirectory outside the sandboxed clone directory
+submitter: example-submitter
+source:
+  host: github.com
+  repository: example-org/example-skills
+  subdirectory: ../../../etc
+  sha: "1111111111111111111111111111111111111111"
+license:
+  expression: MIT
+  evidence: LICENSE
+components:
+  - skills
+review:
+  disposition: proposed
+  reviewer: null
+  revision: null
+  reviewedAt: null
+  nextReviewAt: null
+  note: null

@@ -1,0 +1,71 @@
+name: External plugin re-review
+
+# Scheduled six-month re-review. The due date is explicit record data
+# (`review.nextReviewAt`), never inferred from a GitHub timestamp such as issue
+# closure, so a policy change or a migration stays understandable.
+
+on:
+  schedule:
+    - cron: "23 7 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  due:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.11
+
+      - run: bun ci
+        name: Install pinned dependencies
+
+      - name: Find records past their review date
+        id: due
+        run: |
+          bun run scripts/external-plugin-review.ts --due --output="$RUNNER_TEMP/external-rereview.v1.json" | tee "$RUNNER_TEMP/due.txt"
+          count="$(jq '.due | length' "$RUNNER_TEMP/external-rereview.v1.json")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          {
+            echo "# External plugin re-review"
+            echo
+            if [[ "$count" == "0" ]]; then
+              echo "No external plugin record is past its review date."
+            else
+              jq -r '.due[] | "- `\(.name)` was due \(.nextReviewAt) at revision `\(.revision)`"' "$RUNNER_TEMP/external-rereview.v1.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update one tracking issue
+        if: steps.due.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="External plugin re-review due"
+          body="$(jq -r '"The following external plugin records are past their explicit review date.\n\n" + (.due | map("- `" + .name + "` due " + .nextReviewAt + " at revision `" + .revision + "`") | join("\n")) + "\n\nA maintainer resolves each with `/external keep <record>`, `/external needs-changes <record>`, or `/external remove <record>`."' "$RUNNER_TEMP/external-rereview.v1.json")"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue edit "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label external-plugin
+          fi
+
+      - name: Upload the due list
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: external-plugin-rereview
+          path: ${{ runner.temp }}/external-rereview.v1.json
+          if-no-files-found: warn
+          retention-days: 90

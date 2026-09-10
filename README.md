@@ -186,6 +186,7 @@ Calendar-versioned (`YYYY.M.D`). The `release.yml` workflow owns `VERSION`, the 
 - [Orchestration](docs/orchestration.md) — meta-skills, sub-agent delegation, `benefits-from` graph
 - [Eval System](docs/eval-system.md) — per-skill rubrics, LLM-as-judge, gate-blocking criteria
 - [Quality Reporting](docs/quality-reporting.md) — deterministic gates, Vally baseline, scorecard, and trends
+- [External Plugins](docs/external-plugins.md) — intake policy, sandboxed gate, review state machine, re-review
 
 **Cross-cutting**
 - [Cross-Platform Guide](docs/cross-platform.md) — host capabilities, projection model, frontmatter projection
