@@ -127,10 +127,11 @@ component with the same name; MCP servers use last-found precedence.
 
 Plugin hooks run in the local CLI. A prompt hook can contribute context only
 at interactive `sessionStart`; programmatic mode skips prompt hooks. Command
-hook output is not inserted as model context. The cloud coding agent uses
+hook stdout is parsed as JSON, and Trove's `sessionStart` hook emits
+`additionalContext`. The cloud coding agent uses
 repository hooks from `.github/hooks/*.json` and does not load a local CLI
-plugin's hooks. Trove therefore ships `using-trove` as an installed skill and
-does not claim Claude-style `additionalContext` behavior on Copilot.
+plugin's hooks. Trove also ships `using-trove` as an installed skill so the
+workflow remains discoverable outside command-hook context injection.
 
 ## Frontmatter projection per host
 

@@ -92,8 +92,24 @@ case "$HOST" in
     fi
     ;;
   copilot)
-    echo "Copilot CLI headless acceptance is not supported by current GitHub docs."
-    echo "Use the AGENTS.md fallback and paste an interactive transcript if needed."
+    assert_file_contains "$ROOT/plugins/trove-workflow/.plugin/plugin.json" '"hooks": "\./\.copilot/hooks\.json"' \
+      "Copilot workflow manifest must reference its native hook file"
+    assert_file_contains "$ROOT/plugins/trove-workflow/.copilot/skills/using-trove/SKILL.md" \
+      '^name: using-trove$' \
+      "Copilot workflow plugin must bundle using-trove"
+    copilot_hook_output="$(COPILOT_CLI=1 "$ROOT/plugins/trove-workflow/hooks/session-start.sh")"
+    grep -Fq '"additionalContext"' <<< "$copilot_hook_output" || {
+      echo "Copilot SessionStart hook did not emit the generic JSON envelope" >&2
+      exit 1
+    }
+    security_output="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git reset --hard"}}' | \
+      "$ROOT/plugins/trove-security/hooks/security-check.sh")"
+    grep -Fq '"permissionDecision": "deny"' <<< "$security_output" || {
+      echo "Copilot PreToolUse fixture was not denied" >&2
+      exit 1
+    }
+    echo "copilot command-hook fixtures passed"
+    echo "Prompt hooks require a new interactive session; -p/programmatic mode cannot cover them."
     check_manual_transcript_or_print "$HOST"
     ;;
   cursor)

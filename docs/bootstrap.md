@@ -7,7 +7,7 @@ Trove workflow bootstrap starts with the `trove-workflow` plugin.
 ## Host Paths
 
 - Claude Code: `plugins/trove-workflow/hooks/session-start.sh` emits `hookSpecificOutput.additionalContext`.
-- Copilot CLI: the native `trove-workflow` plugin installs `using-trove` as a skill. Local command hooks run, but their output is not inserted as model context. Prompt hooks can add context only for interactive `sessionStart`; programmatic mode skips them. The cloud coding agent reads repository hooks from `.github/hooks/*.json` instead of local plugin hooks.
+- Copilot CLI: the native `trove-workflow` plugin installs `using-trove` as a skill. Local command-hook stdout is parsed as JSON; Trove emits `additionalContext` from `sessionStart`. Prompt hooks can add context only for interactive `sessionStart`, while programmatic mode skips them. The cloud coding agent reads repository hooks from `.github/hooks/*.json` instead of local plugin hooks.
 - Cursor: the hook remains in the plugin manifest, `output/cursor/.agents/skills/using-trove/SKILL.md` is emitted as a native skill, and `output/cursor/rules/using-trove.mdc` is always-apply while Cursor hook context is unreliable.
 - Codex and generic AGENTS.md hosts: scoped `AGENTS.md` files contain a bootstrap pointer to `.agents/skills/using-trove/SKILL.md`.
 - OpenCode: `output/opencode/plugins/trove-workflow/index.ts` prepends the anchor through the host plugin surface.

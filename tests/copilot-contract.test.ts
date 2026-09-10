@@ -20,6 +20,7 @@ import {
 } from "../scripts/lib/hooks";
 
 const FIXTURES = path.join(import.meta.dir, "acceptance", "fixtures", "copilot");
+const ROOT = path.resolve(import.meta.dir, "..");
 const fixture = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
 
 test("copilot contract pins the locally verified singular CLI surface", () => {
@@ -78,4 +79,27 @@ test("copilot duplicate fixture records first-found skill and agent precedence",
 test("copilot marketplace fixture pins plugin versions to the repository version", () => {
   const marketplace = fixture("marketplace.valid.json") as { metadata: { version: string }; plugins: Array<{ version: string }> };
   expect(marketplace.plugins.every((plugin) => plugin.version === marketplace.metadata.version)).toBe(true);
+});
+
+test("validation and release block on pinned native install checks before build", () => {
+  const validate = fs.readFileSync(path.join(ROOT, ".github", "workflows", "validate.yml"), "utf8");
+  const release = fs.readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  const upstream = fs.readFileSync(path.join(ROOT, ".github", "workflows", "upstream-sync.yml"), "utf8");
+
+  for (const workflow of [validate, release, upstream]) {
+    const versions = [...workflow.matchAll(/bun-version:\s*([^\s]+)/g)].map((match) => match[1]);
+    expect(versions.length).toBeGreaterThan(0);
+    expect(new Set(versions)).toEqual(new Set(["1.3.11"]));
+  }
+  for (const workflow of [validate, release]) {
+    const build = workflow.indexOf("      - run: bun run build\n");
+    expect(workflow.indexOf("@github/copilot@1.0.69")).toBeLessThan(build);
+    expect(workflow.indexOf("Check generated artifact freshness before build")).toBeLessThan(build);
+  }
+  expect(release.indexOf("bun run test:acceptance:copilot")).toBeLessThan(
+    release.indexOf("      - run: bun run build\n"),
+  );
+  expect(validate).toContain("bun run test:acceptance:copilot");
+  expect(validate).toContain("@github/copilot@latest");
+  expect(validate).toContain("COPILOT_EXPECTED_VERSION: latest");
 });
