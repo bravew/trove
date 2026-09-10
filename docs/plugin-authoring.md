@@ -85,6 +85,11 @@ bun run validate      # frontmatter, naming, hooks, MCP, secrets
 > keep using `plugins/<plugin>/skills/<name>/`.
 > Copilot gets a third bundle at `.copilot/skills/<name>/`, with its documented
 > four-field frontmatter subset and supporting files.
+>
+> Scoped `AGENTS.md` output carries reference files under
+> `skills/<skill>/references/` beside the scoped document. The generator rewrites
+> inline Markdown links into `references/` to point at that per-skill copy.
+> Keep these directories with the scoped file when distributing it.
 
 ### 5. Test locally
 
@@ -116,7 +121,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [testing, unit-test, e2e]
-category: development                    # development | design | product | security | infrastructure | observability | research
+category: development                    # development | design | product | security | infrastructure | observability | research | documentation
 roles: [dev]                             # dev | design | pm | devops
 
 skills:

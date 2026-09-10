@@ -39,6 +39,18 @@ Each skill is listed under its owning plugin. The **Triggers** column is natural
 | **trove-typescript** | TypeScript type-system discipline for any .ts/.tsx file: make illegal states unrepresentable, validate at boundaries, avoid as/any. Use when reading or editing TypeScript that isn't covered by a framework-specific skill. Defers to trove-react / trove-react-best-practices on .tsx component work. | `typescript best practices`, `type this correctly`, `make illegal states unrepresentable` | `**/*.ts`, `**/*.tsx` |
 | **trove-vue** | Vue 3 Composition API conventions and best practices. Auto-activates when working with Vue single-file components. Covers reactivity, component patterns, Vue Router, and Pinia state management. | `vue component`, `composition api`, `pinia store` | `**/*.vue` |
 
+## trove-doc
+
+> Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping
+
+| Skill | What it does | Triggers | Paths |
+|-------|--------------|----------|-------|
+| **trove-json-canvas** | Create, edit, and validate JSON Canvas .canvas files with text, file, link, and group nodes and directed edges. Use for portable visual boards and Obsidian canvases, not HTML canvas code, images, slides, or Mermaid diagrams. | `create a JSON Canvas board`, `edit an Obsidian canvas`, `repair a canvas file` | `**/*.canvas` |
+| **trove-obsidian-bases** | Create and repair Obsidian Bases .base files with note filters, formulas, table or card views, grouping, and summaries. Use for Obsidian note views, not SQL databases, spreadsheets, or generic tables. | `create an Obsidian Base`, `fix a Bases formula`, `build a view of my Obsidian notes` | `**/*.base` |
+| **trove-obsidian-cli** | Use the Obsidian CLI to search, read, and make requested changes to an established vault, or inspect an Obsidian plugin during development. Use for explicit Obsidian app operations; requires an available desktop CLI. | `search my Obsidian vault`, `update a note through Obsidian CLI`, `debug my Obsidian plugin` | — |
+| **trove-obsidian-markdown** | Create and edit Obsidian notes with properties, wikilinks, block references, embeds, and callouts. Use for Markdown in a confirmed Obsidian vault or an explicit request for Obsidian syntax, not ordinary repository Markdown. | `edit an Obsidian note`, `add wikilinks to my vault`, `add an Obsidian callout` | — |
+| **trove-web-clip** | Extract readable Markdown from a supplied web page or HTML file, preserving source attribution and useful structure. Use for article clipping or clean page extraction, with optional Defuddle CLI support and host-tool fallbacks. | `clip this article as Markdown`, `extract clean content from this page`, `save this web page to my notes` | — |
+
 ## trove-infra
 
 > Infrastructure and DevOps automation

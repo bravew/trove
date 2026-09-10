@@ -1,0 +1,17 @@
+criteria:
+  valid_canvas:
+    weight: 3
+    description: "Produces parseable JSON Canvas 1.0 with required typed fields and valid edge endpoints."
+  identity_and_preservation:
+    weight: 3
+    description: "Preserves existing string IDs, extensions, unrelated nodes, and z-order; does not require hexadecimal IDs."
+  useful_layout:
+    weight: 2
+    description: "Uses readable spacing and geometric groups with background groups below their members."
+  verifies_integrity:
+    weight: 3
+    description: "Checks duplicate IDs, dangling edges, dimensions, field enums, escaping, and available file targets before reporting success."
+  scoped_routing:
+    weight: 2
+    description: "Does not substitute JSON Canvas for an HTML canvas, image, slide, or Mermaid request."
+min_pass_score: 7.0

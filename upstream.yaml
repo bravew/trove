@@ -276,6 +276,17 @@ sources:
       evidence: pstack/.cursor-plugin/plugin.json
     artifacts: []
 
+  - id: obsidian-skills
+    repository: https://github.com/kepano/obsidian-skills.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: LICENSE
+    # Curated adaptations with pinned provenance, like the pstack principles.
+    # No automatic byte sync: workflows and focused references are maintained
+    # locally. See dev-doc/2026-09-obsidian-skills-extraction.md.
+    artifacts: []
+
 skills:
   - { local_path: skills/coding/trove-architect, origin: original }
   - { local_path: skills/coding/trove-lambda, origin: original }
@@ -293,6 +304,11 @@ skills:
   - { local_path: skills/design/trove-component-spec, origin: original }
   - { local_path: skills/design/trove-design-review, origin: original }
   - { local_path: skills/design/trove-visual-parity, origin: original }
+  - { local_path: skills/documentation/trove-obsidian-markdown, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-markdown, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
+  - { local_path: skills/documentation/trove-obsidian-bases, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-bases, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
+  - { local_path: skills/documentation/trove-json-canvas, origin: adapted, source_id: obsidian-skills, upstream_path: skills/json-canvas, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
+  - { local_path: skills/documentation/trove-obsidian-cli, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-cli, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
+  - { local_path: skills/documentation/trove-web-clip, origin: adapted, source_id: obsidian-skills, upstream_path: skills/defuddle, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
   - { local_path: skills/principles/trove-principle-data-shape, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-foundational-thinking, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
   - { local_path: skills/principles/trove-principle-encode-in-structure, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-encode-lessons-in-structure, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
   - { local_path: skills/principles/trove-principle-idempotency, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-make-operations-idempotent, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }

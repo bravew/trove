@@ -94,3 +94,19 @@ plugins:
     roles:
       - pm
       - dev
+  - name: trove-doc
+    source: trove-doc
+    description: "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping"
+    category: documentation
+    tags:
+      - documentation
+      - obsidian
+      - markdown
+      - bases
+      - json-canvas
+      - notes
+      - web-clip
+    roles:
+      - dev
+      - design
+      - pm

@@ -1,0 +1,33 @@
+name: trove-doc
+description: "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [documentation, obsidian, markdown, bases, json-canvas, notes, web-clip]
+category: documentation
+roles: [dev, design, pm]
+
+skills:
+  - path: ./skills/trove-obsidian-markdown
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-obsidian-bases
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    auto_attach:
+      globs: ["**/*.base"]
+  - path: ./skills/trove-json-canvas
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    auto_attach:
+      globs: ["**/*.canvas"]
+  - path: ./skills/trove-obsidian-cli
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-web-clip
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []

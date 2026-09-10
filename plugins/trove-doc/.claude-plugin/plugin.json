@@ -1,0 +1,15 @@
+{
+  "name": "trove-doc",
+  "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
+  "version": "2026.9.10",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "skills": [
+    "./skills/trove-obsidian-markdown",
+    "./skills/trove-obsidian-bases",
+    "./skills/trove-json-canvas",
+    "./skills/trove-obsidian-cli",
+    "./skills/trove-web-clip"
+  ]
+}

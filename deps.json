@@ -36,8 +36,16 @@
       "trove-verify"
     ],
     "trove-explain": [],
+    "trove-json-canvas": [],
     "trove-lambda": [
       "trove-principle-idempotency"
+    ],
+    "trove-obsidian-bases": [
+      "trove-obsidian-markdown"
+    ],
+    "trove-obsidian-cli": [],
+    "trove-obsidian-markdown": [
+      "trove-obsidian-cli"
     ],
     "trove-perf": [
       "trove-verify"
@@ -111,6 +119,9 @@
       "trove-component-spec"
     ],
     "trove-vue": [],
+    "trove-web-clip": [
+      "trove-obsidian-markdown"
+    ],
     "trove-why": [
       "trove-explain"
     ],
@@ -134,6 +145,13 @@
     "trove-explain": [
       "trove-architect",
       "trove-why"
+    ],
+    "trove-obsidian-cli": [
+      "trove-obsidian-markdown"
+    ],
+    "trove-obsidian-markdown": [
+      "trove-obsidian-bases",
+      "trove-web-clip"
     ],
     "trove-plan": [
       "trove-architect",

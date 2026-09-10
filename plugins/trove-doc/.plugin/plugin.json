@@ -1,0 +1,27 @@
+{
+  "name": "trove-doc",
+  "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
+  "version": "2026.9.10",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "documentation",
+    "obsidian",
+    "markdown",
+    "bases",
+    "json-canvas",
+    "notes",
+    "web-clip"
+  ],
+  "category": "documentation",
+  "skills": [
+    "./.copilot/skills/trove-obsidian-markdown",
+    "./.copilot/skills/trove-obsidian-bases",
+    "./.copilot/skills/trove-json-canvas",
+    "./.copilot/skills/trove-obsidian-cli",
+    "./.copilot/skills/trove-web-clip"
+  ]
+}

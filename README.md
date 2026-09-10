@@ -2,7 +2,7 @@
 
 Open-source plugin marketplace for AI coding assistants. Author skills once in Markdown — ship them to **Claude Code**, **Cursor**, **OpenAI Codex**, **GitHub Copilot CLI**, **OpenCode**, **Gemini CLI**, and any tool that reads `AGENTS.md`.
 
-**7 first-party plugins, 53 first-party skills, 7 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
+**8 first-party plugins, 60 first-party skills, 7 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
 
 ## Install
 
@@ -69,6 +69,7 @@ cd ~/.trove && git pull && ./setup
 | **trove-security** | All | Security review, secret scanning, OWASP / STRIDE patterns |
 | **trove-infra** | DevOps | Terraform, AWS CDK, Docker patterns |
 | **trove-research** | PMs and engineers | Last-30-days pulse across global and Chinese social platforms |
+| **[trove-doc](plugins/trove-doc/README.md)** | Note authors and researchers | Obsidian Markdown, Bases, JSON Canvas, vault operations, and web clipping |
 
 Optional MCP connector metadata lives on role plugins such as `trove-design`, `trove-product`, and `trove-security`. Curated external plugins are added only when they project as installable marketplace entries.
 
