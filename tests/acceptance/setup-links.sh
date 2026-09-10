@@ -138,8 +138,11 @@ env HOME="$FAKE_HOME" TROVE_HOME="$FAKE_HOME/.trove" COPILOT_HOME="$COPILOT_TEST
   { cat "$TMP/copilot-dev.log"; echo "Copilot dev setup failed"; exit 1; }
 check "changing roles removes the previously owned Copilot selection" \
   '! grep -Fxq "trove-design@trove" "$COPILOT_TEST_HOME/plugins"'
-check "the dev role converges to its four native plugins" \
-  '[ "$(wc -l < "$FAKE_HOME/.trove/installed-copilot-plugins.txt" | tr -d " ")" -eq 4 ]'
+# The expected set comes from the same selector the installer uses, so adding a
+# plugin to the dev role updates this assertion instead of breaking it.
+expected_dev_plugins=$(bun "$REPO/scripts/select-plugins.ts" dev copilot | sort)
+check "the dev role converges to exactly its native plugins" \
+  '[ "$(sort "$FAKE_HOME/.trove/installed-copilot-plugins.txt")" = "$expected_dev_plugins" ]'
 
 echo "── Reversibility ──"
 check "the installer records what it linked" \
