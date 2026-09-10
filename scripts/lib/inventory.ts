@@ -12,7 +12,7 @@ import { ROOT, findTemplates, loadPlugins } from "./skill-parser";
  */
 const SHIPPED_VERSION = fs.readFileSync(path.join(ROOT, "VERSION"), "utf-8").trim();
 
-const DEFAULT_SKILL_PLATFORMS = ["claude", "cursor", "codex", "agents"];
+const DEFAULT_SKILL_PLATFORMS = ["claude", "cursor", "codex", "agents", "copilot"];
 
 export interface SkillDeprecationWindow {
   until?: string;

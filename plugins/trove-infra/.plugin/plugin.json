@@ -1,0 +1,24 @@
+{
+  "name": "trove-infra",
+  "description": "Infrastructure and DevOps automation",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "infrastructure",
+    "aws",
+    "terraform",
+    "cdk",
+    "docker",
+    "devops"
+  ],
+  "category": "infrastructure",
+  "skills": [
+    "./.copilot/skills/trove-terraform",
+    "./.copilot/skills/trove-cdk",
+    "./.copilot/skills/trove-docker"
+  ]
+}

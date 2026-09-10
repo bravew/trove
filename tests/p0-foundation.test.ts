@@ -44,6 +44,9 @@ test("hosts: capabilities reflect intended projection surfaces", () => {
   // Codex — inline skill, no rule files, treats AGENTS.md as fallback
   expect(byName.codex.capabilities.supportsInlineSkill).toBe(true);
   expect(byName.codex.capabilities.supportsAgentsMd).toBe(true);
+  expect(byName.copilot.skillProjection).toBe("strict");
+  expect(byName.copilot.capabilities.supportsInlineSkill).toBe(true);
+  expect(byName.copilot.capabilities.supportsToolAllowlistMetadata).toBe(false);
   // Generic agents — AGENTS.md only
   expect(byName.agents.capabilities.supportsAgentsMd).toBe(true);
   expect(byName.agents.capabilities.supportsInlineSkill).toBe(false);

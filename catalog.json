@@ -13,7 +13,7 @@
       "roles": [
         "dev"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-workflow",
       "platforms": [
         "claude",
@@ -21,7 +21,8 @@
         "codex",
         "agents",
         "opencode",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "using-trove",
@@ -66,14 +67,15 @@
       "roles": [
         "dev"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-dev",
       "platforms": [
         "claude",
         "cursor",
         "codex",
         "agents",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "trove-python",
@@ -106,14 +108,15 @@
       "roles": [
         "design"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-design",
       "platforms": [
         "claude",
         "cursor",
         "codex",
         "agents",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "trove-design-review",
@@ -136,14 +139,15 @@
       "roles": [
         "pm"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-product",
       "platforms": [
         "claude",
         "cursor",
         "codex",
         "agents",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "trove-spec",
@@ -165,14 +169,15 @@
         "dev",
         "devops"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-security",
       "platforms": [
         "claude",
         "cursor",
         "codex",
         "agents",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "trove-security-review",
@@ -194,14 +199,15 @@
       "roles": [
         "devops"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-infra",
       "platforms": [
         "claude",
         "cursor",
         "codex",
         "agents",
-        "gemini"
+        "gemini",
+        "copilot"
       ],
       "skills": [
         "trove-terraform",
@@ -226,7 +232,7 @@
         "pm",
         "dev"
       ],
-      "version": "2026.7.4",
+      "version": "2026.8.29",
       "source": "./plugins/trove-research",
       "platforms": [
         "claude",
@@ -234,7 +240,8 @@
         "codex",
         "agents",
         "gemini",
-        "opencode"
+        "opencode",
+        "copilot"
       ],
       "skills": [
         "trove-pulse",

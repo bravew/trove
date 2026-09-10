@@ -1,0 +1,26 @@
+{
+  "name": "trove-security",
+  "description": "Security review and vulnerability scanning",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "owasp",
+    "secrets",
+    "vulnerability",
+    "audit"
+  ],
+  "category": "security",
+  "skills": [
+    "./.copilot/skills/trove-security-review",
+    "./.copilot/skills/trove-secret-scan"
+  ],
+  "agents": [
+    "./agents/security-reviewer.md"
+  ],
+  "hooks": "./.copilot/hooks.json"
+}

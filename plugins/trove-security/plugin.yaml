@@ -11,10 +11,10 @@ roles: [dev, devops]
 
 skills:
   - path: ./skills/trove-security-review
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
 
   - path: ./skills/trove-secret-scan
-    platforms: [claude, cursor, codex, agents, gemini]
+    platforms: [claude, cursor, codex, agents, gemini, copilot]
 
 agents:
   - path: ./agents/security-reviewer.md

@@ -6,7 +6,7 @@ when_to_use: "design review; review the design; visual fidelity check"
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
+> Trove · v2026.8.29
 
 ## Session Init
 

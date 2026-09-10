@@ -13,8 +13,8 @@ plugins/*/output/
 # directly with no build step (matches the pattern used by
 # anthropics/claude-code/plugins and anthropics/claude-plugins-official).
 # The release workflow regenerates them. CI freshness checks for
-# build:skills, build:routing, and build:deps catch stale copies; adding
-# --dry-run support to build:plugins and build:marketplace is a TODO.
+# every generator's --dry-run mode catches stale committed copies before a
+# normal build can repair them.
 #
 # Tracked distribution paths (do NOT add to .gitignore):
 #   - .claude-plugin/marketplace.json     ← Claude marketplace catalog
@@ -26,6 +26,9 @@ plugins/*/output/
 #   - plugins/*/.claude-plugin/plugin.json
 #   - plugins/*/.cursor-plugin/plugin.json
 #   - plugins/*/.codex-plugin/plugin.json
+#   - plugins/*/.plugin/plugin.json       ← Copilot native manifest
+#   - plugins/*/.copilot/                 ← Copilot component bundle
+#   - .github/plugin/marketplace.json     ← Copilot native marketplace
 
 # OS
 .DS_Store

@@ -5,7 +5,7 @@ description: "Feature and design brainstorming gate. Use before implementing a n
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
+> Trove · v2026.8.29
 
 ## Session Init
 

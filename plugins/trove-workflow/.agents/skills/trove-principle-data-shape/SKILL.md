@@ -5,7 +5,7 @@ description: "Foundational Thinking — get the data shape right before writing 
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
+> Trove · v2026.8.29
 
 # Principle: Foundational Thinking
 

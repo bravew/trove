@@ -123,7 +123,7 @@ if (!pluginYaml.skills) pluginYaml.skills = [];
 
 const skillEntry: Record<string, unknown> = {
   path: `./skills/${name}`,
-  platforms: ["claude", "cursor", "codex", "agents"],
+  platforms: ["claude", "cursor", "codex", "agents", "copilot"],
 };
 
 if (autoAttach) {

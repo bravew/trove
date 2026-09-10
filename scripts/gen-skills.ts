@@ -75,6 +75,10 @@ function projectSkill(template: TemplateFile, parsed: ParsedTemplate, host: Host
     hostName: host.name,
     supportsToolAllowlist: host.capabilities.supportsToolAllowlistMetadata,
   });
+  if (host.name === "copilot") {
+    delete fields.compatibility;
+    delete fields.metadata;
+  }
   let content = `${emitFrontmatter(fields)}${parsed.body}`;
   content = applyContentRewrites(content, host);
   content = injectGeneratedHeader(content, path.basename(template.path));

@@ -93,7 +93,7 @@ export function buildSkillToPlugins(plugins: PluginInfo[]): Map<string, PluginAt
   for (const plugin of plugins) {
     for (const skill of plugin.yaml.skills ?? []) {
       const skillName = path.basename(skill.path);
-      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents"];
+      const platforms = skill.platforms ?? ["claude", "cursor", "codex", "agents", "copilot"];
       const attachment: PluginAttachment = {
         pluginName: plugin.name,
         pluginDescription: plugin.description,

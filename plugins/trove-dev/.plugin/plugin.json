@@ -1,0 +1,51 @@
+{
+  "name": "trove-dev",
+  "description": "Developer skills: coding patterns, code review, git workflow, debugging",
+  "version": "2026.8.29",
+  "author": {
+    "name": "Trove Contributors"
+  },
+  "homepage": "https://github.com/bravew/trove",
+  "license": "MIT",
+  "keywords": [
+    "developer",
+    "coding",
+    "review",
+    "git",
+    "workflow",
+    "debugging"
+  ],
+  "category": "development",
+  "skills": [
+    "./.copilot/skills/trove-python",
+    "./.copilot/skills/trove-react",
+    "./.copilot/skills/trove-react-best-practices",
+    "./.copilot/skills/trove-react-view-transitions",
+    "./.copilot/skills/trove-react-native",
+    "./.copilot/skills/trove-vue",
+    "./.copilot/skills/trove-swift",
+    "./.copilot/skills/trove-lambda",
+    "./.copilot/skills/trove-review",
+    "./.copilot/skills/trove-commit",
+    "./.copilot/skills/trove-explain",
+    "./.copilot/skills/trove-typescript",
+    "./.copilot/skills/trove-tdd",
+    "./.copilot/skills/trove-architect",
+    "./.copilot/skills/trove-perf"
+  ],
+  "commands": [
+    "./commands/commit.md",
+    "./commands/ship.md",
+    "./commands/review.md",
+    "./commands/pr.md",
+    "./commands/new-branch.md",
+    "./commands/changelog.md",
+    "./commands/doc.md",
+    "./commands/prp-create.md",
+    "./commands/prp-execute.md"
+  ],
+  "agents": [
+    "./agents/code-reviewer.md"
+  ],
+  "hooks": "./.copilot/hooks.json"
+}

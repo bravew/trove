@@ -5,7 +5,7 @@ description: "Design review skill for evaluating UI/UX implementations against d
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
 
-> Trove · v2026.7.4
+> Trove · v2026.8.29
 
 ## Session Init
 
