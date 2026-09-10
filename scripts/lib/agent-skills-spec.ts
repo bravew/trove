@@ -30,6 +30,14 @@ export const SPEC_FIELDS = [
   "allowed-tools",
 ] as const;
 
+/** GitHub Copilot CLI skill frontmatter documented for native plugins. */
+export const COPILOT_SKILL_FIELDS = [
+  "name",
+  "description",
+  "license",
+  "allowed-tools",
+] as const;
+
 export type SpecField = (typeof SPEC_FIELDS)[number];
 
 export const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -163,4 +171,24 @@ export function validateAgentSkillFrontmatter(
   }
 
   return { errors, warnings };
+}
+
+/**
+ * Validate the narrower skill surface accepted by Copilot CLI. Trove omits
+ * `allowed-tools` during projection until it has explicit Copilot tool-name
+ * mappings, but the field remains valid in third-party contract fixtures.
+ */
+export function validateCopilotSkillFrontmatter(
+  fm: Record<string, unknown>,
+  expectedName?: string,
+): SpecReport {
+  const report = validateAgentSkillFrontmatter(fm, expectedName);
+  const allowed = new Set<string>(COPILOT_SKILL_FIELDS);
+  const copilotErrors = Object.keys(fm)
+    .filter((field) => !allowed.has(field))
+    .map((field) => ({
+      field,
+      message: `is not documented Copilot skill frontmatter (allowed: ${COPILOT_SKILL_FIELDS.join(", ")})`,
+    }));
+  return { errors: [...report.errors, ...copilotErrors], warnings: report.warnings };
 }

@@ -1,0 +1,10 @@
+{
+  "skill": ["project", "personal", "plugin"],
+  "agent": ["project", "personal", "plugin"],
+  "mcp": ["plugin", "personal", "project"],
+  "winners": {
+    "skill": "project",
+    "agent": "project",
+    "mcp": "project"
+  }
+}

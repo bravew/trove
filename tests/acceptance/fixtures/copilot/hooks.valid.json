@@ -1,0 +1,9 @@
+{
+  "sessionStart": [
+    {
+      "hooks": [
+        { "type": "command", "command": "${PLUGIN_ROOT}/hooks/run.sh" }
+      ]
+    }
+  ]
+}

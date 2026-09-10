@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-09-10T01:10:37Z	branch	create feat/github-copilot-marketplace	isolate the multi-phase implementation and preserve checkpoint commits	git branch --show-current => feat/github-copilot-marketplace	branch created; existing plan and upstream-sync edit preserved
+2026-09-10T01:10:37Z	checkpoint-1	implement Copilot contract fixtures before generator changes	the approved plan requires contract evidence before native artifact generation	dev-doc/2026-09-github-copilot-marketplace-plan.md:533	checkpoint 1 active
+2026-09-10T01:17:09Z	checkpoint-1	fix review findings in path and hook validation	phase review found unvalidated component paths, a casing mismatch, and missing concrete fixtures	bun test scoped: 63 pass/0 fail; bunx tsc --noEmit; bun run validate; git diff --check	review clean; checkpoint verification passed
