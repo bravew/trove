@@ -36,5 +36,6 @@
         ]
       }
     ]
-  }
+  },
+  "logo": "assets/logo.svg"
 }

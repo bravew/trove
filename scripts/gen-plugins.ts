@@ -15,6 +15,7 @@ import * as path from "path";
 import YAML from "yaml";
 import { getMarketplaceHosts } from "../hosts/index";
 import type { PluginYaml } from "../hosts/types";
+import { projectPluginLogo } from "./lib/plugin-logo";
 import { isUnownedSupportName } from "./lib/support-files";
 import { checkGeneratedFreshness } from "./lib/generated-freshness";
 
@@ -260,6 +261,9 @@ function generateCursorPluginJson(
     );
   }
 
+  const logo = projectPluginLogo(plugin);
+  if (logo.cursorLogo) json.logo = logo.cursorLogo;
+
   return json;
 }
 
@@ -274,9 +278,9 @@ function generateCursorPluginJson(
  *     that directory. Emitting an array causes Codex's `plugin/read` to
  *     fail with "Plugin detail unavailable" in the TUI.
  *   - Optional `interface` block surfaces display metadata in the
- *     `/plugins` browser. We populate displayName, category, and
- *     shortDescription from plugin.yaml; richer fields (icons, screenshots)
- *     are author-supplied and not auto-derived.
+ *     `/plugins` browser. displayName, category, and shortDescription come
+ *     from plugin.yaml. `logo` / `brandColor` project to interface.logo,
+ *     interface.composerIcon, and interface.brandColor.
  */
 function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
   const json: Record<string, unknown> = {
@@ -294,10 +298,13 @@ function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
   if (hasCodexSkills) json.skills = "./skills/";
 
   // Interface metadata for the Codex /plugins TUI browser.
+  const logo = projectPluginLogo(plugin);
   json.interface = {
     displayName: plugin.name,
     category: plugin.category ?? "Productivity",
     shortDescription: plugin.description,
+    ...(logo.codexLogo ? { logo: logo.codexLogo, composerIcon: logo.codexLogo } : {}),
+    ...(logo.brandColor ? { brandColor: logo.brandColor } : {}),
   };
 
   return json;

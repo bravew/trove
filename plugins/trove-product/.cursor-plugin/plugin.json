@@ -6,5 +6,6 @@
     "./.agents/skills/trove-spec",
     "./.agents/skills/trove-user-story",
     "./.agents/skills/trove-release-notes"
-  ]
+  ],
+  "logo": "assets/logo.svg"
 }

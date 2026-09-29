@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [product, spec, user-story, release-notes, triage]
 category: product
+logo: assets/logo.svg
+brandColor: "#059669"
 
 roles: [pm]
 

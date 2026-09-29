@@ -15,6 +15,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-workflow",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -69,6 +70,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-dev",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -112,6 +114,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-design",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -143,6 +146,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-product",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -173,6 +177,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-security",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -203,6 +208,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-infra",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -236,6 +242,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-research",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",
@@ -270,6 +277,7 @@
       ],
       "version": "2026.9.10",
       "source": "./plugins/trove-doc",
+      "logo": "assets/logo.svg",
       "platforms": [
         "claude",
         "cursor",

@@ -10,5 +10,6 @@
   ],
   "rules": [
     "./rules/"
-  ]
+  ],
+  "logo": "assets/logo.svg"
 }

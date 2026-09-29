@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-security",
     "category": "security",
-    "shortDescription": "Security review and vulnerability scanning"
+    "shortDescription": "Security review and vulnerability scanning",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#DC2626"
   }
 }

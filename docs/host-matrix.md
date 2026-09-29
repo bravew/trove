@@ -56,6 +56,24 @@ the opposite case and are warned about the *redundant* prefix instead: they
 exist only inside a plugin namespace. Analysis:
 `dev-doc/2026-09-skill-name-prefix-plan.md`.
 
+## Plugin logos
+
+`plugin.yaml` `logo` is the only authoring field for a plugin mark. One square
+file (`assets/logo.svg`, `viewBox="0 0 512 512"`) is projected by the build:
+
+| Host | Emitted | Field |
+|---|---|---|
+| Cursor | `.cursor-plugin/plugin.json` and `.cursor-plugin/marketplace.json` | `logo` (`assets/logo.svg`). Relative paths are fetched from GitHub raw, so the file has to be committed. |
+| Codex | `.codex-plugin/plugin.json` `interface` | `logo` and `composerIcon` (`./assets/logo.svg`); `brandColor` when `plugin.yaml` sets it |
+| Claude Code, Copilot, OpenCode, Gemini | not emitted | No documented plugin-logo field. An unknown key would fail strict validation or be ignored. |
+
+Cursor skill frontmatter `icon` is a skill glyph, not this plugin mark.
+[agentplugins/agent-plugins-spec#19](https://github.com/agentplugins/agent-plugins-spec/pull/19)
+proposes a portable `icon`; project it only after that field is in the spec
+this repo validates against. Verified 2026-09-28 against
+[Cursor's plugin reference](https://cursor.com/docs/reference/plugins) and
+[Codex plugin packaging](https://developers.openai.com/plugins/build/plugins).
+
 ## Fields that are deliberately not emitted
 
 | Field | Where | Why |
@@ -63,6 +81,7 @@ exist only inside a plugin namespace. Analysis:
 | `allowed-tools` | Codex, OpenCode, Gemini, AGENTS.md | The spec encodes it as a space-separated list, which cannot represent an authored pattern containing whitespace such as `Bash(git *)`. Hosts that ignore the field get nothing rather than a corrupt token. Tracked by `HostCapabilities.supportsToolAllowlistMetadata`. |
 | `disable-model-invocation` | everywhere, unless explicitly authored | It means manual-only. `user-invocable: false` means the opposite — model-only. Translating one into the other inverted 22 skills in Cursor. Author manual-only intent as `activation.manual: true`, or per host via `host-overrides`. |
 | `version` | everywhere | Removed from the authoring vocabulary: it reached no host and duplicated the repository `VERSION`, which is what every generated manifest is stamped from. |
+| `logo` | Claude Code, Copilot, OpenCode, Gemini plugin manifests | Those hosts have no documented plugin-logo field. Cursor and Codex receive the projection in Plugin logos above. |
 
 ## Installer layout
 

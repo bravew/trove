@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [documentation, obsidian, markdown, bases, json-canvas, notes, web-clip]
 category: documentation
+logo: assets/logo.svg
+brandColor: "#1F2937"
 roles: [dev, design, pm]
 
 skills:

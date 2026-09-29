@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [security, owasp, secrets, vulnerability, audit]
 category: security
+logo: assets/logo.svg
+brandColor: "#DC2626"
 
 roles: [dev, devops]
 

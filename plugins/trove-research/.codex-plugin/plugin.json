@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-research",
     "category": "research",
-    "shortDescription": "Research skills: last-30-days pulse across global and Chinese social platforms"
+    "shortDescription": "Research skills: last-30-days pulse across global and Chinese social platforms",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#0E7490"
   }
 }

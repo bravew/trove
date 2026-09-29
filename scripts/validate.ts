@@ -42,6 +42,7 @@ import {
   validateCopilotSkillFrontmatter,
 } from "./lib/agent-skills-spec";
 import { validateCopilotPluginManifest } from "./lib/copilot-contract";
+import { pluginLogoFindings } from "./lib/plugin-logo";
 import { checkOffline } from "./lib/upstream-sync";
 import { loadUpstreamManifest, validateManifestInventory } from "./lib/upstream-manifest";
 
@@ -202,6 +203,10 @@ function validatePlugin(pluginName: string): void {
       );
     }
     if (!plugin.description) error("plugin.yaml: missing 'description'");
+
+    for (const finding of pluginLogoFindings(pluginDir, plugin)) {
+      error(finding);
+    }
 
     // Naming convention: must start with trove-
     if (plugin.name && !plugin.name.startsWith("trove-")) {

@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [infrastructure, aws, terraform, cdk, docker, devops]
 category: infrastructure
+logo: assets/logo.svg
+brandColor: "#0F766E"
 
 roles: [devops]
 

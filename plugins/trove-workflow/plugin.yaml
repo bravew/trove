@@ -5,6 +5,8 @@ author:
 license: MIT
 keywords: [workflow, methodology, bootstrap, planning]
 category: workflow
+logo: assets/logo.svg
+brandColor: "#D97706"
 roles: [dev]
 
 skills:

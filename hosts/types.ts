@@ -141,6 +141,13 @@ export interface PluginYaml {
   license?: string;
   keywords?: string[];
   category?: string;
+  /**
+   * Plugin-relative logo. Cursor receives it as `logo`; Codex receives the
+   * same file as `interface.logo` and `interface.composerIcon`.
+   */
+  logo?: string;
+  /** Codex `interface.brandColor`, `#RRGGBB`, at least 2:1 against white. */
+  brandColor?: string;
   roles?: string[];
   skills?: Array<{
     path: string;
@@ -195,6 +202,7 @@ export interface MarketplaceJson {
     description?: string;
     category?: string;
     keywords?: string[];
+    logo?: string;
     strict?: boolean;
     skills?: string[];
   }>;

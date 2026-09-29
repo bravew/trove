@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-product",
     "category": "product",
-    "shortDescription": "PM skills: specs, user stories, release notes, triage"
+    "shortDescription": "PM skills: specs, user stories, release notes, triage",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#059669"
   }
 }
