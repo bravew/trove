@@ -2,7 +2,7 @@ name: Skill quality check
 
 on:
   pull_request:
-    branches: [main, canary, stable]
+    branches: [main, canary, stable, "epic/**"]
 
 permissions:
   contents: read
