@@ -1,7 +1,7 @@
 {
   "name": "trove-design",
   "description": "Designer skills: Figma review, accessibility, design systems",
-  "version": "2026.9.10",
+  "version": "2026.10.5",
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-design",

@@ -94,6 +94,15 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.10.5] - 2026-10-05
+
+### What's Changed
+* feat(doc): add Obsidian and web clipping skills by @bravew in https://github.com/bravew/trove/pull/8
+* Give each plugin a logo from plugin.yaml by @bravew in https://github.com/bravew/trove/pull/11
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.9.10...v2026.10.5
+
 ## [2026.9.10] - 2026-09-10
 
 ### What's Changed
