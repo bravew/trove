@@ -370,3 +370,39 @@ test("cursor: skill `paths` and rule `globs` carry the same inventory", () => {
     expect(skillGlobs.length).toBeGreaterThan(0);
   }
 });
+
+test("plugin logos reach Cursor and Codex manifests and stay off hosts without the field", () => {
+  const names = [
+    "trove-workflow",
+    "trove-dev",
+    "trove-design",
+    "trove-product",
+    "trove-security",
+    "trove-infra",
+    "trove-doc",
+    "trove-research",
+  ];
+  const cursorMarket = JSON.parse(fs.readFileSync(path.join(ROOT, ".cursor-plugin", "marketplace.json"), "utf-8"));
+  const copilotMarket = JSON.parse(fs.readFileSync(path.join(ROOT, ".github", "plugin", "marketplace.json"), "utf-8"));
+  const claudeMarket = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude-plugin", "marketplace.json"), "utf-8"));
+  const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, "catalog.json"), "utf-8"));
+
+  for (const name of names) {
+    const read = (parts: string[]) => JSON.parse(fs.readFileSync(path.join(ROOT, ...parts), "utf-8"));
+    const cursor = read(["plugins", name, ".cursor-plugin", "plugin.json"]);
+    const codex = read(["plugins", name, ".codex-plugin", "plugin.json"]);
+    const claude = read(["plugins", name, ".claude-plugin", "plugin.json"]);
+    const copilot = read(["plugins", name, ".plugin", "plugin.json"]);
+
+    expect(cursor.logo).toBe("assets/logo.svg");
+    expect(codex.interface.logo).toBe("./assets/logo.svg");
+    expect(codex.interface.composerIcon).toBe("./assets/logo.svg");
+    expect(codex.interface.brandColor).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    expect(claude.logo).toBeUndefined();
+    expect(copilot.logo).toBeUndefined();
+    expect(cursorMarket.plugins.find((entry: { name: string }) => entry.name === name).logo).toBe("assets/logo.svg");
+    expect(catalog.plugins.find((entry: { name: string }) => entry.name === name).logo).toBe("assets/logo.svg");
+    expect(copilotMarket.plugins.find((entry: { name: string }) => entry.name === name).logo).toBeUndefined();
+    expect(claudeMarket.plugins.find((entry: { name: string }) => entry.name === name).logo).toBeUndefined();
+  }
+});

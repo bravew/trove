@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-design",
     "category": "design",
-    "shortDescription": "Designer skills: Figma review, accessibility, design systems"
+    "shortDescription": "Designer skills: Figma review, accessibility, design systems",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#7C3AED"
   }
 }

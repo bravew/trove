@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [design, figma, accessibility, design-system]
 category: design
+logo: assets/logo.svg
+brandColor: "#7C3AED"
 
 roles: [design]
 

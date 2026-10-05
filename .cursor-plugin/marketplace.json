@@ -18,7 +18,8 @@
         "methodology",
         "bootstrap",
         "planning"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-dev",
@@ -33,7 +34,8 @@
         "lambda",
         "fastapi",
         "typescript"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-design",
@@ -45,7 +47,8 @@
         "a11y",
         "design-system",
         "component-specs"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-product",
@@ -58,7 +61,8 @@
         "release",
         "triage",
         "roadmap"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-security",
@@ -70,7 +74,8 @@
         "secrets",
         "audit",
         "vulnerability"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-infra",
@@ -84,7 +89,8 @@
         "docker",
         "ecs",
         "lambda"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-research",
@@ -99,7 +105,8 @@
         "competitive-analysis",
         "weibo",
         "xiaohongshu"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     },
     {
       "name": "trove-doc",
@@ -114,7 +121,8 @@
         "json-canvas",
         "notes",
         "web-clip"
-      ]
+      ],
+      "logo": "assets/logo.svg"
     }
   ]
 }

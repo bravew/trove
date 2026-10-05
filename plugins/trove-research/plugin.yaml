@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [research, social, trends, competitive-analysis]
 category: research
+logo: assets/logo.svg
+brandColor: "#0E7490"
 
 roles: [pm, dev]
 

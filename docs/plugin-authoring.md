@@ -122,6 +122,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [testing, unit-test, e2e]
 category: development                    # development | design | product | security | infrastructure | observability | research | documentation
+logo: assets/logo.svg                    # plugin-relative; svg, png, webp, or jpg
+brandColor: "#2563EB"                    # optional; Codex card color, #RRGGBB, 2:1 against white
 roles: [dev]                             # dev | design | pm | devops
 
 skills:

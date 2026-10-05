@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-workflow",
     "category": "workflow",
-    "shortDescription": "Workflow methodology skills and session bootstrap"
+    "shortDescription": "Workflow methodology skills and session bootstrap",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#D97706"
   }
 }

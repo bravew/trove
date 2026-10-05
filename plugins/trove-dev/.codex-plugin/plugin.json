@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-dev",
     "category": "development",
-    "shortDescription": "Developer skills: coding patterns, code review, git workflow, debugging"
+    "shortDescription": "Developer skills: coding patterns, code review, git workflow, debugging",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#2563EB"
   }
 }

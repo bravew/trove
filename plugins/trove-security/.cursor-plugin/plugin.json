@@ -18,5 +18,6 @@
         ]
       }
     ]
-  }
+  },
+  "logo": "assets/logo.svg"
 }

@@ -6,6 +6,9 @@
   "interface": {
     "displayName": "trove-infra",
     "category": "infrastructure",
-    "shortDescription": "Infrastructure and DevOps automation"
+    "shortDescription": "Infrastructure and DevOps automation",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
+    "brandColor": "#0F766E"
   }
 }

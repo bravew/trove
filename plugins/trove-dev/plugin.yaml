@@ -6,6 +6,8 @@ homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [developer, coding, review, git, workflow, debugging]
 category: development
+logo: assets/logo.svg
+brandColor: "#2563EB"
 
 roles: [dev]
 

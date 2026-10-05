@@ -16,6 +16,7 @@ import * as path from "path";
 import YAML from "yaml";
 import { ALL_HOSTS, getMarketplaceHosts } from "../hosts/index";
 import type { HostConfig, MarketplaceYaml, MarketplaceJson, PluginYaml } from "../hosts/types";
+import { projectPluginLogo } from "./lib/plugin-logo";
 import {
   findTemplates,
   loadAndParseTemplate,
@@ -131,11 +132,16 @@ function generatePlatformMarketplace(
       // generateClaudeMarketplace. Same Claude Code resolution rules apply
       // here for any host that consumes a marketplace.json shape.
       if (isLocal) {
+        const pluginYaml = typeof entry.source === "string" ? loadPluginYaml(entry.source) : null;
+        const logo = platformName === "cursor" && pluginYaml
+          ? projectPluginLogo(path.join(ROOT, "plugins", entry.source as string), pluginYaml).cursorLogo
+          : undefined;
         return {
           name: entry.name,
           source: `./plugins/${entry.source}`,
           description: entry.description,
           ...discoveryMetadata(entry),
+          ...(logo ? { logo } : {}),
         };
       }
 
@@ -228,6 +234,7 @@ interface CatalogEntry {
   roles?: string[];
   version?: string;
   source: string;
+  logo?: string;
   platforms: string[];
   skills: string[];
   curated?: boolean;
@@ -239,10 +246,12 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
     let version: string | undefined;
     let platforms: string[] = [];
     let skillNames: string[] = [];
+    let logo: string | undefined;
 
     if (isLocal) {
       const pluginYaml = loadPluginYaml(entry.source as string);
       if (pluginYaml) {
+        logo = projectPluginLogo(path.join(ROOT, "plugins", entry.source as string), pluginYaml).cursorLogo;
         // Derive per-plugin version from the marketplace umbrella version
         // (matches gen-plugins.ts; pluginYaml.version is hardcoded "1.0.0"
         // and would otherwise freeze CLI display + future per-plugin
@@ -269,6 +278,7 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
       roles: entry.roles,
       version,
       source: isLocal ? `./plugins/${entry.source}` : JSON.stringify(entry.source),
+      ...(logo ? { logo } : {}),
       platforms,
       skills: skillNames,
       curated: entry.curated,
