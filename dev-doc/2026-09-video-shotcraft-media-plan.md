@@ -47,10 +47,11 @@ and CI rules are in the ffmpeg plan's "Delivery workflow" section.
 | `e2d8928` (#86), `5ddbf52` (#88) | `workbench/**`, one line of `references/workbench.md` | The workbench UI now defaults to English, with Chinese and Russian available. That removes a language barrier, but not the reason the workbench is deferred: Trove has no delivery surface for a local Vite app. |
 | `a1d9c8f` (#91) | `README.md` | Adds more Showcase promotion. This is still excluded (see "Author promotion is removed"). |
 
-`SKILL.md`, the eight adapted references, and all 157 cards are byte-identical
-between the two revisions (`git diff --quiet` on those paths). The skill
-selection and the corrections below therefore stand. Only the evidence revision
-moves.
+`SKILL.md`, the eight adapted references, `template/TEMPLATE.md`, and all 157
+cards are byte-identical between the two revisions (`git diff --quiet` on those
+paths). `template/THEMES.md` is new in #80, so it is not part of that identity
+claim. The skill selection and the corrections below therefore stand. Only the
+evidence revision moves.
 
 The first review also missed one file: `references/sequences/promo-energy-arc.md`
 (50 lines). It is present at both revisions and holds the default four-segment
