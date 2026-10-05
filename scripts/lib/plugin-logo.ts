@@ -81,22 +81,43 @@ function contrastAgainstWhite(hex: string): number {
 /**
  * Throws on a logo or brandColor the hosts cannot use. The generators read
  * plugin.yaml without running validation first, so an invalid value must stop
- * the build instead of reaching a manifest.
+ * the build instead of reaching a manifest. `pluginDir` is needed to confirm
+ * the logo file exists and stays inside the plugin after symlink resolution.
  */
-export function projectPluginLogo(plugin: Readonly<PluginLogoFields>): PluginLogoProjection {
+export function projectPluginLogo(
+  pluginDir: string,
+  plugin: Readonly<PluginLogoFields>,
+): PluginLogoProjection {
   const label = plugin.name ? `plugins/${plugin.name}/` : "";
-  const cursorLogo = typeof plugin.logo === "string" ? plugin.logo.trim().replace(/^\.\//, "") : "";
   const brandColor = typeof plugin.brandColor === "string" ? plugin.brandColor.trim() : "";
   const projected: PluginLogoProjection = {};
-  if (cursorLogo !== "") {
+
+  if (plugin.logo !== undefined) {
+    if (typeof plugin.logo !== "string" || plugin.logo.trim() === "") {
+      throw new Error(`${label}plugin.yaml: logo must be a non-empty relative path`);
+    }
+    const cursorLogo = plugin.logo.trim().replace(/^\.\//, "");
     const problem = logoPathProblem(cursorLogo);
-    if (problem) throw new Error(`${label}${problem} (got "${plugin.logo}")`);
+    const resolved = path.resolve(pluginDir, plugin.logo.trim());
+    if (problem) {
+      throw new Error(`${label}${problem} (got "${plugin.logo}")`);
+    } else if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`${label}plugin.yaml: logo file not found: ${plugin.logo.trim()}`);
+    } else if (logoEscapesPluginOnDisk(pluginDir, resolved)) {
+      throw new Error(`${label}plugin.yaml: logo must stay inside the plugin directory`);
+    }
     projected.cursorLogo = cursorLogo;
     projected.codexLogo = `./${cursorLogo}`;
+  }
+
+  if (plugin.brandColor !== undefined && brandColor === "") {
+    throw new Error(`${label}plugin.yaml: brandColor must be a #RRGGBB color (got "${plugin.brandColor}")`);
   }
   if (brandColor !== "") {
     if (!BRAND_COLOR_PATTERN.test(brandColor)) {
       throw new Error(`${label}plugin.yaml: brandColor must be a #RRGGBB color (got "${plugin.brandColor}")`);
+    } else if (contrastAgainstWhite(brandColor) < MIN_BRAND_CONTRAST) {
+      throw new Error(`${label}plugin.yaml: brandColor must have at least 2:1 contrast against white (got "${brandColor}")`);
     }
     projected.brandColor = brandColor;
   }

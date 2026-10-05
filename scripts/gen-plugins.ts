@@ -261,7 +261,7 @@ function generateCursorPluginJson(
     );
   }
 
-  const logo = projectPluginLogo(plugin);
+  const logo = projectPluginLogo(path.join(PLUGINS_DIR, plugin.name), plugin);
   if (logo.cursorLogo) json.logo = logo.cursorLogo;
 
   return json;
@@ -298,7 +298,7 @@ function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
   if (hasCodexSkills) json.skills = "./skills/";
 
   // Interface metadata for the Codex /plugins TUI browser.
-  const logo = projectPluginLogo(plugin);
+  const logo = projectPluginLogo(path.join(PLUGINS_DIR, plugin.name), plugin);
   json.interface = {
     displayName: plugin.name,
     category: plugin.category ?? "Productivity",

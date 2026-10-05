@@ -133,7 +133,9 @@ function generatePlatformMarketplace(
       // here for any host that consumes a marketplace.json shape.
       if (isLocal) {
         const pluginYaml = typeof entry.source === "string" ? loadPluginYaml(entry.source) : null;
-        const logo = platformName === "cursor" ? projectPluginLogo(pluginYaml ?? {}).cursorLogo : undefined;
+        const logo = platformName === "cursor" && pluginYaml
+          ? projectPluginLogo(path.join(ROOT, "plugins", entry.source as string), pluginYaml).cursorLogo
+          : undefined;
         return {
           name: entry.name,
           source: `./plugins/${entry.source}`,
@@ -249,7 +251,7 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
     if (isLocal) {
       const pluginYaml = loadPluginYaml(entry.source as string);
       if (pluginYaml) {
-        logo = projectPluginLogo(pluginYaml).cursorLogo;
+        logo = projectPluginLogo(path.join(ROOT, "plugins", entry.source as string), pluginYaml).cursorLogo;
         // Derive per-plugin version from the marketplace umbrella version
         // (matches gen-plugins.ts; pluginYaml.version is hardcoded "1.0.0"
         // and would otherwise freeze CLI display + future per-plugin

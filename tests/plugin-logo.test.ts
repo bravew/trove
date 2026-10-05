@@ -24,7 +24,7 @@ const FIRST_PARTY = [
 ] as const;
 
 test("projectPluginLogo maps one authored file onto Cursor and Codex", () => {
-  const projected = projectPluginLogo({
+  const projected = projectPluginLogo(path.join(ROOT, "plugins", "trove-dev"), {
     logo: "./assets/logo.svg",
     brandColor: "#2563EB",
   });
@@ -35,20 +35,26 @@ test("projectPluginLogo maps one authored file onto Cursor and Codex", () => {
 });
 
 test("projectPluginLogo emits nothing when logo and brandColor are absent", () => {
-  expect(projectPluginLogo({})).toEqual({});
-  expect(projectPluginLogo({ logo: "   " })).toEqual({});
+  expect(projectPluginLogo(os.tmpdir(), {})).toEqual({});
 });
 
 test("projectPluginLogo refuses values validation would reject instead of emitting them", () => {
-  expect(() => projectPluginLogo({ name: "trove-x", logo: "/abs/logo.svg" })).toThrow(
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trove-logo-"));
+  fs.writeFileSync(path.join(dir, "logo..svg"), "<svg/>");
+
+  expect(() => projectPluginLogo(dir, { name: "trove-x", logo: "/abs/logo.svg" })).toThrow(
     'plugins/trove-x/plugin.yaml: logo must stay inside the plugin directory (got "/abs/logo.svg")',
   );
-  expect(() => projectPluginLogo({ logo: "C:\\logo.svg" })).toThrow("must stay inside the plugin directory");
-  expect(() => projectPluginLogo({ logo: "assets/../../logo.svg" })).toThrow("must stay inside the plugin directory");
-  expect(() => projectPluginLogo({ logo: "https://example.com/logo.svg" })).toThrow("not a URL");
-  expect(() => projectPluginLogo({ logo: "assets/logo.txt" })).toThrow("must be .svg");
-  expect(() => projectPluginLogo({ brandColor: "blue" })).toThrow("brandColor must be a #RRGGBB color");
-  expect(projectPluginLogo({ logo: "assets/logo..svg" }).cursorLogo).toBe("assets/logo..svg");
+  expect(() => projectPluginLogo(dir, { logo: "C:\\logo.svg" })).toThrow("must stay inside the plugin directory");
+  expect(() => projectPluginLogo(dir, { logo: "assets/../../logo.svg" })).toThrow("must stay inside the plugin directory");
+  expect(() => projectPluginLogo(dir, { logo: "https://example.com/logo.svg" })).toThrow("not a URL");
+  expect(() => projectPluginLogo(dir, { logo: "assets/logo.txt" })).toThrow("must be .svg");
+  expect(() => projectPluginLogo(dir, { logo: "   " })).toThrow("logo must be a non-empty relative path");
+  expect(() => projectPluginLogo(dir, { logo: "missing.svg" })).toThrow("logo file not found: missing.svg");
+  expect(() => projectPluginLogo(dir, { brandColor: "blue" })).toThrow("brandColor must be a #RRGGBB color");
+  expect(() => projectPluginLogo(dir, { brandColor: "   " })).toThrow("brandColor must be a #RRGGBB color");
+  expect(() => projectPluginLogo(dir, { brandColor: "#FFFFFF" })).toThrow("at least 2:1 contrast against white");
+  expect(projectPluginLogo(dir, { logo: "logo..svg" }).cursorLogo).toBe("logo..svg");
 });
 
 test("pluginLogoFindings rejects a logo reached through a symlink outside the plugin", () => {
