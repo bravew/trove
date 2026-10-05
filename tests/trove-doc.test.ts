@@ -86,7 +86,7 @@ test("doc provenance agrees with skill metadata without depending on the sample 
     expect(origin.sourceId).toBe("obsidian-skills");
     expect(parsed.frontmatter.metadata).toMatchObject({
       source: "kepano/obsidian-skills",
-      "upstream-skill": path.basename(origin.upstreamPath),
+      "upstream-skill": path.basename(origin.upstreamPaths[0]),
       "upstream-revision": origin.evidenceSha,
     });
   }
