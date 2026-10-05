@@ -39,6 +39,32 @@ test("projectPluginLogo emits nothing when logo and brandColor are absent", () =
   expect(projectPluginLogo({ logo: "   " })).toEqual({});
 });
 
+test("projectPluginLogo refuses values validation would reject instead of emitting them", () => {
+  expect(() => projectPluginLogo({ name: "trove-x", logo: "/abs/logo.svg" })).toThrow(
+    'plugins/trove-x/plugin.yaml: logo must stay inside the plugin directory (got "/abs/logo.svg")',
+  );
+  expect(() => projectPluginLogo({ logo: "C:\\logo.svg" })).toThrow("must stay inside the plugin directory");
+  expect(() => projectPluginLogo({ logo: "assets/../../logo.svg" })).toThrow("must stay inside the plugin directory");
+  expect(() => projectPluginLogo({ logo: "https://example.com/logo.svg" })).toThrow("not a URL");
+  expect(() => projectPluginLogo({ logo: "assets/logo.txt" })).toThrow("must be .svg");
+  expect(() => projectPluginLogo({ brandColor: "blue" })).toThrow("brandColor must be a #RRGGBB color");
+  expect(projectPluginLogo({ logo: "assets/logo..svg" }).cursorLogo).toBe("assets/logo..svg");
+});
+
+test("pluginLogoFindings rejects a logo reached through a symlink outside the plugin", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "trove-logo-link-"));
+  const pluginDir = path.join(root, "plugin");
+  const outside = path.join(root, "outside");
+  fs.mkdirSync(pluginDir);
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "logo.svg"), "<svg/>");
+  fs.symlinkSync(outside, path.join(pluginDir, "assets"), "dir");
+
+  expect(pluginLogoFindings(pluginDir, { logo: "assets/logo.svg" })).toEqual([
+    "plugin.yaml: logo must stay inside the plugin directory",
+  ]);
+});
+
 test("pluginLogoFindings rejects paths and colors Codex and Cursor will not render", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trove-logo-"));
   fs.writeFileSync(path.join(dir, "logo.svg"), "<svg/>");
@@ -48,6 +74,9 @@ test("pluginLogoFindings rejects paths and colors Codex and Cursor will not rend
   ]);
   expect(pluginLogoFindings(dir, { logo: "assets/logo.txt" })).toEqual([
     "plugin.yaml: logo must be .svg, .png, .webp, .jpg, or .jpeg",
+  ]);
+  expect(pluginLogoFindings(dir, { logo: "https://example.com/logo.svg" })).toEqual([
+    "plugin.yaml: logo must be a plugin-relative path, not a URL",
   ]);
   expect(pluginLogoFindings(dir, { logo: "assets/missing.svg" })).toEqual([
     "plugin.yaml: logo file not found: assets/missing.svg",
