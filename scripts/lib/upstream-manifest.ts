@@ -214,7 +214,8 @@ export function repositoryPathAt(value: unknown, where: string): RepositoryPath 
   if (candidate.includes("\\") || candidate.includes("\0")) {
     fail(where, "must use normalized POSIX separators");
   }
-  if (path.posix.isAbsolute(candidate) || candidate === ".") fail(where, "must be repository-relative");
+  if (candidate === ".") return candidate as RepositoryPath;
+  if (path.posix.isAbsolute(candidate)) fail(where, "must be repository-relative");
   const segments = candidate.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     fail(where, "must not contain empty, '.' or '..' segments");

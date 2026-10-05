@@ -147,7 +147,7 @@ export function digestTree(entries: readonly TreeEntry[]): Sha256Digest {
 function parseGitTreeLine(line: string, root: string): { mode: string; object: string; path: string } {
   const match = /^(\d{6}) blob ([0-9a-f]{40})\t(.+)$/.exec(line);
   if (!match) throw new SyncError(`unexpected git tree entry: ${JSON.stringify(line)}`);
-  const relative = match[3].slice(root.length + 1);
+  const relative = root === "." ? match[3] : match[3].slice(root.length + 1);
   if (match[1] === "120000") throw new SyncError(`symlink '${relative}' is not allowed`);
   if (match[1] !== "100644" && match[1] !== "100755") {
     throw new SyncError(`unexpected file mode '${match[1]}' for '${relative}'`);
@@ -162,7 +162,7 @@ export function readGitSelection(
   manifest: UpstreamManifest,
 ): readonly TreeEntry[] {
   const root = artifact.upstreamPath;
-  const output = run("git", ["--git-dir", gitDirectory, "ls-tree", "-r", "-z", revision, root]);
+  const output = run("git", ["--git-dir", gitDirectory, "ls-tree", "-r", "-z", revision, "--", root]);
   const lines = output.toString("utf8").split("\0").filter(Boolean);
   const entries = lines
     .map((line) => parseGitTreeLine(line, root))
