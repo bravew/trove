@@ -485,16 +485,30 @@ tested clean and conflicted updates. Cases:
 Each checkpoint ends with its listed verification. Results are reported as run,
 and anything not run is named.
 
-**CP1 — Inventory and decisions (read-only).** Confirm in code:
+**CP1 — Inventory and decisions.** Confirmed on 2026-10-04 in issue #15:
 
-- whether `upstream_path: .` is accepted;
-- the exact `origin` enum value;
-- whether `upstream-sync.ts` exports its digest and transform functions;
-- whether `external/policy.yaml` has a license allowlist;
-- that copying support files keeps `scripts/templates/` nested.
+- `upstream_path: .` was rejected by `repositoryPathAt` at
+  `scripts/lib/upstream-manifest.ts:217`. It is now the only accepted root path.
+  `readGitSelection` strips that root and passes `--` before the path so `.` is
+  not parsed as a git option. `./...` and paths containing `.` segments remain
+  rejected. Covered by `tests/upstream-sync.test.ts`.
+- A vendored skill inventory row uses `origin: adapted`. `trove-pulse` is
+  vendored through an artifact lock and recorded at `upstream.yaml:321` as
+  `{ origin: adapted, source_id: last30days-skill, ... }`. The parser allows only
+  `original` and `adapted` (`scripts/lib/upstream-manifest.ts:458-473`).
+- `scripts/lib/upstream-sync.ts` already exports `digestTree` (`:133`) and
+  `transformSelection` (`:242`). No export change or behavior change was needed.
+- `external/policy.yaml:15-21` has `allowedLicenses`: Apache-2.0, BSD-2-Clause,
+  BSD-3-Clause, ISC, MIT, and MPL-2.0. The import engine should consume that
+  existing allowlist. `upstream.yaml` does not need `policy.license_allow`.
+- Support copies preserve nesting. `scripts/gen-plugins.ts:581-584` copies the
+  whole `scripts/` directory, and `copyDirRecursive` at `:782-792` recreates each
+  child directory. `scripts/templates/` therefore remains
+  `scripts/templates/` in every projection that carries `scripts/`.
 
-Resolve the open decisions in §8.
-*Verify:* the answers are written into this document. No code changes.
+The decisions in §8 were already resolved on 2026-10-04.
+*Verify:* `bun test tests/upstream-sync.test.ts`, `./node_modules/.bin/tsc --noEmit`,
+and an unchanged `bun run sync:upstream --check --offline` report.
 
 **CP2 — Import engine.** Add `scripts/lib/skill-import.ts`,
 `scripts/import-skill.ts`, the `import:skill` script in `package.json`,

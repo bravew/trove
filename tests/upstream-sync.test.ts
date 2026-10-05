@@ -36,6 +36,33 @@ function rawManifest(): Record<string, unknown> {
   return YAML.parse(fs.readFileSync(path.join(ROOT, "upstream.yaml"), "utf8")) as Record<string, unknown>;
 }
 
+function artifactRecord(sha: string, upstreamPath: string, include: readonly string[], localPath: string): Record<string, unknown> {
+  const digest = `sha256:${"b".repeat(64)}`;
+  return {
+    id: localPath.replaceAll("/", "-"),
+    upstream_path: upstreamPath,
+    local_path: localPath,
+    base_sha: sha,
+    base_tree_digest: digest,
+    local_tree_digest: digest,
+    patch_digest: digest,
+    checked_sha: sha,
+    checked_at: "2026-08-28T00:00:00Z",
+    candidate_sha: null,
+    imported_at: "2026-08-28T00:00:00Z",
+    include,
+    exclude: [],
+    path_map: {},
+    transforms: [],
+    patches: [],
+    status: "active",
+  };
+}
+
+function skillRecord(sha: string, upstreamPath: string, localPath: string): Record<string, unknown> {
+  return { local_path: localPath, origin: "adapted", source_id: "fixture", upstream_path: upstreamPath, evidence_sha: sha };
+}
+
 function artifactAt(raw: Record<string, unknown>, index = 0): Record<string, unknown> {
   const sources = raw.sources as Record<string, unknown>[];
   return (sources[0].artifacts as Record<string, unknown>[])[index];
@@ -109,6 +136,20 @@ describe("upstream manifest boundary", () => {
     const raw = rawManifest();
     artifactAt(raw)[field] = value;
     expect(() => parseUpstreamManifest(raw)).toThrow(ManifestError);
+  });
+
+  test("accepts a repository root upstream path and rejects traversal", () => {
+    const raw = rawManifest();
+    const source = (raw.sources as Record<string, unknown>[])[0];
+    raw.sources = [source];
+    raw.not_vendored = {};
+    source.artifacts = [artifactAt(raw)];
+    artifactAt(raw).upstream_path = ".";
+    raw.skills = [{ local_path: artifactAt(raw).local_path, origin: "adapted", source_id: source.id, upstream_path: ".", evidence_sha: "a".repeat(40) }];
+    expect(parseUpstreamManifest(raw).sources[0].artifacts[0].upstreamPath).toBe(".");
+
+    artifactAt(raw).upstream_path = "./skills";
+    expect(() => parseUpstreamManifest(raw)).toThrow("must not contain empty, '.' or '..' segments");
   });
 
   test("rejects traversal in include patterns", () => {
@@ -379,6 +420,47 @@ describe("canonical artifact paths", () => {
         manifest.sources[0].artifacts[0],
         manifest,
       )).toThrow("symlink");
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
+  test("selects an included root file without widening a subdirectory artifact", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-root-selection-"));
+    try {
+      const upstream = path.join(temporary, "upstream");
+      fs.mkdirSync(path.join(upstream, "skills/example"), { recursive: true });
+      fs.writeFileSync(path.join(upstream, "SKILL.md"), "---\nname: root\nlicense: MIT\n---\n");
+      fs.writeFileSync(path.join(upstream, "skills/example/SKILL.md"), "---\nname: nested\nlicense: MIT\n---\n");
+      runGit(upstream, ["init", "-q", "-b", "main"]);
+      runGit(upstream, ["add", "."]);
+      runGit(upstream, ["commit", "-q", "-m", "root"]);
+      const sha = runGit(upstream, ["rev-parse", "HEAD"]) as FullSha;
+      const manifest = parseUpstreamManifest({
+        version: 2,
+        policy: { maximum_file_bytes: 1024, maximum_artifact_bytes: 4096, allow_binary: false, allow_generated: false },
+        sources: [{
+          id: "fixture",
+          repository: pathToFileURL(upstream).href,
+          ref: "main",
+          license: { expression: "MIT", evidence: "LICENSE" },
+          artifacts: [
+            artifactRecord(sha, ".", ["SKILL.md"], "skills/root/example"),
+            artifactRecord(sha, "skills/example", ["SKILL.md"], "skills/nested/example"),
+          ],
+        }],
+        skills: [
+          skillRecord(sha, ".", "skills/root/example"),
+          skillRecord(sha, "skills/example", "skills/nested/example"),
+        ],
+        external_records: [],
+        not_vendored: {},
+      }, { allowFileRepositories: true });
+
+      const rootSelection = readGitSelection(path.join(upstream, ".git"), sha, manifest.sources[0].artifacts[0], manifest);
+      const nestedSelection = readGitSelection(path.join(upstream, ".git"), sha, manifest.sources[0].artifacts[1], manifest);
+      expect(rootSelection.map((entry) => entry.path)).toEqual(["SKILL.md"]);
+      expect(nestedSelection.map((entry) => entry.path)).toEqual(["SKILL.md"]);
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true });
     }
