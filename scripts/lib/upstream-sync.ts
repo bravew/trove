@@ -497,12 +497,16 @@ function hasCommit(gitDirectory: string, revision: FullSha): boolean {
   return result.status === 0 && result.stdout.trim() === "commit";
 }
 
-/** A depth-1 fetch of `ref` does not contain older evidence commits. Fetch the sha, then unshallow. */
+/**
+ * A depth-1 fetch of `ref` does not contain older evidence commits. Fetch the
+ * evidence sha at depth 1 — enough for a tree read or a two-tree diff — and
+ * fall back to an unshallow only when the server refuses a fetch by sha.
+ */
 function ensureRevision(gitDirectory: string, source: UpstreamSource, revision: FullSha): void {
   if (hasCommit(gitDirectory, revision)) return;
   const fetched = spawnSync(
     "git",
-    ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "origin", revision],
+    ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--depth=1", "origin", revision],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
   if (fetched.status === 0 && hasCommit(gitDirectory, revision)) return;
@@ -533,15 +537,30 @@ function commitsTouching(
     .sort();
 }
 
+/**
+ * Adapted rows of `source` that no artifact owns. An artifact reports its own
+ * drift against `base_sha`, and `--update` never advances the row's
+ * `evidence_sha`, so reviewing a row an artifact already vendors would report
+ * it as due forever, alongside the artifact's own report.
+ */
+function unvendoredAdaptedSkills(
+  manifest: UpstreamManifest,
+  source: UpstreamSource,
+): Extract<SkillOrigin, { origin: "adapted" }>[] {
+  const vendored = new Set(source.artifacts.map((artifact) => artifact.localPath));
+  return manifest.skills.filter(
+    (skill): skill is Extract<SkillOrigin, { origin: "adapted" }> =>
+      skill.origin === "adapted" && skill.sourceId === source.id && !vendored.has(skill.localPath),
+  );
+}
+
 function reviewAdapted(
   source: UpstreamSource,
-  skills: readonly SkillOrigin[],
+  adapted: readonly Extract<SkillOrigin, { origin: "adapted" }>[],
   remote: PreparedRemote,
 ): readonly AdaptedReview[] {
-  const adapted = skills.filter((skill) => skill.origin === "adapted" && skill.sourceId === source.id);
   const reviews: AdaptedReview[] = [];
   for (const skill of adapted) {
-    if (skill.origin !== "adapted") continue;
     const changed = commitsTouching(remote.gitDirectory, skill.evidenceSha, remote.candidate, skill.upstreamPaths);
     if (changed.length === 0) continue;
     reviews.push({
@@ -641,10 +660,10 @@ export function checkOnline(root: string, manifest: UpstreamManifest): SyncRepor
   const reviews: AdaptedReview[] = [];
   const artifacts: ArtifactReport[] = [];
   for (const source of manifest.sources) {
-    const adapted = manifest.skills.filter((skill) => skill.origin === "adapted" && skill.sourceId === source.id);
+    const adapted = unvendoredAdaptedSkills(manifest, source);
     const evidence = [
       ...new Set([
-        ...adapted.flatMap((skill) => skill.origin === "adapted" ? [skill.evidenceSha] : []),
+        ...adapted.map((skill) => skill.evidenceSha),
         ...source.artifacts.flatMap((artifact) => artifact.status === "active" ? [artifact.baseSha] : []),
       ]),
     ];

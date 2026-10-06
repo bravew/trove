@@ -4,7 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { checkOnline, renderMarkdown, stableJson } from "../scripts/lib/upstream-sync";
+import {
+  checkOnline,
+  digestTree,
+  renderMarkdown,
+  stableJson,
+  walkLocal,
+} from "../scripts/lib/upstream-sync";
 import {
   ManifestError,
   parseUpstreamManifest,
@@ -75,6 +81,98 @@ interface ReviewFixture {
   evidenceSha: FullSha;
   candidateSha: FullSha;
   cleanup: () => void;
+}
+
+/** A vendored skill whose artifact and adapted row both watch `skill/`. */
+interface VendoredReviewFixture {
+  root: string;
+  manifest: ReturnType<typeof parseUpstreamManifest>;
+  cleanup: () => void;
+}
+
+function vendoredReviewFixture(): VendoredReviewFixture {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-vendored-review-"));
+  const upstream = path.join(temporary, "upstream");
+  const root = path.join(temporary, "root");
+  fs.mkdirSync(path.join(upstream, "skill/rules"), { recursive: true });
+  fs.mkdirSync(path.join(root, "skills/coding/trove-example/references"), { recursive: true });
+  fs.writeFileSync(
+    path.join(upstream, "skill/SKILL.md"),
+    "---\nname: fixture-skill\ndescription: fixture\nlicense: MIT\n---\n\n# Fixture\n",
+  );
+  fs.writeFileSync(path.join(upstream, "skill/rules/a.md"), "one\n");
+  runGit(upstream, ["init", "-q", "-b", "main"]);
+  runGit(upstream, ["add", "."]);
+  runGit(upstream, ["commit", "-q", "-m", "base"], "2026-08-28T00:00:00Z");
+  const baseSha = runGit(upstream, ["rev-parse", "HEAD"]) as FullSha;
+  // Capture the base tree before advancing the watched path.
+  const skillBytes = fs.readFileSync(path.join(upstream, "skill/SKILL.md"));
+  const rulesBytes = fs.readFileSync(path.join(upstream, "skill/rules/a.md"));
+  // Move the watched path after base so the adapted row would be due.
+  fs.writeFileSync(path.join(upstream, "skill/rules/a.md"), "one\ntwo\n");
+  runGit(upstream, ["add", "."]);
+  runGit(upstream, ["commit", "-q", "-m", "touch watched"], "2026-08-30T00:00:00Z");
+
+  // A consistent vendored artifact: the local tree is the transformed base.
+  fs.writeFileSync(path.join(root, "skills/coding/trove-example/SKILL.md.tmpl"), skillBytes);
+  fs.writeFileSync(path.join(root, "skills/coding/trove-example/references/a.md"), rulesBytes);
+  const localTree = walkLocal(path.join(root, "skills/coding/trove-example"));
+  const localTreeDigest = digestTree(localTree);
+  const raw = {
+    version: 2,
+    policy: {
+      maximum_file_bytes: 65536,
+      maximum_artifact_bytes: 262144,
+      allow_binary: false,
+      allow_generated: false,
+    },
+    sources: [{
+      id: "fixture",
+      repository: pathToFileURL(upstream).href,
+      ref: "main",
+      license: { expression: "MIT", evidence: "skill/SKILL.md" },
+      artifacts: [{
+        id: "trove-example",
+        upstream_path: "skill",
+        local_path: "skills/coding/trove-example",
+        base_sha: baseSha,
+        base_tree_digest: digestTree([
+          { path: "SKILL.md", mode: "100644" as const, bytes: skillBytes },
+          { path: "rules/a.md", mode: "100644" as const, bytes: rulesBytes },
+        ]),
+        local_tree_digest: localTreeDigest,
+        patch_digest: digestTree([]),
+        checked_sha: baseSha,
+        checked_at: "2026-08-28T00:00:00Z",
+        candidate_sha: null,
+        imported_at: "2026-08-28T00:00:00Z",
+        include: ["SKILL.md", "rules/**"],
+        exclude: [],
+        path_map: { "SKILL.md": "SKILL.md.tmpl", "rules/": "references/" },
+        transforms: [],
+        patches: [],
+        status: "active",
+      }],
+    }],
+    skills: [{
+      local_path: "skills/coding/trove-example",
+      origin: "adapted",
+      source_id: "fixture",
+      upstream_path: "skill",
+      evidence_sha: baseSha,
+    }],
+    external_records: [],
+    not_vendored: {},
+  };
+  fs.writeFileSync(path.join(root, "upstream.yaml"), JSON.stringify(raw, null, 2));
+  const manifest = parseUpstreamManifest(JSON.parse(JSON.stringify(raw)), {
+    allowFileRepositories: true,
+  });
+  return {
+    root,
+    manifest,
+    cleanup: () => fs.rmSync(temporary, { recursive: true, force: true }),
+  };
 }
 
 function createReviewFixture(): ReviewFixture {
@@ -178,5 +276,22 @@ describe("adapted source review", () => {
     });
     expect(() => parseUpstreamManifest(both)).toThrow(ManifestError);
     expect(() => parseUpstreamManifest(both)).toThrow(/upstream_path/);
+  });
+
+  test("an adapted row owned by a vendored artifact is not separately review due", () => {
+    const fixture = vendoredReviewFixture();
+    try {
+      const report = checkOnline(fixture.root, fixture.manifest);
+      // The artifact reports the drift itself; the shared adapted row must not
+      // add a permanent review due, since --update never advances evidence_sha.
+      expect(report.reviews).toEqual([]);
+      expect(report.artifacts[0]).toMatchObject({
+        conclusion: "update-available",
+        changed_paths: ["rules/a.md"],
+      });
+      expect(renderMarkdown(report)).not.toContain("review due");
+    } finally {
+      fixture.cleanup();
+    }
   });
 });
