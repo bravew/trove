@@ -21,6 +21,12 @@ bun run sync:upstream -- --check \
   --markdown upstream-report.md
 ```
 
+An adapted skill with no artifact still appears in that report. When commits
+since its `evidence_sha` touch `upstream_path` or any `upstream_paths` entry,
+the skill is listed as **review due** with the path and the
+`evidence_sha..candidate` range. The check writes nothing and does not fail
+the run for that; a maintainer decides whether the adaptation still holds.
+
 Update one artifact from a clean worktree:
 
 ```sh
