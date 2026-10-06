@@ -16,19 +16,20 @@ export interface ScanResult {
 export interface ScanOptions {
   /** Repository root holding `external/policy.yaml`, `upstream.yaml`, and `skills/`. */
   root?: string;
-  /** Read this directory instead of the git tree. Symlinks are still rejected. */
-  directory?: string;
 }
 
 interface SelectedFile {
   path: string;
   mode: string;
   bytes: Buffer;
-  /** Symlink text, present only for git mode 120000 or a directory-mode symlink. */
+  /** Symlink text, present only for git mode 120000. */
   linkTarget?: string;
 }
 
-const TROJAN_SOURCE = /[‪-‮⁦-⁩​-‏﻿]/u;
+const GITLINK_MODE = "160000";
+
+/** Bidi controls (U+061C, U+200E-F, U+202A-E, U+2066-9) and zero-width characters. Escaped so this file carries none. */
+const TROJAN_SOURCE = /[\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/u;
 
 const LICENSE_NAMES = new Set(["license", "licence", "copying", "license.md", "licence.md", "copying.md"]);
 
@@ -122,6 +123,11 @@ function readGitTree(source: FetchResult, selection: Selection): SelectedFile[] 
     if (!match) continue;
     const [, mode, object, filePath] = match;
     if (!selected(filePath, selection)) continue;
+    // A submodule's commit is not in this repository, so there is no blob to read.
+    if (mode === GITLINK_MODE) {
+      files.push({ path: filePath, mode, bytes: Buffer.alloc(0) });
+      continue;
+    }
     const bytes = run(["--git-dir", source.gitDirectory, "cat-file", "blob", object]);
     files.push({
       path: filePath,
@@ -129,31 +135,6 @@ function readGitTree(source: FetchResult, selection: Selection): SelectedFile[] 
       bytes,
       linkTarget: mode === "120000" ? bytes.toString("utf8") : undefined,
     });
-  }
-  return files.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function readDirectory(directory: string, selection: Selection, prefix = ""): SelectedFile[] {
-  const files: SelectedFile[] = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    const absolute = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) {
-      if (!selected(relative, selection)) continue;
-      files.push({
-        path: relative,
-        mode: "120000",
-        bytes: Buffer.from(fs.readlinkSync(absolute)),
-        linkTarget: fs.readlinkSync(absolute),
-      });
-      continue;
-    }
-    if (entry.isDirectory()) {
-      files.push(...readDirectory(absolute, selection, relative));
-      continue;
-    }
-    if (!entry.isFile() || !selected(relative, selection)) continue;
-    files.push({ path: relative, mode: "100644", bytes: fs.readFileSync(absolute) });
   }
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -182,6 +163,20 @@ function licenseExpression(text: string, allowlist: readonly string[]): string |
     }
   }
   return LICENSE_HEADERS.find((header) => header.pattern.test(head))?.expression;
+}
+
+function depthOf(filePath: string): number {
+  return filePath.split("/").length;
+}
+
+/**
+ * Proposes the plan's rewrite for `HERE.parent / "templates"`: drop one
+ * `.parent`, on the assumption that path_map moves the directory beside the
+ * file. Other shapes (`__file__`, `os.path.join`) get no mechanical proposal.
+ */
+function proposedRewrite(literal: string): string | undefined {
+  const match = /^([A-Za-z_]\w*)\.parent(\s*\/\s*['"][^'"]+['"])$/.exec(literal);
+  return match && match[1] !== "__file__" ? `${match[1]}${match[2]}` : undefined;
 }
 
 function lineOf(text: string, index: number): number {
@@ -260,7 +255,7 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
   const { maximumFileBytes, maximumArtifactBytes } = manifest.policy;
 
   let total = 0;
-  let license: { file: string; expression: string } | undefined;
+  const licenses: Array<{ file: string; expression: string }> = [];
   const reported = new Set<string>();
 
   for (const file of files) {
@@ -269,6 +264,11 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
 
     if (file.mode === "120000" || file.linkTarget !== undefined) {
       reject(file.path, 1, `symlink${file.linkTarget ? ` to '${file.linkTarget}'` : ""} is not allowed`);
+      continue;
+    }
+
+    if (file.mode === GITLINK_MODE) {
+      reject(file.path, 1, "submodule is not allowed; its content is not part of this source");
       continue;
     }
 
@@ -284,16 +284,17 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
 
     const text = file.bytes.toString("utf8");
 
-    if (isLicenseFile(file.path) && !license) {
-      const expression = licenseExpression(text, allowlist);
-      license = { file: file.path, expression: expression ?? "" };
+    if (isLicenseFile(file.path)) {
+      licenses.push({ file: file.path, expression: licenseExpression(text, allowlist) ?? "" });
     }
 
     for (const name of findSecretMatches(file.path, text)) {
       reject(file.path, 1, `secret hit: ${name}`);
     }
 
-    for (const line of flagLines(text, TROJAN_SOURCE)) {
+    // A leading byte-order mark is an encoding marker, not hidden text.
+    const unmarked = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+    for (const line of flagLines(unmarked, TROJAN_SOURCE)) {
       reject(file.path, line, "bidirectional-override or zero-width Unicode (Trojan Source)");
     }
 
@@ -329,26 +330,42 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
     }
 
     for (const line of flagLines(text, COUPLING)) {
-      const matched = new RegExp(COUPLING.source, COUPLING.flags.includes("g") ? COUPLING.flags : `${COUPLING.flags}g`)
-        .exec(text.split("\n")[line - 1] ?? "");
-      const literal = matched?.[1];
+      const literal = COUPLING.exec(text.split("\n")[line - 1] ?? "")?.[1];
       if (!literal || proposedTransforms.some((transform) => transform.path === file.path && transform.from === literal)) {
         continue;
       }
       const directory = literal.match(/['"]([^'"]+)['"]/)?.[1] ?? "sibling";
+      // references/ and scripts/ keep their place in a Trove skill, so a path between them still resolves.
+      if (directory === "references" || directory === "scripts") continue;
+      const rewrite = proposedRewrite(literal);
+      if (!rewrite) {
+        flag(file.path, line, `code resolves '${directory}/' relative to its own location; no mechanical rewrite proposed`);
+        continue;
+      }
+      const mapped = `${path.posix.dirname(file.path)}/${directory}/`;
       proposedTransforms.push({
         kind: "replace-literal",
         path: file.path,
         from: literal,
-        to: `"${directory}"`,
+        to: rewrite,
         minimumOccurrences: 1,
       });
-      flag(file.path, line, `code resolves '${directory}' relative to its own location; proposed replace-literal`);
+      flag(file.path, line, `code resolves '${directory}/' relative to its own location; proposed replace-literal assumes path_map '${directory}/: ${mapped}'`);
     }
   }
 
   if (total > maximumArtifactBytes) {
     reject(files[0]?.path ?? "", 1, `selected files are ${total} bytes, over maximum_artifact_bytes ${maximumArtifactBytes}`);
+  }
+
+  // The shallowest license governs the source. A nested one usually belongs to
+  // a bundled dependency, so it cannot accept or reject the source on its own,
+  // but one outside the allowlist still needs a human to look.
+  const [license, ...nested] = [...licenses].sort((a, b) => depthOf(a.file) - depthOf(b.file));
+  for (const other of nested) {
+    if (!allowlist.includes(other.expression)) {
+      flag(other.file, 1, `nested license '${other.expression || "unrecognized"}' is outside the allowlist`);
+    }
   }
 
   if (!license) {
@@ -395,9 +412,5 @@ export async function scanSource(
   selection: Selection,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  const root = options.root ?? DEFAULT_ROOT;
-  const files = options.directory
-    ? readDirectory(options.directory, selection)
-    : readGitTree(source, selection);
-  return scanFiles(files, root);
+  return scanFiles(readGitTree(source, selection), options.root ?? DEFAULT_ROOT);
 }

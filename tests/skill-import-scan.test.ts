@@ -106,7 +106,7 @@ describe("scanSource", () => {
   test("hard-rejects a bidirectional override character", async () => {
     const result = await scan({
       LICENSE: MIT_LICENSE,
-      "SKILL.md": skill("fixture-skill", `See the hidden ${"‮"}marker.`),
+      "SKILL.md": skill("fixture-skill", `See the hidden ${String.fromCharCode(0x202e)}marker.`),
     });
     rejects(result, /unicode|bidirectional|override|trojan/i);
   });
@@ -152,11 +152,74 @@ describe("scanSource", () => {
       "scripts/render.py": `ROOT = ${literal}\n`,
     });
     expect(result.proposedTransforms).toEqual([
-      expect.objectContaining({
+      {
         kind: "replace-literal",
+        path: "scripts/render.py",
         from: literal,
-      }),
+        to: 'HERE / "templates"',
+        minimumOccurrences: 1,
+      },
     ]);
+  });
+
+  test("proposes no transform for a reference between references/ and scripts/", async () => {
+    const result = await scan({
+      LICENSE: MIT_LICENSE,
+      "SKILL.md": skill("fixture-skill", "Hello."),
+      "scripts/render.py": 'DOCS = HERE.parent / "references"\n',
+    });
+    expect(result.proposedTransforms).toEqual([]);
+  });
+
+  test("hard-rejects a submodule instead of failing to read it", async () => {
+    const built = fixture({
+      LICENSE: MIT_LICENSE,
+      "SKILL.md": skill("fixture-skill", "Hello."),
+    });
+    try {
+      git(built.directory, ["update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},vendor/lib`]);
+      git(built.directory, ["commit", "-q", "-m", "add submodule"]);
+      const source = { ...built.source, resolvedSha: git(built.directory, ["rev-parse", "HEAD"]) };
+      rejects(await scanSource(source, SELECT_ALL), /submodule/i);
+    } finally {
+      await built.source.cleanup();
+    }
+  });
+
+  test("judges the root license, not one bundled in a subdirectory", async () => {
+    const gpl = "SPDX-License-Identifier: GPL-3.0-only\n";
+    const nestedGpl = await scan(
+      {
+        LICENSE: MIT_LICENSE,
+        "SKILL.md": skill("brand-new-scan-skill", "Hello."),
+        "assets/vendor/LICENSE": gpl,
+      },
+      { root: REPO_ROOT },
+    );
+    expect(nestedGpl.findings.filter((finding) => finding.severity === "hard-reject")).toEqual([]);
+    expect(nestedGpl.findings.some((finding) => finding.severity === "flag" && /nested license 'GPL-3.0-only'/.test(finding.message))).toBe(true);
+
+    const rootGpl = await scan(
+      {
+        LICENSE: gpl,
+        "SKILL.md": skill("brand-new-scan-skill", "Hello."),
+        "assets/vendor/LICENSE": MIT_LICENSE,
+      },
+      { root: REPO_ROOT },
+    );
+    rejects(rootGpl, /GPL-3\.0-only.*outside the allowlist/);
+  });
+
+  test("does not treat a leading byte-order mark as Trojan Source", async () => {
+    const result = await scan(
+      {
+        LICENSE: MIT_LICENSE,
+        "SKILL.md": skill("brand-new-scan-skill", "Hello."),
+        "scripts/run.py": `${String.fromCharCode(0xfeff)}print("ok")\n`,
+      },
+      { root: REPO_ROOT },
+    );
+    expect(result.findings.filter((finding) => finding.severity === "hard-reject")).toEqual([]);
   });
 
   test("reads the selected tree through the git directory", async () => {
