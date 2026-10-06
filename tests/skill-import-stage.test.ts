@@ -31,7 +31,9 @@ function snapshot(directory: string, prefix = ""): Record<string, string> {
   return files;
 }
 
-function fixture() {
+const DEFAULT_SKILL = "---\nname: example\ndescription: A fixture skill\nlicense: MIT\nallowed-tools:\n  - Bash\n  - Read\n---\n\n# example\n\nUse ORIGINAL.\n";
+
+function fixture(skill = DEFAULT_SKILL) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-stage-"));
   temporaryDirectories.push(temporary);
   const root = path.join(temporary, "target");
@@ -39,7 +41,7 @@ function fixture() {
   fs.mkdirSync(root);
   fs.mkdirSync(path.join(upstream, "example", "notes"), { recursive: true });
   fs.writeFileSync(path.join(upstream, "LICENSE"), "MIT License\n\nCopyright fixture\n");
-  fs.writeFileSync(path.join(upstream, "example", "SKILL.md"), "---\nname: example\ndescription: A fixture skill\nlicense: MIT\nallowed-tools:\n  - Bash\n  - Read\n---\n\n# example\n\nUse ORIGINAL.\n");
+  fs.writeFileSync(path.join(upstream, "example", "SKILL.md"), skill);
   fs.writeFileSync(path.join(upstream, "example", "notes", "guide.md"), "fixture reference\n");
   fs.writeFileSync(path.join(upstream, "example", "ignored.md"), "excluded\n");
   git(upstream, "init", "--quiet");
@@ -80,7 +82,7 @@ describe("skill import staging", () => {
     const manifest = loadUpstreamManifest(root);
     const artifact = manifest.sources[0].artifacts[0];
     expect(artifact.baseSha).toBe(sha);
-    expect(manifest.skills[0]).toMatchObject({ origin: "adapted", sourceId: "trove-example", upstreamPath: "example", evidenceSha: sha });
+    expect(manifest.skills[0]).toMatchObject({ origin: "adapted", sourceId: "trove-example", upstreamPaths: ["example"], evidenceSha: sha });
     const base = readGitSelection(path.join(upstream, ".git"), artifact.checkedSha, artifact, manifest);
     expect(artifact.baseTreeDigest).toBe(digestTree(base));
     const directory = path.join(root, artifact.localPath);
@@ -148,6 +150,50 @@ describe("skill import staging", () => {
     fs.writeFileSync(path.join(directory, "SKILL.md.tmpl"), "existing author content\n");
     const before = snapshot(root);
     await expect(stageImport(request)).rejects.toThrow("skill directory already exists");
+    expect(snapshot(root)).toEqual(before);
+  });
+
+  test("removes only allowed-tools and leaves the rest of the frontmatter byte-identical", async () => {
+    const description = "Use this skill whenever the user mentions a video or audio file, even when they do not say edit, convert, or transcode.";
+    const { root, request } = fixture(
+      `---\nname: example\ndescription: ${description}\nallowed-tools: Bash, Read\nlicense: MIT # upstream notice\nmetadata: {version: "1.2"}\n---\n\n# example\n\nUse ORIGINAL.\n`,
+    );
+    const result = await stageImport({ ...request, renameSkill: undefined, preambleMarker: undefined, acceptedTransforms: undefined });
+    const content = fs.readFileSync(path.join(root, "skills/coding/trove-example/SKILL.md.tmpl"), "utf8");
+    expect(content).toStartWith(`---\nname: example\ndescription: ${description}\nlicense: MIT # upstream notice\nmetadata: {version: "1.2"}\n---\n`);
+    expect(result).toEqual({ allowedTools: "Bash, Read" });
+    expect(checkOffline(root, loadUpstreamManifest(root)).artifacts[0].conclusion).toBe("no-changes");
+  });
+
+  test("a split front byte-syncs upstream SKILL.md as the runtime spec and stages a local_only front", async () => {
+    const { root, upstream, request } = fixture();
+    const result = await stageImport({
+      ...request,
+      splitFront: true,
+      renameSkill: undefined,
+      preambleMarker: undefined,
+      acceptedTransforms: undefined,
+      selection: { ...request.selection, pathMap: { "notes/": "references/" } },
+    });
+    const manifest = loadUpstreamManifest(root);
+    const artifact = manifest.sources[0].artifacts[0];
+    expect(artifact.pathMap["SKILL.md"]).toBe("references/runtime-spec.md");
+    expect(artifact.localOnly).toContain("SKILL.md.tmpl");
+    const directory = path.join(root, artifact.localPath);
+    expect(fs.readFileSync(path.join(directory, "references/runtime-spec.md"), "utf8"))
+      .toBe(fs.readFileSync(path.join(upstream, "example", "SKILL.md"), "utf8"));
+    const front = fs.readFileSync(path.join(directory, "SKILL.md.tmpl"), "utf8");
+    expect(front).toContain("name: trove-example");
+    expect(front).toContain("{{PREAMBLE}}");
+    expect(front).toContain("references/runtime-spec.md");
+    expect(result).toEqual({ allowedTools: ["Bash", "Read"] });
+    expect(checkOffline(root, manifest).artifacts[0]).toMatchObject({ conclusion: "no-changes", patch: { digest: "verified" } });
+  });
+
+  test("a split front refuses rename and preamble transforms", async () => {
+    const { root, request } = fixture();
+    const before = snapshot(root);
+    await expect(stageImport({ ...request, splitFront: true })).rejects.toThrow("split front");
     expect(snapshot(root)).toEqual(before);
   });
 
