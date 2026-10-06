@@ -46,6 +46,19 @@ function publishRepo(root: string, name: string): PublishedRepo {
   return { root: work, bare, sha };
 }
 
+const DECLARED = "https://example.invalid/upstream.git";
+
+/** A local checkout that has fetched its remote and declares it as an https origin. */
+function trackingCheckout(published: PublishedRepo): void {
+  runGit(published.root, ["fetch", "-q", "origin"]);
+  runGit(published.root, ["remote", "set-url", "origin", DECLARED]);
+}
+
+function isInside(child: string, parent: string): boolean {
+  const relative = path.relative(fs.realpathSync(parent), fs.realpathSync(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 /**
  * Tests never touch the network. The injected resolver hands fetch the local bare
  * repository that stands in for the https remote the caller declared.
@@ -102,6 +115,7 @@ describe("skill import fetch", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "trove-fetch-local-"));
     try {
       const published = publishRepo(root, "upstream");
+      trackingCheckout(published);
       fs.writeFileSync(path.join(published.root, "README"), "local only\n");
       runGit(published.root, ["add", "README"]);
       runGit(published.root, ["commit", "-q", "-m", "not published"]);
@@ -109,7 +123,48 @@ describe("skill import fetch", () => {
       await expect(fetchSource({
         repository: published.root,
         ref: "HEAD",
-      })).rejects.toThrow(/remote/i);
+        resolveRemote: resolveRemote(published.bare),
+      })).rejects.toThrow(/not present on its declared remote/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a local checkout with uncommitted changes", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "trove-fetch-dirty-"));
+    try {
+      const published = publishRepo(root, "upstream");
+      trackingCheckout(published);
+      fs.writeFileSync(path.join(published.root, "README"), "edited\n");
+
+      await expect(fetchSource({
+        repository: published.root,
+        ref: "main",
+        resolveRemote: resolveRemote(published.bare),
+      })).rejects.toThrow(/not clean/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a clean local checkout whose HEAD is published and records its remote", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "trove-fetch-accept-"));
+    try {
+      const published = publishRepo(root, "upstream");
+      trackingCheckout(published);
+
+      const result = await fetchSource({
+        repository: published.root,
+        ref: "main",
+        resolveRemote: resolveRemote(published.bare),
+      });
+      try {
+        expect(result.resolvedSha).toBe(published.sha);
+        expect(result.repository).toBe(DECLARED);
+        expect(isInside(result.gitDirectory, published.root)).toBe(false);
+      } finally {
+        await result.cleanup();
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -147,6 +202,11 @@ describe("skill import fetch", () => {
       repository: "git://example.invalid/upstream.git",
       ref: "main",
     })).rejects.toThrow(/https/);
+
+    await expect(fetchSource({
+      repository: "git@example.invalid:upstream.git",
+      ref: "main",
+    })).rejects.toThrow(/https/);
   });
 
   test("cleanup removes the temp directory and is safe to call twice", async () => {
@@ -160,7 +220,8 @@ describe("skill import fetch", () => {
       });
       const directory = result.gitDirectory;
       expect(fs.existsSync(directory)).toBe(true);
-      expect(path.resolve(directory).startsWith(path.resolve(root, ".."))).toBe(false);
+      expect(isInside(directory, process.cwd())).toBe(false);
+      expect(isInside(directory, root)).toBe(false);
 
       await result.cleanup();
       expect(fs.existsSync(directory)).toBe(false);

@@ -71,15 +71,21 @@ function assertSafeRef(ref: string): void {
   }
 }
 
-/** A local path is a fast path, never a trust root: clean, and its HEAD is on origin. */
-async function acceptLocalCheckout(repository: string): Promise<void> {
+/**
+ * A local path is a fast path, never a trust root: clean, and its HEAD is on
+ * origin. Returns the origin URL, which is what provenance records.
+ */
+async function acceptLocalCheckout(repository: string): Promise<string> {
+  if (!fs.statSync(repository, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`not an https remote or a local checkout: ${repository}`);
+  }
   const top = await git(repository, ["rev-parse", "--show-toplevel"]);
   const checkout = await fs.promises.realpath(top);
   const requested = await fs.promises.realpath(repository);
   if (checkout !== requested) {
     throw new Error(`local path is not the root of a git checkout: ${repository}`);
   }
-  const status = await git(checkout, ["status", "--porcelain"]);
+  const status = await git(checkout, ["-c", "core.fsmonitor=false", "status", "--porcelain"]);
   if (status !== "") {
     throw new Error(`local checkout is not clean: ${repository}`);
   }
@@ -88,6 +94,11 @@ async function acceptLocalCheckout(repository: string): Promise<void> {
   if (contained.status !== 0 || !contained.stdout.split("\n").some((line) => line.trim().startsWith("origin/"))) {
     throw new Error(`local checkout HEAD is not present on its declared remote: ${repository}`);
   }
+  const origin = await git(checkout, ["remote", "get-url", "origin"]);
+  if (!origin.startsWith("https://")) {
+    throw new Error(`local checkout remote is not https: ${repository}`);
+  }
+  return origin;
 }
 
 /**
@@ -138,22 +149,19 @@ export async function fetchSource(request: FetchRequest): Promise<FetchResult> {
   assertSafeRef(request.ref);
   const resolveRemote = request.resolveRemote ?? defaultResolveRemote;
   const isLocal = !request.repository.includes("://");
-  if (isLocal) await acceptLocalCheckout(request.repository);
-
-  let remote: string;
-  try {
-    remote = resolveRemote(isLocal ? await git(request.repository, ["remote", "get-url", "origin"]) : request.repository);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (isLocal && /non-https/i.test(message)) {
-      throw new Error(`local checkout remote is not https: ${request.repository}`);
-    }
-    throw error;
-  }
+  const declared = isLocal ? await acceptLocalCheckout(request.repository) : request.repository;
+  const remote = resolveRemote(declared);
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "trove-skill-import-"));
   const cloneEnv = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
-  const cloneConfig = ["-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", "-c", "submodule.recurse=false"];
+  // protocol.allow=never also stops a redirect or submodule from leaving https.
+  const cloneConfig = [
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "protocol.allow=never",
+    "-c", "protocol.https.allow=always",
+    "-c", "protocol.file.allow=never",
+    "-c", "submodule.recurse=false",
+  ];
   try {
     if (usesFileTransport(remote)) {
       // An injected resolver may hand back a local bare repository, and
@@ -162,7 +170,12 @@ export async function fetchSource(request: FetchRequest): Promise<FetchResult> {
       // resolver never returns such a remote.
       await materializeLocal(remote, directory);
     } else {
-      await git(undefined, [...cloneConfig, "clone", "--no-checkout", "--config", "core.hooksPath=/dev/null", "--config", "submodule.recurse=false", remote, directory], cloneEnv);
+      // A bare clone keeps every branch under refs/heads, so a non-default
+      // branch name resolves the same way it does in materializeLocal. A plain
+      // clone would leave it only under refs/remotes/origin.
+      const gitDir = path.join(directory, ".git");
+      await git(undefined, [...cloneConfig, "clone", "--bare", "--template=", "--config", "core.hooksPath=/dev/null", "--config", "submodule.recurse=false", "--", remote, gitDir], cloneEnv);
+      await git(gitDir, ["config", "core.bare", "false"]);
     }
     const sha = resolvedCommit(await git(directory, ["rev-parse", "--verify", "--end-of-options", `${request.ref}^{commit}`]));
     if (isLocal) {
@@ -174,7 +187,7 @@ export async function fetchSource(request: FetchRequest): Promise<FetchResult> {
     await git(directory, ["checkout", "--detach", "--quiet", sha], cloneEnv);
     const gitDirectory = await git(directory, ["rev-parse", "--absolute-git-dir"]);
     return {
-      repository: request.repository,
+      repository: declared,
       resolvedSha: sha,
       gitDirectory,
       cleanup: cleanupOf(directory),
