@@ -850,8 +850,12 @@ function candidateResult(
   }
 }
 
+type TrackedFile =
+  | { kind: "file"; bytes: Buffer; mode: number }
+  | { kind: "symlink"; target: string };
+
 interface TrackedSnapshot {
-  files: ReadonlyMap<string, { bytes: Buffer; mode: number }>;
+  files: ReadonlyMap<string, TrackedFile>;
 }
 
 function requireCleanWorktree(root: string): void {
@@ -860,12 +864,18 @@ function requireCleanWorktree(root: string): void {
 }
 
 function snapshotTrackedFiles(root: string): TrackedSnapshot {
-  const files = new Map<string, { bytes: Buffer; mode: number }>();
+  const files = new Map<string, TrackedFile>();
   for (const repositoryPath of run("git", ["ls-files", "-z"], root).toString("utf8").split("\0").filter(Boolean)) {
     const absolute = safeAbsolute(root, repositoryPath);
     const stat = fs.lstatSync(absolute);
-    if (!stat.isFile()) throw new SyncError(`tracked path '${repositoryPath}' is not a regular file`);
-    files.set(repositoryPath, { bytes: fs.readFileSync(absolute), mode: stat.mode & 0o777 });
+    if (stat.isSymbolicLink()) {
+      // Snapshot the link itself, including dangling links, without reading its target.
+      files.set(repositoryPath, { kind: "symlink", target: fs.readlinkSync(absolute) });
+    } else if (stat.isFile()) {
+      files.set(repositoryPath, { kind: "file", bytes: fs.readFileSync(absolute), mode: stat.mode & 0o777 });
+    } else {
+      throw new SyncError(`tracked path '${repositoryPath}' is not a regular file or symlink`);
+    }
   }
   return { files };
 }
@@ -882,7 +892,14 @@ function restoreSnapshot(root: string, snapshot: TrackedSnapshot): void {
   for (const [repositoryPath, file] of snapshot.files) {
     const absolute = safeAbsolute(root, repositoryPath);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    fs.writeFileSync(absolute, file.bytes, { mode: file.mode });
+    // Remove a replacement link before writing so rollback cannot follow it.
+    fs.rmSync(absolute, { recursive: true, force: true });
+    if (file.kind === "symlink") {
+      fs.symlinkSync(file.target, absolute);
+    } else {
+      fs.writeFileSync(absolute, file.bytes, { mode: file.mode });
+      fs.chmodSync(absolute, file.mode);
+    }
   }
 }
 
@@ -918,9 +935,9 @@ function updateManifestLock(
 
 function defaultVerification(root: string): readonly string[] {
   run("bun", ["run", "build"], root);
-  run("bun", ["test"], root);
+  run("bun", ["test", "./tests"], root);
   run("bun", ["run", "validate"], root);
-  return ["bun run build", "bun test", "bun run validate"];
+  return ["bun run build", "bun test ./tests", "bun run validate"];
 }
 
 function carryUnownedFiles(

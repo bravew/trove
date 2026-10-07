@@ -1181,6 +1181,49 @@ describe("one-artifact updater", () => {
     }
   });
 
+  test.each([false, true])("preserves tracked symlinks when verification fails: %s", (fail) => {
+    const fixture = createUpdateFixture("add");
+    const outside = path.join(fixture.upstream, "outside.txt");
+    try {
+      fs.writeFileSync(outside, "outside sentinel\n");
+      fs.mkdirSync(path.join(fixture.root, ".claude/commands"), { recursive: true });
+      fs.mkdirSync(path.join(fixture.root, "commands"));
+      const target = path.join(fixture.root, "commands/example.md");
+      const link = path.join(fixture.root, ".claude/commands/example.md");
+      const dangling = path.join(fixture.root, "dangling-link");
+      fs.writeFileSync(target, "command\n", { mode: 0o755 });
+      fs.symlinkSync("../../commands/example.md", link);
+      fs.symlinkSync("missing-target", dangling);
+      runGit(fixture.root, ["add", "."]);
+      runGit(fixture.root, ["commit", "-q", "-m", "tracked links"]);
+
+      const report = updateArtifacts(fixture.root, fixture.manifest, { artifactId: "trove-example" }, {
+        verify: () => {
+          if (fail) {
+            fs.unlinkSync(link);
+            fs.writeFileSync(link, "replaced link\n");
+            fs.unlinkSync(target);
+            fs.symlinkSync(outside, target);
+            fs.unlinkSync(dangling);
+            throw new Error("fixture verifier failed");
+          }
+          return ["fixture verification"];
+        },
+      });
+      expect(report.artifacts[0].conclusion).toBe(fail ? "validation-failed" : "updated");
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(link)).toBe("../../commands/example.md");
+      expect(fs.readlinkSync(dangling)).toBe("missing-target");
+      expect(fs.lstatSync(target).isFile()).toBe(true);
+      expect(fs.readFileSync(target, "utf8")).toBe("command\n");
+      expect(fs.statSync(target).mode & 0o777).toBe(0o755);
+      expect(fs.readFileSync(outside, "utf8")).toBe("outside sentinel\n");
+      if (fail) expect(runGit(fixture.root, ["status", "--porcelain"])).toBe("");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test("rolls back the entire worktree when verification fails", () => {
     const fixture = createUpdateFixture("add");
     try {
