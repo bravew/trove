@@ -15,5 +15,8 @@
     "transcoding",
     "editing"
   ],
-  "category": "media"
+  "category": "media",
+  "skills": [
+    "./.copilot/skills/trove-ffmpeg"
+  ]
 }

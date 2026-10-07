@@ -10,7 +10,9 @@ logo: assets/logo.svg
 brandColor: "#7C3AED"
 roles: [dev, design, pm]
 
-skills: []
+skills:
+  - path: ./skills/trove-ffmpeg
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:

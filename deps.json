@@ -36,6 +36,7 @@
       "trove-verify"
     ],
     "trove-explain": [],
+    "trove-ffmpeg": [],
     "trove-json-canvas": [],
     "trove-lambda": [
       "trove-principle-idempotency"

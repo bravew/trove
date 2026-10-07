@@ -313,8 +313,18 @@
       "version": "2026.10.7",
       "source": "./plugins/trove-media",
       "logo": "assets/logo.svg",
-      "platforms": [],
-      "skills": []
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ],
+      "skills": [
+        "trove-ffmpeg"
+      ]
     }
   ]
 }

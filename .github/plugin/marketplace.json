@@ -115,6 +115,18 @@
         "notes",
         "web-clip"
       ]
+    },
+    {
+      "name": "trove-media",
+      "source": "./plugins/trove-media",
+      "description": "Media skills: video and audio editing, transcoding, delivery checks, and production workflows",
+      "category": "media",
+      "keywords": [
+        "video",
+        "audio",
+        "ffmpeg",
+        "media"
+      ]
     }
   ]
 }
