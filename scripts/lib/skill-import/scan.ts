@@ -56,7 +56,7 @@ const LICENSE_HEADERS: ReadonlyArray<{ pattern: RegExp; expression: string }> = 
   { pattern: /redistribution and use in source and binary forms, with or without/i, expression: "BSD-3-Clause" },
 ];
 
-const SPDX_LINE = /SPDX-License-Identifier:\s*(\S+)/i;
+const SPDX_LINE = /SPDX-License-Identifier:[ \t]*([^\r\n]+)/i;
 
 /** Code patterns that are reported, never decided. Order is the report order. */
 const CODE_FLAGS: ReadonlyArray<{ pattern: RegExp; message: string }> = [
@@ -156,15 +156,18 @@ function isLicenseFile(filePath: string): boolean {
 
 function licenseExpression(text: string, allowlist: readonly string[]): string | undefined {
   const spdx = SPDX_LINE.exec(text);
-  SPDX_LINE.lastIndex = 0;
-  if (spdx) return spdx[1].trim();
+  // The whole expression is kept so "MIT AND GPL-3.0-only" fails the exact allowlist match instead of reducing to "MIT".
+  if (spdx) return spdx[1].replace(/\s*(?:-->|\*\/)\s*$/, "").trim();
   const head = text.slice(0, 4000);
+  // A recognized heading outranks a bare identifier, which may only be mentioned in the prose.
+  const headed = LICENSE_HEADERS.find((header) => header.pattern.test(head))?.expression;
+  if (headed) return headed;
   for (const license of allowlist) {
     if (new RegExp(`(?:^|\\s)${license.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`).test(head)) {
       return license;
     }
   }
-  return LICENSE_HEADERS.find((header) => header.pattern.test(head))?.expression;
+  return undefined;
 }
 
 /**

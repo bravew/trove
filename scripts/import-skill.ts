@@ -391,6 +391,12 @@ function parseArgs(argv: readonly string[]): Options {
   if (positionals.length !== 1) throw new CliError("exactly one source (git URL or local path) is required");
   options.source = positionals[0];
 
+  // The scan sees --path-prefixed patterns and staging sees them bare; both must select the same files.
+  if (options.subtree !== ".") {
+    for (const pattern of options.include) assertPrefixable(pattern, "--include", options.subtree);
+    for (const pattern of options.exclude) assertPrefixable(pattern, "--exclude", options.subtree);
+  }
+
   // Confine report paths before any fetch, so a bad path never reaches the network.
   const reportId = options.id ?? deriveId(options.source);
   for (const requested of [options.json, options.markdown]) {
@@ -417,9 +423,27 @@ function parseArgs(argv: readonly string[]): Options {
   return options;
 }
 
+// matchesPattern honors a double star only alone, as a trailing "/" + "**", or as a
+// leading "**" + "/". Prefixing a leading one with --path leaves a middle double star
+// that the scanner never matches while staging, which sees the bare pattern, still
+// selects files. Those files would be staged unscanned, so refuse the pattern.
+function prefixable(pattern: string): boolean {
+  if (pattern === "**") return true;
+  return !pattern.replace(/\/\*\*(?:\/\*|\/\*\*)?$/, "").includes("**");
+}
+
+function assertPrefixable(pattern: string, flag: string, subtree: string): void {
+  if (!prefixable(pattern)) {
+    throw new CliError(`${flag} '${pattern}' cannot be combined with --path '${subtree}'; use a prefix pattern such as 'dir/**'`);
+  }
+}
+
 function prefix(patterns: readonly string[], subtree: string): string[] {
   if (subtree === ".") return [...patterns];
-  return patterns.map((pattern) => (pattern === "**" ? `${subtree}/**` : `${subtree}/${pattern}`));
+  return patterns.map((pattern) => {
+    assertPrefixable(pattern, "pattern", subtree);
+    return pattern === "**" ? `${subtree}/**` : `${subtree}/${pattern}`;
+  });
 }
 
 /** Strips the `--path` root from a repository-relative path. Undefined when outside it. */

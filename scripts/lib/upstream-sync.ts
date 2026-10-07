@@ -16,6 +16,7 @@ import {
   type UpstreamPolicy,
   type UpstreamSource,
 } from "./upstream-manifest";
+import { noninteractiveGitEnv } from "./git-env";
 import { isUnownedSupportName } from "./support-files";
 
 export { isCanonicalArtifactPath };
@@ -82,7 +83,7 @@ export class SyncError extends Error {
 }
 
 function run(command: string, args: readonly string[], cwd?: string): Buffer {
-  const result = spawnSync(command, [...args], { cwd, encoding: null, stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync(command, [...args], { cwd, encoding: null, stdio: ["ignore", "pipe", "pipe"], env: noninteractiveGitEnv() });
   if (result.status !== 0) {
     const stderr = result.stderr?.toString("utf8").trim();
     throw new SyncError(`${command} ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
@@ -512,7 +513,7 @@ function ensureRevision(gitDirectory: string, source: UpstreamSource, revision: 
   const fetched = spawnSync(
     "git",
     ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--depth=1", "origin", revision],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: noninteractiveGitEnv() },
   );
   if (fetched.status === 0 && hasCommit(gitDirectory, revision)) return;
   run("git", ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--unshallow", "origin", source.ref]);

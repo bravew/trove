@@ -282,6 +282,33 @@ describe("scanSource", () => {
     expect(result.findings.some((finding) => finding.severity === "hard-reject" && /secret/i.test(finding.message))).toBe(false);
   });
 
+  test("keeps a compound SPDX expression whole so it fails the allowlist", async () => {
+    const result = await scan(
+      { LICENSE: "SPDX-License-Identifier: MIT AND GPL-3.0-only\n", "SKILL.md": skill("brand-new-scan-skill", "Hello.") },
+      { root: REPO_ROOT },
+    );
+    expect(result.license).toEqual({ file: "LICENSE", expression: "MIT AND GPL-3.0-only" });
+    rejects(result, /MIT AND GPL-3\.0-only.*outside the allowlist/);
+  });
+
+  test("reads an SPDX identifier inside a comment without its closing marker", async () => {
+    const result = await scan(
+      { LICENSE: "<!-- SPDX-License-Identifier: MIT -->\n", "SKILL.md": skill("brand-new-scan-skill", "Hello.") },
+      { root: REPO_ROOT },
+    );
+    expect(result.license).toEqual({ file: "LICENSE", expression: "MIT" });
+    expect(result.findings.filter((finding) => finding.severity === "hard-reject")).toEqual([]);
+  });
+
+  test("a license heading outranks an allowlisted name mentioned in its prose", async () => {
+    const result = await scan(
+      { LICENSE: "Apache License\nVersion 2.0\n\nNot compatible with ISC software.\n", "SKILL.md": skill("brand-new-scan-skill", "Hello.") },
+      { root: REPO_ROOT },
+    );
+    expect(result.license?.expression).toBe("Apache-2.0");
+    expect(result.findings.filter((finding) => finding.severity === "hard-reject")).toEqual([]);
+  });
+
   test("recognizes a custom license name via --license-path", async () => {
     const result = await scan(
       {
