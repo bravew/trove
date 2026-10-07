@@ -1,0 +1,33 @@
+{
+  "resolvedSha": "9ada0f6dca03f1a5f1aa62ea237759c3f8e15321",
+  "exceptions": [
+    {
+      "file": "references/gotchas.md",
+      "sha256": "632c85918fdd2a9720c339fb7c0f2939286fb250d6e4c91a53a94972268527a1",
+      "line": 197,
+      "codePoint": "U+200D",
+      "count": 1
+    },
+    {
+      "file": "scripts/_common/emoji.py",
+      "sha256": "8db4f6f4eca49990b879f127606ba2795048a7bac9ac86637127cdf6087fd726",
+      "line": 30,
+      "codePoint": "U+200D",
+      "count": 1
+    },
+    {
+      "file": "scripts/_common/emoji.py",
+      "sha256": "8db4f6f4eca49990b879f127606ba2795048a7bac9ac86637127cdf6087fd726",
+      "line": 68,
+      "codePoint": "U+200D",
+      "count": 1
+    },
+    {
+      "file": "scripts/_common/emoji.py",
+      "sha256": "8db4f6f4eca49990b879f127606ba2795048a7bac9ac86637127cdf6087fd726",
+      "line": 73,
+      "codePoint": "U+200D",
+      "count": 2
+    }
+  ]
+}

@@ -84,7 +84,8 @@ export type SkillOrigin =
       localPath: RepositoryPath;
       origin: "adapted";
       sourceId: string;
-      upstreamPath: RepositoryPath;
+      /** Repository paths this adaptation was taken from. One entry when the row used `upstream_path`. */
+      upstreamPaths: readonly RepositoryPath[];
       evidenceSha: FullSha;
     };
 
@@ -214,7 +215,8 @@ export function repositoryPathAt(value: unknown, where: string): RepositoryPath 
   if (candidate.includes("\\") || candidate.includes("\0")) {
     fail(where, "must use normalized POSIX separators");
   }
-  if (path.posix.isAbsolute(candidate) || candidate === ".") fail(where, "must be repository-relative");
+  if (candidate === ".") return candidate as RepositoryPath;
+  if (path.posix.isAbsolute(candidate)) fail(where, "must be repository-relative");
   const segments = candidate.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     fail(where, "must not contain empty, '.' or '..' segments");
@@ -453,6 +455,17 @@ function parseSource(
   };
 }
 
+function parseUpstreamPaths(record: Record<string, unknown>, where: string): readonly RepositoryPath[] {
+  const hasSingle = "upstream_path" in record;
+  const hasList = "upstream_paths" in record;
+  if (hasSingle === hasList) {
+    fail(where, "set exactly one of 'upstream_path' or 'upstream_paths'");
+  }
+  if (hasSingle) return [repositoryPathAt(record.upstream_path, `${where}.upstream_path`)];
+  return stringArrayAt(record.upstream_paths, `${where}.upstream_paths`).map((entry, index) =>
+    repositoryPathAt(entry, `${where}.upstream_paths[${index}]`));
+}
+
 function parseSkill(value: unknown, where: string): SkillOrigin {
   const record = objectAt(value, where);
   const origin = stringAt(record.origin, `${where}.origin`);
@@ -461,12 +474,17 @@ function parseSkill(value: unknown, where: string): SkillOrigin {
     return { localPath: repositoryPathAt(record.local_path, `${where}.local_path`), origin };
   }
   if (origin === "adapted") {
-    strictKeys(record, where, ["local_path", "origin", "source_id", "upstream_path", "evidence_sha"]);
+    strictKeys(
+      record,
+      where,
+      ["local_path", "origin", "source_id", "evidence_sha"],
+      ["upstream_path", "upstream_paths"],
+    );
     return {
       localPath: repositoryPathAt(record.local_path, `${where}.local_path`),
       origin,
       sourceId: idAt(record.source_id, `${where}.source_id`),
-      upstreamPath: repositoryPathAt(record.upstream_path, `${where}.upstream_path`),
+      upstreamPaths: parseUpstreamPaths(record, where),
       evidenceSha: fullShaAt(record.evidence_sha, `${where}.evidence_sha`),
     };
   }
@@ -559,7 +577,7 @@ export function parseUpstreamManifest(
       !matchingSkill ||
       matchingSkill.origin !== "adapted" ||
       matchingSkill.sourceId !== source.id ||
-      matchingSkill.upstreamPath !== artifact.upstreamPath
+      !matchingSkill.upstreamPaths.includes(artifact.upstreamPath)
     ) {
       fail(
         `manifest.sources.${source.id}.${artifact.id}`,

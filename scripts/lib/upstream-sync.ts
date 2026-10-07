@@ -8,12 +8,15 @@ import {
   effectivePolicy,
   isCanonicalArtifactPath,
   type FullSha,
+  type RepositoryPath,
   type Sha256Digest,
+  type SkillOrigin,
   type UpstreamArtifact,
   type UpstreamManifest,
   type UpstreamPolicy,
   type UpstreamSource,
 } from "./upstream-manifest";
+import { noninteractiveGitEnv } from "./git-env";
 import { isUnownedSupportName } from "./support-files";
 
 export { isCanonicalArtifactPath };
@@ -49,10 +52,23 @@ export interface ArtifactReport {
   verification: readonly string[];
 }
 
+export interface AdaptedReview {
+  skill: string;
+  source: string;
+  conclusion: "review-due";
+  evidence_sha: FullSha;
+  candidate_sha: FullSha;
+  /** `evidence_sha..candidate_sha`, the range a maintainer diffs. */
+  range: string;
+  changed_paths: readonly string[];
+}
+
 export interface SyncReport {
   schema_version: 1;
   mode: "offline" | "check" | "update";
   artifacts: readonly ArtifactReport[];
+  /** Present on online checks. Adapted rows whose watched paths moved since `evidence_sha`. */
+  reviews?: readonly AdaptedReview[];
 }
 
 export interface UpdateOptions {
@@ -67,7 +83,7 @@ export class SyncError extends Error {
 }
 
 function run(command: string, args: readonly string[], cwd?: string): Buffer {
-  const result = spawnSync(command, [...args], { cwd, encoding: null, stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync(command, [...args], { cwd, encoding: null, stdio: ["ignore", "pipe", "pipe"], env: noninteractiveGitEnv() });
   if (result.status !== 0) {
     const stderr = result.stderr?.toString("utf8").trim();
     throw new SyncError(`${command} ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
@@ -85,11 +101,16 @@ export function lockEntries(entries: readonly TreeEntry[], artifact: UpstreamArt
     !artifact.localOnly.some((pattern) => matchesPattern(entry.path, pattern)));
 }
 
-function matchesPattern(candidate: string, pattern: string): boolean {
+export function matchesPattern(candidate: string, pattern: string): boolean {
+  if (pattern === "**") return true;
   if (pattern.endsWith("/**")) {
     const prefix = pattern.slice(0, -3);
     return candidate === prefix || candidate.startsWith(`${prefix}/`);
   }
+  if (pattern.endsWith("/**/*") || pattern.endsWith("/**/**")) {
+    return matchesPattern(candidate, `${pattern.slice(0, pattern.indexOf("/**"))}/**`);
+  }
+  if (pattern.startsWith("**/")) return candidate === pattern.slice(3) || candidate.endsWith(`/${pattern.slice(3)}`);
   return candidate === pattern;
 }
 
@@ -147,7 +168,7 @@ export function digestTree(entries: readonly TreeEntry[]): Sha256Digest {
 function parseGitTreeLine(line: string, root: string): { mode: string; object: string; path: string } {
   const match = /^(\d{6}) blob ([0-9a-f]{40})\t(.+)$/.exec(line);
   if (!match) throw new SyncError(`unexpected git tree entry: ${JSON.stringify(line)}`);
-  const relative = match[3].slice(root.length + 1);
+  const relative = root === "." ? match[3] : match[3].slice(root.length + 1);
   if (match[1] === "120000") throw new SyncError(`symlink '${relative}' is not allowed`);
   if (match[1] !== "100644" && match[1] !== "100755") {
     throw new SyncError(`unexpected file mode '${match[1]}' for '${relative}'`);
@@ -162,7 +183,7 @@ export function readGitSelection(
   manifest: UpstreamManifest,
 ): readonly TreeEntry[] {
   const root = artifact.upstreamPath;
-  const output = run("git", ["--git-dir", gitDirectory, "ls-tree", "-r", "-z", revision, root]);
+  const output = run("git", ["--git-dir", gitDirectory, "ls-tree", "-r", "-z", revision, "--", root]);
   const lines = output.toString("utf8").split("\0").filter(Boolean);
   const entries = lines
     .map((line) => parseGitTreeLine(line, root))
@@ -178,7 +199,7 @@ export function readGitSelection(
   return entries;
 }
 
-function mapPath(candidate: string, mappings: Readonly<Record<string, string>>): string {
+export function mapPath(candidate: string, mappings: Readonly<Record<string, string>>): string {
   if (mappings[candidate]) return mappings[candidate];
   const prefix = Object.keys(mappings)
     .filter((key) => key.endsWith("/") && candidate.startsWith(key))
@@ -443,7 +464,16 @@ export function checkOffline(root: string, manifest: UpstreamManifest): SyncRepo
   };
 }
 
-function prepareRemote(source: UpstreamSource, artifact: UpstreamArtifact): { gitDirectory: string; candidate: FullSha; cleanup: () => void } {
+interface PreparedRemote {
+  gitDirectory: string;
+  candidate: FullSha;
+  cleanup: () => void;
+}
+
+function prepareRemote(
+  source: UpstreamSource,
+  extraRevisions: readonly FullSha[] = [],
+): PreparedRemote {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-upstream-check-"));
   const gitDirectory = path.join(temporary, "repo.git");
   try {
@@ -453,8 +483,9 @@ function prepareRemote(source: UpstreamSource, artifact: UpstreamArtifact): { gi
     const candidate = run("git", ["--git-dir", gitDirectory, "rev-parse", "FETCH_HEAD^{commit}"])
       .toString("utf8").trim() as FullSha;
     if (!/^[0-9a-f]{40}$/.test(candidate)) throw new SyncError(`${source.id}: ref did not resolve to a full SHA`);
-    if (artifact.status === "active" && artifact.baseSha !== candidate) {
-      run("git", ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--depth=1", "origin", artifact.baseSha]);
+    for (const revision of extraRevisions) {
+      if (revision === candidate) continue;
+      ensureRevision(gitDirectory, source, revision);
     }
     return { gitDirectory, candidate, cleanup: () => fs.rmSync(temporary, { recursive: true, force: true }) };
   } catch (error) {
@@ -463,17 +494,108 @@ function prepareRemote(source: UpstreamSource, artifact: UpstreamArtifact): { gi
   }
 }
 
+function hasCommit(gitDirectory: string, revision: FullSha): boolean {
+  const result = spawnSync(
+    "git",
+    ["--git-dir", gitDirectory, "cat-file", "-t", revision],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return result.status === 0 && result.stdout.trim() === "commit";
+}
+
+/**
+ * A depth-1 fetch of `ref` does not contain older evidence commits. Fetch the
+ * evidence sha at depth 1 — enough for a tree read or a two-tree diff — and
+ * fall back to an unshallow only when the server refuses a fetch by sha.
+ */
+function ensureRevision(gitDirectory: string, source: UpstreamSource, revision: FullSha): void {
+  if (hasCommit(gitDirectory, revision)) return;
+  const fetched = spawnSync(
+    "git",
+    ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--depth=1", "origin", revision],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: noninteractiveGitEnv() },
+  );
+  if (fetched.status === 0 && hasCommit(gitDirectory, revision)) return;
+  run("git", ["--git-dir", gitDirectory, "fetch", "--quiet", "--no-tags", "--unshallow", "origin", source.ref]);
+  if (!hasCommit(gitDirectory, revision)) {
+    throw new SyncError(`${source.id}: evidence commit ${revision} is not reachable from ${source.ref}`);
+  }
+}
+
+function pathTouches(changed: string, watched: RepositoryPath): boolean {
+  if (watched === ".") return true;
+  return changed === watched || changed.startsWith(`${watched}/`);
+}
+
+function commitsTouching(
+  gitDirectory: string,
+  evidence: FullSha,
+  candidate: FullSha,
+  watched: readonly RepositoryPath[],
+): readonly string[] {
+  if (evidence === candidate || watched.length === 0) return [];
+  const output = run(
+    "git",
+    ["--git-dir", gitDirectory, "diff", "--name-only", "-z", evidence, candidate],
+  ).toString("utf8");
+  return output.split("\0").filter(Boolean)
+    .filter((changed) => watched.some((entry) => pathTouches(changed, entry)))
+    .sort();
+}
+
+/**
+ * Adapted rows of `source` that no artifact owns. An artifact reports its own
+ * drift against `base_sha`, and `--update` never advances the row's
+ * `evidence_sha`, so reviewing a row an artifact already vendors would report
+ * it as due forever, alongside the artifact's own report.
+ */
+function unvendoredAdaptedSkills(
+  manifest: UpstreamManifest,
+  source: UpstreamSource,
+): Extract<SkillOrigin, { origin: "adapted" }>[] {
+  const vendored = new Set(source.artifacts.map((artifact) => artifact.localPath));
+  return manifest.skills.filter(
+    (skill): skill is Extract<SkillOrigin, { origin: "adapted" }> =>
+      skill.origin === "adapted" && skill.sourceId === source.id && !vendored.has(skill.localPath),
+  );
+}
+
+function reviewAdapted(
+  source: UpstreamSource,
+  adapted: readonly Extract<SkillOrigin, { origin: "adapted" }>[],
+  remote: PreparedRemote,
+): readonly AdaptedReview[] {
+  const reviews: AdaptedReview[] = [];
+  for (const skill of adapted) {
+    const changed = commitsTouching(remote.gitDirectory, skill.evidenceSha, remote.candidate, skill.upstreamPaths);
+    if (changed.length === 0) continue;
+    reviews.push({
+      skill: skill.localPath,
+      source: source.id,
+      conclusion: "review-due",
+      evidence_sha: skill.evidenceSha,
+      candidate_sha: remote.candidate,
+      range: `${skill.evidenceSha}..${remote.candidate}`,
+      changed_paths: changed,
+    });
+  }
+  return reviews;
+}
+
 function checkOnlineArtifact(
   root: string,
   manifest: UpstreamManifest,
   source: UpstreamSource,
   artifact: UpstreamArtifact,
+  remote?: PreparedRemote,
 ): ArtifactReport {
   const offline = verifyLocalLock(root, manifest, source, artifact);
   if (artifact.status !== "active") return offline;
-  const remote = prepareRemote(source, artifact);
+  const owned = remote ? null : prepareRemote(source, [artifact.baseSha]);
+  const prepared = remote ?? owned;
+  if (!prepared) return offline;
   try {
-    const base = readGitSelection(remote.gitDirectory, artifact.baseSha, artifact, manifest);
+    const base = readGitSelection(prepared.gitDirectory, artifact.baseSha, artifact, manifest);
     if (digestTree(base) !== artifact.baseTreeDigest) {
       throw new SyncError(`${artifact.id}: base tree digest does not match manifest`);
     }
@@ -481,7 +603,7 @@ function checkOnlineArtifact(
     if (actualLicense !== source.license.expression) {
       return {
         ...offline,
-        candidate_sha: remote.candidate,
+        candidate_sha: prepared.candidate,
         conclusion: "license-changed",
         license: {
           expected: source.license.expression,
@@ -500,11 +622,11 @@ function checkOnlineArtifact(
 
     let candidate: readonly TreeEntry[];
     try {
-      candidate = readGitSelection(remote.gitDirectory, remote.candidate, artifact, manifest);
+      candidate = readGitSelection(prepared.gitDirectory, prepared.candidate, artifact, manifest);
     } catch (error) {
       return {
         ...offline,
-        candidate_sha: remote.candidate,
+        candidate_sha: prepared.candidate,
         conclusion: "validation-failed",
         patch: { ...offline.patch, base: "applied" },
         verification: [...offline.verification, `candidate-validation:${(error as Error).message}`],
@@ -514,7 +636,7 @@ function checkOnlineArtifact(
     if (candidateLicense !== source.license.expression) {
       return {
         ...offline,
-        candidate_sha: remote.candidate,
+        candidate_sha: prepared.candidate,
         conclusion: "license-changed",
         changed_paths: changedPaths(base, candidate),
         license: {
@@ -528,7 +650,7 @@ function checkOnlineArtifact(
     const differences = changedPaths(base, candidate);
     return {
       ...offline,
-      candidate_sha: remote.candidate,
+      candidate_sha: prepared.candidate,
       conclusion: differences.length === 0 ? "no-changes" : "update-available",
       changed_paths: differences,
       license: { expected: source.license.expression, actual: candidateLicense, status: "unchanged" },
@@ -536,16 +658,39 @@ function checkOnlineArtifact(
       verification: [...offline.verification, "base-tree-digest", "reconstruction", "candidate-selection", "license"],
     };
   } finally {
-    remote.cleanup();
+    owned?.cleanup();
   }
 }
 
 export function checkOnline(root: string, manifest: UpstreamManifest): SyncReport {
+  const reviews: AdaptedReview[] = [];
+  const artifacts: ArtifactReport[] = [];
+  for (const source of manifest.sources) {
+    const adapted = unvendoredAdaptedSkills(manifest, source);
+    const evidence = [
+      ...new Set([
+        ...adapted.map((skill) => skill.evidenceSha),
+        ...source.artifacts.flatMap((artifact) => artifact.status === "active" ? [artifact.baseSha] : []),
+      ]),
+    ];
+    if (evidence.length === 0 && adapted.length === 0) {
+      artifacts.push(...source.artifacts.map((artifact) => checkOnlineArtifact(root, manifest, source, artifact)));
+      continue;
+    }
+    const remote = prepareRemote(source, evidence);
+    try {
+      if (adapted.length > 0) reviews.push(...reviewAdapted(source, adapted, remote));
+      artifacts.push(...source.artifacts.map((artifact) =>
+        checkOnlineArtifact(root, manifest, source, artifact, remote)));
+    } finally {
+      remote.cleanup();
+    }
+  }
   return {
     schema_version: 1,
     mode: "check",
-    artifacts: manifest.sources.flatMap((source) =>
-      source.artifacts.map((artifact) => checkOnlineArtifact(root, manifest, source, artifact))),
+    artifacts,
+    reviews,
   };
 }
 
@@ -571,7 +716,7 @@ function candidateResult(
 ): CandidateResult {
   const offline = verifyLocalLock(root, manifest, source, artifact);
   if (artifact.status !== "active") return { report: offline };
-  const remote = prepareRemote(source, artifact);
+  const remote = prepareRemote(source, [artifact.baseSha]);
   try {
     const base = readGitSelection(remote.gitDirectory, artifact.baseSha, artifact, manifest);
     if (digestTree(base) !== artifact.baseTreeDigest) {
@@ -910,6 +1055,16 @@ export function renderMarkdown(report: SyncReport): string {
       "",
       ...artifact.verification.map((check) => `- ${check}`),
     );
+  }
+  if (report.reviews && report.reviews.length > 0) {
+    lines.push("", "## Adapted reviews", "");
+    lines.push("| Skill | Source | Conclusion | Range | Changed paths |");
+    lines.push("|---|---|---|---|---|");
+    for (const review of report.reviews) {
+      lines.push(
+        `| ${review.skill} | ${review.source} | review due | ${review.range} | ${review.changed_paths.join("<br>") || "none"} |`,
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 }
