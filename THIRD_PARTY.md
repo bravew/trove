@@ -19,7 +19,7 @@ artifact entry in `upstream.yaml` for the selected files and exact revision.
 
 `trove-ffmpeg` in `trove-media` is vendored from
 [kajisho5/ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) at
-`9ada0f6dca03f1a5f1aa62ea237759c3f8e15321` (2.4.1), under the MIT license.
+`008333aaf6722083392eb6bd8bd67b59884a2a26` (2.5.1), under the MIT license.
 
 **Trove redistributes upstream code, not only adapted prose.** The selection
 carries upstream's `scripts/` Python engine (42 tools plus shared modules),

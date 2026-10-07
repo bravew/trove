@@ -3,7 +3,7 @@ name: trove-ffmpeg
 description: "Edit video and audio locally with the vendored ffmpeg engine: cut, trim, and join clips; reframe and resize to 9:16 or 1:1; change speed; burn in captions, subtitles, logos, and titles; remove silence; sync multicam and external mics; normalise loudness; convert HDR to SDR; apply LUTs; mix background music with ducking; export for YouTube, Reels, TikTok, and X; run delivery compliance checks; detect scenes and build highlight reels, contact sheets, and whole-edit project files. Use when the request names an actual media file, a delivery target, or an edit ffmpeg performs. Do not use it for questions that merely mention video in passing."
 metadata:
   source: kajisho5/ffmpeg-skill
-  upstream-version: 2.4.1
+  upstream-version: 2.5.1
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

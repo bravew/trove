@@ -6,7 +6,7 @@ when_to_use: "transcode video; cut or trim a clip; ffmpeg; burn in captions; exp
 user-invocable: true
 metadata:
   source: kajisho5/ffmpeg-skill
-  upstream-version: 2.4.1
+  upstream-version: 2.5.1
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
