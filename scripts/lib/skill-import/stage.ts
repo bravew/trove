@@ -292,7 +292,9 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
       if (digestTree(walkLocal(directory)) !== digestTree(entries)) {
         throw new Error("staged files do not match the candidate tree; manifest was not written");
       }
-      fs.writeFileSync(manifestPath, document.toString());
+      // `sync:upstream` writes the manifest with `lineWidth: 0`. Matching it
+      // here keeps staging from reflowing rows it never meant to touch.
+      fs.writeFileSync(manifestPath, document.toString({ lineWidth: 0 }));
     } catch (error) {
       fs.rmSync(directory, { recursive: true, force: true });
       throw error;

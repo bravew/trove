@@ -3,8 +3,10 @@
 Skills for working with video and audio files: editing, transcoding, delivery
 checks, and production workflows.
 
-This plugin ships with no skills yet. `trove-ffmpeg` is the first, followed by
-the video-shotcraft skills.
+`trove-ffmpeg` edits video and audio through a vendored Python engine. It
+requires Python 3.9 or newer and `ffmpeg` and `ffprobe` on PATH. Its operating
+manual and upstream MIT notice ship with the skill. The video-shotcraft skills
+are planned for the next wave.
 
 Every skill in this plugin is activated by request only. The plugin declares no
 file-glob activation, hooks, agents, rules, or MCP servers: a `.mp4` in a

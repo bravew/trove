@@ -83,7 +83,7 @@ describe("upstream manifest boundary", () => {
     // Derived from the catalog so adopting a skill does not require editing a
     // count here; validateManifestInventory already proves the two agree.
     expect(manifest.skills).toHaveLength(maintainedSkills(ROOT).length);
-    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(18);
+    expect(manifest.skills.filter((skill) => skill.origin === "adapted")).toHaveLength(19);
   });
 
   test("scopes the English pulse slash-command rewrite to backtick form", () => {
