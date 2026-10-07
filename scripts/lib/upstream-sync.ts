@@ -1108,5 +1108,18 @@ export function renderMarkdown(report: SyncReport): string {
       );
     }
   }
+  // The workflow posts this markdown as the update PR body, so a report that
+  // actually moved bytes carries the review checklist the sync plan §3.4
+  // requires. A check-mode summary stays uncluttered.
+  if (report.artifacts.some((artifact) => artifact.conclusion === "updated")) {
+    lines.push("", "## Review checklist", "");
+    lines.push(
+      "1. Are there new or removed scripts? Does the front still describe the skill truthfully?",
+      "2. Did either transform's match count change?",
+      "3. Does the diff add any import outside the standard library, any network use, or any `subprocess` call with `shell=True`?",
+      "4. Any new file over the policy limits?",
+      "5. Do the Trove tests in `tests/` pass?",
+    );
+  }
   return `${lines.join("\n")}\n`;
 }
