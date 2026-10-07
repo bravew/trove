@@ -359,7 +359,18 @@ runs `sync:upstream --check --offline` on the result.
   `upstream.yaml` policy sizes.
 - Secret-scan hits, using the existing `scripts/lib/secret-scan.ts`.
 - Bidirectional-override or zero-width Unicode in any selected file (the
-  Trojan Source class of attack).
+  Trojan Source class of attack). A maintainer may explicitly supply
+  `--unicode-review <json-file>` for reviewed U+200D examples only. Each entry
+  must match the full resolved source SHA, whole-file SHA-256, repository path,
+  line, code point, and occurrence count. Stale, duplicate, or unused entries
+  reject the import. Matching joiners become review flags; every other invisible
+  character remains a hard reject. The report records the review evidence.
+
+  The maintainer approved this narrow exception on 2026-10-06 for five joiners
+  in ffmpeg-skill 2.4.1's Indic/emoji examples and docstrings. The pinned evidence
+  is `dev-doc/media-verification/ffmpeg-241-unicode-review.json`. Inspection
+  without that explicit review file still rejects those bytes. The exception
+  neither rewrites upstream content nor carries forward to a different SHA.
 - A name that collides with an existing Trove skill.
 
 **Flagged for human review** (reported with file:line, never auto-decided):

@@ -1,21 +1,31 @@
 import { spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
 import { validateAgentSkillFrontmatter } from "../agent-skills-spec";
 import { findSecretMatches } from "../secret-scan";
 import { validateSkillBudget } from "../skill-budget";
-import { loadUpstreamManifest } from "../upstream-manifest";
+import { loadUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
+import { matchesPattern } from "../upstream-sync";
 import type { FetchResult, Finding, ProposedTransform, Selection } from "./types";
+import type { ReviewedUnicode, UnicodeException } from "./unicode-review";
 
 export interface ScanResult {
   findings: readonly Finding[];
   proposedTransforms: readonly ProposedTransform[];
+  license: { file: string; expression: string } | null;
 }
 
 export interface ScanOptions {
   /** Repository root holding `external/policy.yaml`, `upstream.yaml`, and `skills/`. */
   root?: string;
+  /** Evaluate layout relative to this skill root; report paths remain repository-relative. */
+  upstreamPath?: string;
+  /** Repository-relative governing license blob, selected even when excluded. Default LICENSE. */
+  licensePath?: string;
+  /** Pinned human review that downgrades exact U+200D occurrences to flags. */
+  reviewedUnicode?: ReviewedUnicode;
 }
 
 interface SelectedFile {
@@ -29,7 +39,10 @@ interface SelectedFile {
 const GITLINK_MODE = "160000";
 
 /** Bidi controls (U+061C, U+200E-F, U+202A-E, U+2066-9) and zero-width characters. Escaped so this file carries none. */
-const TROJAN_SOURCE = /[\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/u;
+const TROJAN_SOURCE = /[\u061C\u200B\u200C\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/u;
+
+/** U+200D is the one invisible character a pinned review may convert from reject to flag. */
+const ZERO_WIDTH_JOINER = /\u200D/u;
 
 const LICENSE_NAMES = new Set(["license", "licence", "copying", "license.md", "licence.md", "copying.md"]);
 
@@ -80,26 +93,13 @@ const SUSPICIOUS_PATHS = [
 const DEFAULT_ROOT = path.resolve(import.meta.dirname, "../../..");
 
 function run(args: readonly string[]): Buffer {
-  const result = spawnSync("git", [...args], { encoding: null, stdio: ["ignore", "pipe", "pipe"] });
+  // The default 1 MiB buffer kills git on a larger blob, hiding it behind an opaque failure instead of the size/binary reject.
+  const result = spawnSync("git", [...args], { encoding: null, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
   if (result.status !== 0) {
     const stderr = result.stderr?.toString("utf8").trim();
     throw new Error(`git ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
   }
   return result.stdout ?? Buffer.alloc(0);
-}
-
-/** `**` is the only wildcard, matching the upstream-sync selection rules. */
-function matchesPattern(candidate: string, pattern: string): boolean {
-  if (pattern === "**") return true;
-  if (pattern.endsWith("/**")) {
-    const prefix = pattern.slice(0, -3);
-    return candidate === prefix || candidate.startsWith(`${prefix}/`);
-  }
-  if (pattern.endsWith("/**/*") || pattern.endsWith("/**/**")) {
-    return matchesPattern(candidate, `${pattern.slice(0, pattern.indexOf("/**"))}/**`);
-  }
-  if (pattern.startsWith("**/")) return candidate === pattern.slice(3) || candidate.endsWith(`/${pattern.slice(3)}`);
-  return candidate === pattern;
 }
 
 function selected(candidate: string, selection: Selection): boolean {
@@ -114,15 +114,17 @@ function unsafePath(candidate: string): string | undefined {
   return undefined;
 }
 
-function readGitTree(source: FetchResult, selection: Selection): SelectedFile[] {
+function readGitTree(source: FetchResult, selection: Selection, forcePath?: string): SelectedFile[] {
   const output = run(["--git-dir", source.gitDirectory, "ls-tree", "-r", "-z", source.resolvedSha]);
   const lines = output.toString("utf8").split("\0").filter(Boolean);
   const files: SelectedFile[] = [];
   for (const line of lines) {
-    const match = /^(\d{6}) (?:blob|commit) ([0-9a-f]{40})\t(.+)$/.exec(line);
-    if (!match) continue;
+    const match = /^(\d{6}) (?:blob|commit) ([0-9a-f]{40})\t([\s\S]+)$/.exec(line);
+    if (!match) throw new Error("unexpected git tree entry while scanning source");
     const [, mode, object, filePath] = match;
-    if (!selected(filePath, selection)) continue;
+    // The governing license blob is exempt from the selection so it can live
+    // inside an otherwise-excluded directory (e.g. .github/LICENSE).
+    if (filePath !== forcePath && !selected(filePath, selection)) continue;
     // A submodule's commit is not in this repository, so there is no blob to read.
     if (mode === GITLINK_MODE) {
       files.push({ path: filePath, mode, bytes: Buffer.alloc(0) });
@@ -163,10 +165,6 @@ function licenseExpression(text: string, allowlist: readonly string[]): string |
     }
   }
   return LICENSE_HEADERS.find((header) => header.pattern.test(head))?.expression;
-}
-
-function depthOf(filePath: string): number {
-  return filePath.split("/").length;
 }
 
 /**
@@ -244,8 +242,15 @@ function supportDirectory(filePath: string): string | undefined {
   return top;
 }
 
-function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
+function scanFiles(
+  files: readonly SelectedFile[],
+  root: string,
+  upstreamPath: string,
+  governingPath: string,
+  reviewed?: ReviewedUnicode,
+): ScanResult {
   const findings: Finding[] = [];
+  const usedExceptions = new Set<UnicodeException>();
   const proposedTransforms: ProposedTransform[] = [];
   const reject = (file: string, line: number, message: string) => findings.push({ severity: "hard-reject", file, line, message });
   const flag = (file: string, line: number, message: string) => findings.push({ severity: "flag", file, line, message });
@@ -276,6 +281,8 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
       reject(file.path, 1, `'${file.path}' is ${file.bytes.length} bytes, over maximum_file_bytes ${maximumFileBytes}`);
     }
     total += file.bytes.length;
+    // The size reject is final, and the content scanners are not built for megabyte inputs.
+    if (file.bytes.length > maximumFileBytes) continue;
 
     if (file.bytes.includes(0)) {
       reject(file.path, 1, `binary file '${file.path}' is not allowed`);
@@ -284,7 +291,9 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
 
     const text = file.bytes.toString("utf8");
 
-    if (isLicenseFile(file.path)) {
+    // The configured governing blob counts as a license even when its name is
+    // not in the conventional allowlist (e.g. LICENSE.txt).
+    if (file.path === governingPath || isLicenseFile(file.path)) {
       licenses.push({ file: file.path, expression: licenseExpression(text, allowlist) ?? "" });
     }
 
@@ -296,6 +305,22 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
     const unmarked = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
     for (const line of flagLines(unmarked, TROJAN_SOURCE)) {
       reject(file.path, line, "bidirectional-override or zero-width Unicode (Trojan Source)");
+    }
+
+    // U+200D is rejected unless a pinned review matches this blob, line, and count exactly.
+    const joinerCounts = new Map<number, number>();
+    for (const line of flagLines(unmarked, ZERO_WIDTH_JOINER)) joinerCounts.set(line, (joinerCounts.get(line) ?? 0) + 1);
+    if (joinerCounts.size > 0) {
+      const digest = crypto.createHash("sha256").update(file.bytes).digest("hex");
+      for (const [line, count] of joinerCounts) {
+        const exception = reviewed?.exceptions.find((entry) => entry.file === file.path && entry.line === line);
+        if (exception && exception.sha256 === digest && exception.count === count) {
+          usedExceptions.add(exception);
+          flag(file.path, line, `reviewed zero-width joiner U+200D x${count} (sha256 ${digest.slice(0, 12)}, pinned review)`);
+        } else {
+          reject(file.path, line, "zero-width joiner U+200D without a matching pinned review (Trojan Source)");
+        }
+      }
     }
 
     for (const rule of CODE_FLAGS) {
@@ -316,14 +341,17 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
       flag(file.path, lineOf(text, text.indexOf("{{")), "'{{' would collide with the template resolver");
     }
 
-    const support = supportDirectory(file.path);
+    const relativePath = upstreamPath !== "." && file.path.startsWith(`${upstreamPath}/`)
+      ? file.path.slice(upstreamPath.length + 1)
+      : file.path;
+    const support = supportDirectory(relativePath);
     if (support && !reported.has(`support:${support}`)) {
       reported.add(`support:${support}`);
       flag(file.path, 1, `support directory '${support}/' is not references/ or scripts/`);
     }
 
     for (const suspicious of SUSPICIOUS_PATHS) {
-      if (suspicious.test(file.path) && !reported.has(suspicious.message)) {
+      if (suspicious.test(relativePath) && !reported.has(suspicious.message)) {
         reported.add(suspicious.message);
         flag(file.path, 1, suspicious.message);
       }
@@ -342,7 +370,7 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
         flag(file.path, line, `code resolves '${directory}/' relative to its own location; no mechanical rewrite proposed`);
         continue;
       }
-      const mapped = `${path.posix.dirname(file.path)}/${directory}/`;
+      const mapped = `${path.posix.dirname(relativePath)}/${directory}/`;
       proposedTransforms.push({
         kind: "replace-literal",
         path: file.path,
@@ -354,22 +382,27 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
     }
   }
 
+  // A review entry that matched nothing is stale or mis-pinned: fail closed.
+  for (const exception of reviewed?.exceptions ?? []) {
+    if (!usedExceptions.has(exception)) {
+      throw new Error(`unicode review entry ${exception.file}:${exception.line} (count ${exception.count}) matched nothing in the selected source; the review is stale or mis-pinned`);
+    }
+  }
+
   if (total > maximumArtifactBytes) {
     reject(files[0]?.path ?? "", 1, `selected files are ${total} bytes, over maximum_artifact_bytes ${maximumArtifactBytes}`);
   }
 
-  // The shallowest license governs the source. A nested one usually belongs to
-  // a bundled dependency, so it cannot accept or reject the source on its own,
-  // but one outside the allowlist still needs a human to look.
-  const [license, ...nested] = [...licenses].sort((a, b) => depthOf(a.file) - depthOf(b.file));
-  for (const other of nested) {
-    if (!allowlist.includes(other.expression)) {
-      flag(other.file, 1, `nested license '${other.expression || "unrecognized"}' is outside the allowlist`);
-    }
-  }
-
+  // The configured governing blob decides the source. Every other license file
+  // is bundled, so it cannot accept or reject the source on its own, but one
+  // outside the allowlist still needs a human to look.
+  const license = licenses.find((entry) => entry.file === governingPath) ?? null;
   if (!license) {
-    reject("LICENSE", 1, "no license file in the selection");
+    reject(
+      governingPath,
+      1,
+      `license blob '${governingPath}' was not found in the source; pass --license-path <repository-relative blob> if the license lives elsewhere`,
+    );
   } else if (!allowlist.includes(license.expression)) {
     reject(
       license.file,
@@ -378,6 +411,12 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
         ? `license '${license.expression}' is outside the allowlist (${allowlist.join(", ")})`
         : "license file has no recognized SPDX expression or license header",
     );
+  }
+  for (const other of licenses) {
+    if (other.file === governingPath) continue;
+    if (!allowlist.includes(other.expression)) {
+      flag(other.file, 1, `nested license '${other.expression || "unrecognized"}' is outside the allowlist`);
+    }
   }
 
   const skill = skillName(files);
@@ -404,7 +443,7 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
     }
   }
 
-  return { findings, proposedTransforms };
+  return { findings, proposedTransforms, license: license ?? null };
 }
 
 export async function scanSource(
@@ -412,5 +451,16 @@ export async function scanSource(
   selection: Selection,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  return scanFiles(readGitTree(source, selection), options.root ?? DEFAULT_ROOT);
+  const upstreamPath = repositoryPathAt(options.upstreamPath ?? ".", "scan upstreamPath");
+  const governingPath = repositoryPathAt(options.licensePath ?? "LICENSE", "scan licensePath");
+  if (options.reviewedUnicode && options.reviewedUnicode.resolvedSha !== source.resolvedSha) {
+    throw new Error(`unicode review is pinned to ${options.reviewedUnicode.resolvedSha}, not the resolved source ${source.resolvedSha}`);
+  }
+  return scanFiles(
+    readGitTree(source, selection, governingPath),
+    options.root ?? DEFAULT_ROOT,
+    upstreamPath,
+    governingPath,
+    options.reviewedUnicode,
+  );
 }

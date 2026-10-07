@@ -72,6 +72,9 @@ external-analysis.v1.json
 # Debug
 *.log
 
+# import:skill inspection reports
+.trove/
+
 # deps.json IS committed (paired with the `build:deps -- --dry-run` CI
 # check) so the dependency graph is visible in PR diffs and the freshness
 # check has signal. Same pattern as docs/routing.md.
