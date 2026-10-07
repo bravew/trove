@@ -130,6 +130,22 @@ describe("skill import staging", () => {
     expect(checkOffline(root, manifest).artifacts[0].conclusion).toBe("no-changes");
   });
 
+  test("stamps the lock with the upstream commit date, as the updater does", async () => {
+    const { root, upstream, request } = fixture();
+    // Back-date the commit so a wall-clock stamp cannot match by coincidence.
+    const amended = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--amend", "--no-edit", "--quiet"], {
+      cwd: upstream,
+      env: { ...process.env, GIT_COMMITTER_DATE: "2001-02-03T04:05:06Z" },
+    });
+    expect(amended.status).toBe(0);
+    const sha = git(upstream, "rev-parse", "HEAD");
+    await stageImport({ ...request, report: { ...request.report, source: { ...request.report.source, resolvedSha: sha } } });
+    const artifact = loadUpstreamManifest(root).sources[0].artifacts[0];
+    expect(artifact.baseSha).toBe(sha);
+    expect(artifact.checkedAt).toBe("2001-02-03T04:05:06Z");
+    expect(artifact.status === "active" ? artifact.importedAt : null).toBe("2001-02-03T04:05:06Z");
+  });
+
   test("pins the license file only when frontmatter declares no license", async () => {
     const declared = fixture();
     await stageImport(declared.request);

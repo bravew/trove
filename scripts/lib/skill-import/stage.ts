@@ -3,8 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
-import { parseUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
+import { fullShaAt, parseUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
 import {
+  commitTimestamp,
   digestTree,
   lockEntries,
   readGitSelection,
@@ -178,7 +179,9 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
   const sourceId = request.sourceId ?? request.id;
   const source = request.report.source;
   const upstreamPath = request.upstreamPath ?? ".";
-  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  // Stamp the upstream commit date, as `sync:upstream --update` does, so the
+  // lock depends only on the pinned revision and re-staging is byte-stable.
+  const timestamp = commitTimestamp(source.gitDirectory, fullShaAt(source.resolvedSha, "resolvedSha"));
   const transforms = [
     ...(request.renameSkill ? [{ kind: "rename-skill", ...request.renameSkill }] : []),
     ...(request.preambleMarker ? [{ kind: "inject-preamble", marker: request.preambleMarker }] : []),

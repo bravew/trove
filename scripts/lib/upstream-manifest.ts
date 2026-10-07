@@ -177,7 +177,7 @@ function stringArrayAt(value: unknown, where: string, allowEmpty = false): reado
   return values;
 }
 
-function fullShaAt(value: unknown, where: string): FullSha {
+export function fullShaAt(value: unknown, where: string): FullSha {
   const sha = stringAt(value, where);
   if (!/^[0-9a-f]{40}$/.test(sha)) fail(where, "must be a full lowercase 40-character SHA");
   return sha as FullSha;

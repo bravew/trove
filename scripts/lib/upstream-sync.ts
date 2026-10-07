@@ -725,7 +725,7 @@ interface CandidateResult {
   candidateDate?: string;
 }
 
-function commitTimestamp(gitDirectory: string, revision: FullSha): string {
+export function commitTimestamp(gitDirectory: string, revision: FullSha): string {
   const raw = runText("git", ["--git-dir", gitDirectory, "show", "-s", "--format=%cI", revision]);
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.valueOf())) throw new SyncError(`invalid commit timestamp '${raw}'`);
