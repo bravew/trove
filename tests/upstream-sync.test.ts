@@ -1105,6 +1105,31 @@ describe("one-artifact updater", () => {
     }
   });
 
+  test.each([false, true])("keeps rollback backups out of skill discovery during verification: %s", (fail) => {
+    const fixture = createUpdateFixture("add");
+    try {
+      let verified = false;
+      const report = updateArtifacts(fixture.root, fixture.manifest, { artifactId: "trove-example" }, {
+        verify: () => {
+          const updated = loadUpstreamManifest(fixture.root, "upstream.yaml", { allowFileRepositories: true });
+          validateManifestInventory(updated, fixture.root);
+          expect(maintainedSkills(fixture.root)).toEqual(["trove-example"]);
+          expect(fs.readdirSync(path.join(fixture.root, "skills/coding"))).toEqual(["trove-example"]);
+          verified = true;
+          if (fail) throw new Error("fixture verifier failed");
+          return ["fixture discovery verification"];
+        },
+      });
+      expect(verified).toBe(true);
+      expect(report.artifacts[0].conclusion).toBe(fail ? "validation-failed" : "updated");
+      const gitDirectory = runGit(fixture.root, ["rev-parse", "--absolute-git-dir"]);
+      expect(fs.readdirSync(gitDirectory).filter((name) => name.startsWith("trove-sync-"))).toEqual([]);
+      if (fail) expect(runGit(fixture.root, ["status", "--porcelain"])).toBe("");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test("records a local_only digest and preserves the wrapper plus skips bytecode", () => {
     const fixture = createLocalOnlyUpdateFixture();
     try {

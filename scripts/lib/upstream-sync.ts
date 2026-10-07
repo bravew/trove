@@ -976,10 +976,12 @@ function installCandidate(
   if (!candidateSha) throw new SyncError(`${artifact.id}: candidate SHA is missing`);
   const snapshot = snapshotTrackedFiles(root);
   const localDirectory = safeAbsolute(root, artifact.localPath);
-  const parent = path.dirname(localDirectory);
-  const stage = path.join(parent, `.trove-sync-stage-${process.pid}-${artifact.id}`);
-  const backup = path.join(parent, `.trove-sync-backup-${process.pid}-${artifact.id}`);
-  if (fs.existsSync(stage) || fs.existsSync(backup)) throw new SyncError(`${artifact.id}: stale update staging path exists`);
+  // Generators and validators discover every directory under skills/. Keep
+  // temporary copies in Git's private directory, including in linked worktrees.
+  const gitDirectory = runText("git", ["rev-parse", "--absolute-git-dir"], root);
+  const temporary = fs.mkdtempSync(path.join(gitDirectory, "trove-sync-"));
+  const stage = path.join(temporary, "stage");
+  const backup = path.join(temporary, "backup");
   try {
     fs.mkdirSync(stage, { recursive: true });
     writeEntries(stage, lockEntries(result.patched, artifact));
@@ -1004,7 +1006,6 @@ function installCandidate(
       digestTree(lockEntries(result.patched, artifact)),
     );
     const verification = (options.verify ?? defaultVerification)(root);
-    fs.rmSync(backup, { recursive: true, force: true });
     return {
       ...result.report,
       conclusion: "updated",
@@ -1012,13 +1013,13 @@ function installCandidate(
     };
   } catch (error) {
     restoreSnapshot(root, snapshot);
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(backup, { recursive: true, force: true });
     return {
       ...result.report,
       conclusion: "validation-failed",
       verification: [...result.report.verification, `validation-failed:${(error as Error).message}`],
     };
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
