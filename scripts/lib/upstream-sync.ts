@@ -198,7 +198,7 @@ export function readGitSelection(
   return entries;
 }
 
-function mapPath(candidate: string, mappings: Readonly<Record<string, string>>): string {
+export function mapPath(candidate: string, mappings: Readonly<Record<string, string>>): string {
   if (mappings[candidate]) return mappings[candidate];
   const prefix = Object.keys(mappings)
     .filter((key) => key.endsWith("/") && candidate.startsWith(key))

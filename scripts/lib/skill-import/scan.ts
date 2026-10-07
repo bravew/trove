@@ -5,18 +5,21 @@ import YAML from "yaml";
 import { validateAgentSkillFrontmatter } from "../agent-skills-spec";
 import { findSecretMatches } from "../secret-scan";
 import { validateSkillBudget } from "../skill-budget";
-import { loadUpstreamManifest } from "../upstream-manifest";
+import { loadUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
 import { matchesPattern } from "../upstream-sync";
 import type { FetchResult, Finding, ProposedTransform, Selection } from "./types";
 
 export interface ScanResult {
   findings: readonly Finding[];
   proposedTransforms: readonly ProposedTransform[];
+  license: { file: string; expression: string } | null;
 }
 
 export interface ScanOptions {
   /** Repository root holding `external/policy.yaml`, `upstream.yaml`, and `skills/`. */
   root?: string;
+  /** Evaluate layout relative to this skill root; report paths remain repository-relative. */
+  upstreamPath?: string;
 }
 
 interface SelectedFile {
@@ -106,8 +109,8 @@ function readGitTree(source: FetchResult, selection: Selection): SelectedFile[] 
   const lines = output.toString("utf8").split("\0").filter(Boolean);
   const files: SelectedFile[] = [];
   for (const line of lines) {
-    const match = /^(\d{6}) (?:blob|commit) ([0-9a-f]{40})\t(.+)$/.exec(line);
-    if (!match) continue;
+    const match = /^(\d{6}) (?:blob|commit) ([0-9a-f]{40})\t([\s\S]+)$/.exec(line);
+    if (!match) throw new Error("unexpected git tree entry while scanning source");
     const [, mode, object, filePath] = match;
     if (!selected(filePath, selection)) continue;
     // A submodule's commit is not in this repository, so there is no blob to read.
@@ -231,7 +234,7 @@ function supportDirectory(filePath: string): string | undefined {
   return top;
 }
 
-function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
+function scanFiles(files: readonly SelectedFile[], root: string, upstreamPath: string): ScanResult {
   const findings: Finding[] = [];
   const proposedTransforms: ProposedTransform[] = [];
   const reject = (file: string, line: number, message: string) => findings.push({ severity: "hard-reject", file, line, message });
@@ -303,14 +306,17 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
       flag(file.path, lineOf(text, text.indexOf("{{")), "'{{' would collide with the template resolver");
     }
 
-    const support = supportDirectory(file.path);
+    const relativePath = upstreamPath !== "." && file.path.startsWith(`${upstreamPath}/`)
+      ? file.path.slice(upstreamPath.length + 1)
+      : file.path;
+    const support = supportDirectory(relativePath);
     if (support && !reported.has(`support:${support}`)) {
       reported.add(`support:${support}`);
       flag(file.path, 1, `support directory '${support}/' is not references/ or scripts/`);
     }
 
     for (const suspicious of SUSPICIOUS_PATHS) {
-      if (suspicious.test(file.path) && !reported.has(suspicious.message)) {
+      if (suspicious.test(relativePath) && !reported.has(suspicious.message)) {
         reported.add(suspicious.message);
         flag(file.path, 1, suspicious.message);
       }
@@ -329,7 +335,7 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
         flag(file.path, line, `code resolves '${directory}/' relative to its own location; no mechanical rewrite proposed`);
         continue;
       }
-      const mapped = `${path.posix.dirname(file.path)}/${directory}/`;
+      const mapped = `${path.posix.dirname(relativePath)}/${directory}/`;
       proposedTransforms.push({
         kind: "replace-literal",
         path: file.path,
@@ -391,7 +397,7 @@ function scanFiles(files: readonly SelectedFile[], root: string): ScanResult {
     }
   }
 
-  return { findings, proposedTransforms };
+  return { findings, proposedTransforms, license: license ?? null };
 }
 
 export async function scanSource(
@@ -399,5 +405,6 @@ export async function scanSource(
   selection: Selection,
   options: ScanOptions = {},
 ): Promise<ScanResult> {
-  return scanFiles(readGitTree(source, selection), options.root ?? DEFAULT_ROOT);
+  const upstreamPath = repositoryPathAt(options.upstreamPath ?? ".", "scan upstreamPath");
+  return scanFiles(readGitTree(source, selection), options.root ?? DEFAULT_ROOT, upstreamPath);
 }

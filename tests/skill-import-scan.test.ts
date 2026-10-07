@@ -87,6 +87,31 @@ function rejects(result: Awaited<ReturnType<typeof scan>>, pattern: RegExp) {
 const MIT_LICENSE = "MIT License\n\nPermission is hereby granted, free of charge, to any person.\n";
 
 describe("scanSource", () => {
+  test("reports the detected license and scans a subtree relative to its skill root", async () => {
+    const result = await scan({
+      LICENSE: MIT_LICENSE,
+      "skills/example/SKILL.md": skill("new-subtree-fixture", "Hello."),
+      "skills/example/scripts/render.py": 'ROOT = HERE.parent / "templates"\n',
+    }, { root: REPO_ROOT, upstreamPath: "skills/example" });
+    expect(result.license).toEqual({ file: "LICENSE", expression: "MIT" });
+    expect(result.findings.some((finding) => finding.message.includes("support directory 'skills/'"))).toBe(false);
+    expect(result.proposedTransforms[0]).toMatchObject({
+      path: "skills/example/scripts/render.py", to: 'HERE / "templates"',
+    });
+    expect(result.findings.some((finding) => finding.message.includes("templates/: scripts/templates/"))).toBe(true);
+  });
+
+  test("scans a selected filename containing a newline instead of silently skipping it", async () => {
+    const result = await scan({
+      LICENSE: MIT_LICENSE,
+      "SKILL.md": skill("newline-scan-fixture", "Hello."),
+      "scripts/bad\nname.py": `hidden ${String.fromCharCode(0x202e)} marker\n`,
+    });
+    expect(result.findings.some((finding) =>
+      finding.severity === "hard-reject" && finding.file === "scripts/bad\nname.py" && /Unicode/.test(finding.message),
+    )).toBe(true);
+  });
+
   test("hard-rejects a selection with no license", async () => {
     const result = await scan({
       "SKILL.md": skill("fixture-skill", "Hello."),

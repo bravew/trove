@@ -136,6 +136,23 @@ describe("skill import staging", () => {
     expect(snapshot(root)).toEqual(before);
   });
 
+  test("rejects destination aliases before writing files or manifest rows", async () => {
+    const { root, upstream, request } = fixture();
+    const blob = git(upstream, "hash-object", "-w", "example/notes/guide.md");
+    for (const pathname of ["example/scripts/Foo.py", "example/scripts/foo.py"]) {
+      git(upstream, "update-index", "--add", "--cacheinfo", `100644,${blob},${pathname}`);
+    }
+    git(upstream, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--quiet", "-m", "aliases");
+    const source = { ...request.report.source, resolvedSha: git(upstream, "rev-parse", "HEAD") };
+    const before = snapshot(root);
+    await expect(stageImport({
+      ...request,
+      selection: { ...request.selection, include: [...request.selection.include, "scripts/**"] },
+      report: { ...request.report, source },
+    })).rejects.toThrow("destination paths collide");
+    expect(snapshot(root)).toEqual(before);
+  });
+
   test("rejects missing licenses without leaving a partial skill or manifest edit", async () => {
     const { root, request } = fixture();
     const before = snapshot(root);

@@ -9,6 +9,7 @@ import {
   readGitSelection,
   transformSelection,
   writeEntries,
+  walkLocal,
   type TreeEntry,
 } from "../upstream-sync";
 import type { ImportMode, ImportReport, ProposedTransform, Selection } from "./types";
@@ -134,6 +135,24 @@ function assertSafeDestination(root: string, localPath: string): string {
   }
   if (fs.existsSync(current)) throw new Error(`skill directory already exists '${localPath}'`);
   return current;
+}
+
+function assertDistinctDestinations(entries: readonly TreeEntry[]): void {
+  // Bundles must preserve their paths on hosts that fold case or normalize Unicode.
+  const names = new Map<string, { path: string; file: boolean }>();
+  for (const entry of entries) {
+    const segments = entry.path.split("/");
+    for (let length = 1; length <= segments.length; length += 1) {
+      const candidate = segments.slice(0, length).join("/");
+      const key = candidate.normalize("NFD").toLowerCase();
+      const file = length === segments.length;
+      const previous = names.get(key);
+      if (previous && (previous.path !== candidate || previous.file || file)) {
+        throw new Error(`destination paths collide: '${previous.path}' and '${candidate}'`);
+      }
+      names.set(key, { path: candidate, file });
+    }
+  }
 }
 
 export async function stageImport(request: StageRequest): Promise<StageResult> {
@@ -266,9 +285,13 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
     throw new Error("adapted imports require licenseExpression");
   }
   parseUpstreamManifest(document.toJS());
+  assertDistinctDestinations(entries);
   if (!request.dryRun) {
     try {
       writeEntries(directory, entries);
+      if (digestTree(walkLocal(directory)) !== digestTree(entries)) {
+        throw new Error("staged files do not match the candidate tree; manifest was not written");
+      }
       fs.writeFileSync(manifestPath, document.toString());
     } catch (error) {
       fs.rmSync(directory, { recursive: true, force: true });
