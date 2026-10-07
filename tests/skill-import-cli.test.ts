@@ -214,6 +214,9 @@ describe("import-skill CLI", () => {
       [["--inspect", DECLARED, "--root", target, "--json", "../escape.json"], /must stay under/],
       [["--inspect", DECLARED, "--root", target, "--json", path.join(target, "outside.json")], /must stay under/],
       [["--inspect", DECLARED, "--root", target, "--path", "../.."], /'\.\.'/],
+      // Under --path the scan would match nothing for these while staging still selects files.
+      [["--inspect", DECLARED, "--root", target, "--path", "skills/x", "--include", "**/foo.py"], /--include '\*\*\/foo\.py' cannot be combined with --path/],
+      [["--inspect", DECLARED, "--root", target, "--path", "skills/x", "--exclude", "a/**/b"], /--exclude 'a\/\*\*\/b' cannot be combined with --path/],
     ];
     for (const [args, pattern] of cases) {
       const result = await run(args, exploding);

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { noninteractiveGitEnv } from "../git-env";
 import type { FetchResult } from "./types";
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
@@ -28,7 +29,7 @@ function runGit(cwd: string | undefined, args: readonly string[], env?: NodeJS.P
   return new Promise((resolve, reject) => {
     const child = spawn("git", [...args], {
       cwd,
-      env: env ?? process.env,
+      env: env ?? noninteractiveGitEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -153,7 +154,7 @@ export async function fetchSource(request: FetchRequest): Promise<FetchResult> {
   const remote = resolveRemote(declared);
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "trove-skill-import-"));
-  const cloneEnv = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
+  const cloneEnv = { ...noninteractiveGitEnv(), GIT_LFS_SKIP_SMUDGE: "1" };
   // protocol.allow=never also stops a redirect or submodule from leaving https.
   const cloneConfig = [
     "-c", "core.hooksPath=/dev/null",
