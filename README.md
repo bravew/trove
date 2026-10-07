@@ -2,7 +2,7 @@
 
 Open-source plugin marketplace for AI coding assistants. Author skills once in Markdown — ship them to **Claude Code**, **Cursor**, **OpenAI Codex**, **GitHub Copilot CLI**, **OpenCode**, **Gemini CLI**, and any tool that reads `AGENTS.md`.
 
-**8 first-party plugins, 60 first-party skills, 7 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
+**9 first-party plugins, 61 first-party skills, 7 projection surfaces.** Optional MCP connector metadata lives on the role plugins until a curated third-party entry projects as a real installable plugin.
 
 ## Install
 
