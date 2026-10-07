@@ -387,7 +387,31 @@ function changedPaths(before: readonly TreeEntry[], after: readonly TreeEntry[])
     .sort();
 }
 
-function licenseExpression(entries: readonly TreeEntry[]): string | null {
+/**
+ * The license a commit declares. A source that pins `evidence_digest` keeps its
+ * license in a file outside the selected tree, so that file is read at the
+ * commit and must match the pin byte for byte. Otherwise the license is the
+ * `license:` field of the selected SKILL.md frontmatter.
+ */
+function licenseExpression(
+  source: UpstreamSource,
+  gitDirectory: string,
+  revision: FullSha,
+  entries: readonly TreeEntry[],
+): string | null {
+  const pinned = source.license.evidenceDigest;
+  if (pinned === undefined) return frontmatterLicense(entries);
+  const blob = spawnSync(
+    "git",
+    ["--git-dir", gitDirectory, "cat-file", "blob", `${revision}:${source.license.evidence}`],
+    { encoding: null, env: noninteractiveGitEnv() },
+  );
+  if (blob.status !== 0) return null;
+  const digest = `sha256:${createHash("sha256").update(blob.stdout).digest("hex")}`;
+  return digest === pinned ? source.license.expression : `${source.license.evidence} changed (${digest})`;
+}
+
+function frontmatterLicense(entries: readonly TreeEntry[]): string | null {
   const skill = entries.find((entry) => entry.path === "SKILL.md");
   if (!skill) return null;
   const content = skill.bytes.toString("utf8");
@@ -599,7 +623,7 @@ function checkOnlineArtifact(
     if (digestTree(base) !== artifact.baseTreeDigest) {
       throw new SyncError(`${artifact.id}: base tree digest does not match manifest`);
     }
-    const actualLicense = licenseExpression(base);
+    const actualLicense = licenseExpression(source, prepared.gitDirectory, artifact.baseSha, base);
     if (actualLicense !== source.license.expression) {
       return {
         ...offline,
@@ -632,7 +656,7 @@ function checkOnlineArtifact(
         verification: [...offline.verification, `candidate-validation:${(error as Error).message}`],
       };
     }
-    const candidateLicense = licenseExpression(candidate);
+    const candidateLicense = licenseExpression(source, prepared.gitDirectory, prepared.candidate, candidate);
     if (candidateLicense !== source.license.expression) {
       return {
         ...offline,
@@ -745,7 +769,7 @@ function candidateResult(
       };
     }
     const differences = changedPaths(base, candidate);
-    const actualLicense = licenseExpression(candidate);
+    const actualLicense = licenseExpression(source, remote.gitDirectory, remote.candidate, candidate);
     if (actualLicense !== source.license.expression) {
       return {
         report: {

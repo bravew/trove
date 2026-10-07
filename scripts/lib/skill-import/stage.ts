@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -264,10 +265,16 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
         }));
       }
     }
+    const declared = skillDocument.get("license");
     if (request.licenseExpression === undefined) {
-      const expression = skillDocument.get("license");
-      if (typeof expression !== "string" || expression.length === 0) throw new Error("licenseExpression is required when upstream frontmatter has no license");
-      document.setIn(["sources", sourceIndex, "license", "expression"], expression);
+      if (typeof declared !== "string" || declared.length === 0) throw new Error("licenseExpression is required when upstream frontmatter has no license");
+      document.setIn(["sources", sourceIndex, "license", "expression"], declared);
+    }
+    // Without a frontmatter license the sync has nothing to verify against, so
+    // pin the evidence file and let it verify that blob at every commit.
+    if (typeof declared !== "string" || declared.length === 0) {
+      const digest = `sha256:${createHash("sha256").update(license).digest("hex")}`;
+      document.setIn(["sources", sourceIndex, "license", "evidence_digest"], digest);
     }
     manifest = parseUpstreamManifest(document.toJS());
     artifact = manifest.sources[sourceIndex].artifacts[0];

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,6 +24,7 @@ import {
 import {
   ManifestError,
   effectivePolicy,
+  type LicenseRecord,
   loadUpstreamManifest,
   parseUpstreamManifest,
   validateManifestInventory,
@@ -1191,6 +1193,76 @@ describe("one-artifact updater", () => {
     } finally {
       fixture.cleanup();
     }
+  });
+});
+
+describe("pinned license evidence", () => {
+  // `rules/a.md` is the same bytes at base and candidate in every fixture, so it
+  // stands in for a root LICENSE that sits outside the selected tree.
+  const EVIDENCE = "skills/example/rules/a.md";
+  const sha256 = (data: string | Buffer): string => `sha256:${createHash("sha256").update(data).digest("hex")}`;
+  const withLicense = (manifest: UpstreamManifest, license: Record<string, string>): UpstreamManifest => ({
+    ...manifest,
+    sources: manifest.sources.map((source) => ({ ...source, license: license as unknown as LicenseRecord })),
+  });
+  /** Runs the updater with a license built from the fixture's real evidence bytes. */
+  const conclude = (
+    change: FixtureChange,
+    license: (evidenceDigest: string) => Record<string, string>,
+  ) => {
+    const fixture = createUpdateFixture(change);
+    try {
+      const actual = sha256(fs.readFileSync(path.join(fixture.upstream, EVIDENCE)));
+      const report = updateArtifacts(fixture.root, withLicense(fixture.manifest, license(actual)), {
+        artifactId: "trove-example",
+      }, {
+        verify: () => ["fixture verification"],
+      }).artifacts[0];
+      return { report, actual };
+    } finally {
+      fixture.cleanup();
+    }
+  };
+
+  test("accepts a commit whose evidence file matches the pin", () => {
+    const { report } = conclude("add", (digest) => ({ expression: "MIT", evidence: EVIDENCE, evidenceDigest: digest }));
+    expect(report.conclusion).toBe("updated");
+    expect(report.license.status).toBe("unchanged");
+  });
+
+  test("fails closed when the evidence file's bytes change", () => {
+    const { report, actual } = conclude("add", () => ({
+      expression: "MIT",
+      evidence: EVIDENCE,
+      evidenceDigest: sha256("other\n"),
+    }));
+    expect(report.conclusion).toBe("license-changed");
+    expect(report.license.status).toBe("changed");
+    expect(report.license.actual).toContain(actual);
+  });
+
+  test("reports a missing evidence file as a missing license", () => {
+    const { report } = conclude("add", (digest) => ({ expression: "MIT", evidence: "LICENSE", evidenceDigest: digest }));
+    expect(report.conclusion).toBe("license-changed");
+    expect(report.license.status).toBe("missing");
+  });
+
+  test("ignores SKILL.md frontmatter once the evidence is pinned", () => {
+    // The `license` change rewrites upstream frontmatter to Apache-2.0. A pinned
+    // source takes its license from the evidence file, so that edit is not a
+    // license change.
+    const { report } = conclude("license", (digest) => ({ expression: "MIT", evidence: EVIDENCE, evidenceDigest: digest }));
+    expect(report.conclusion).not.toBe("license-changed");
+  });
+
+  test("the manifest keeps a valid pin and rejects a malformed one", () => {
+    const raw = fixtureRaw("https://example.com/fixture.git", 4096);
+    const source = (raw.sources as Record<string, unknown>[])[0];
+    source.license = { expression: "MIT", evidence: "LICENSE", evidence_digest: sha256("x") };
+    expect(parseUpstreamManifest(raw).sources[0].license.evidenceDigest).toBe(sha256("x"));
+
+    source.license = { expression: "MIT", evidence: "LICENSE", evidence_digest: "not-a-digest" };
+    expect(() => parseUpstreamManifest(raw)).toThrow(ManifestError);
   });
 });
 

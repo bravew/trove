@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -127,6 +128,21 @@ describe("skill import staging", () => {
     const manifest = loadUpstreamManifest(root);
     expect(manifest.sources[0].license.expression).toBe("MIT");
     expect(checkOffline(root, manifest).artifacts[0].conclusion).toBe("no-changes");
+  });
+
+  test("pins the license file only when frontmatter declares no license", async () => {
+    const declared = fixture();
+    await stageImport(declared.request);
+    expect(loadUpstreamManifest(declared.root).sources[0].license.evidenceDigest).toBeUndefined();
+
+    // Without a frontmatter license the sync has nothing to verify against, so
+    // staging records the digest of the LICENSE blob it just read.
+    const undeclared = fixture(DEFAULT_SKILL.replace("license: MIT\n", ""));
+    await stageImport(undeclared.request);
+    const manifest = loadUpstreamManifest(undeclared.root);
+    const expected = `sha256:${createHash("sha256").update(fs.readFileSync(path.join(undeclared.upstream, "LICENSE"))).digest("hex")}`;
+    expect(manifest.sources[0].license.evidenceDigest).toBe(expected);
+    expect(checkOffline(undeclared.root, manifest).artifacts[0].conclusion).toBe("no-changes");
   });
 
   test("rejects hard findings without writing files", async () => {

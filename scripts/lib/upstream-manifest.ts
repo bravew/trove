@@ -16,6 +16,12 @@ export interface UpstreamPolicy {
 export interface LicenseRecord {
   expression: string;
   evidence: RepositoryPath;
+  /**
+   * Pins the bytes of the `evidence` file. When set, the sync verifies the
+   * license from that file at each commit instead of from SKILL.md frontmatter,
+   * which a source that keeps its license in a root LICENSE never declares.
+   */
+  evidenceDigest?: Sha256Digest;
 }
 
 export type ArtifactTransform =
@@ -263,10 +269,13 @@ function repositoryUrlAt(value: unknown, where: string, options: ManifestParseOp
 
 function parseLicense(value: unknown, where: string): LicenseRecord {
   const record = objectAt(value, where);
-  strictKeys(record, where, ["expression", "evidence"]);
+  strictKeys(record, where, ["expression", "evidence"], ["evidence_digest"]);
   return {
     expression: stringAt(record.expression, `${where}.expression`),
     evidence: repositoryPathAt(record.evidence, `${where}.evidence`),
+    ...(record.evidence_digest === undefined
+      ? {}
+      : { evidenceDigest: digestAt(record.evidence_digest, `${where}.evidence_digest`) }),
   };
 }
 
