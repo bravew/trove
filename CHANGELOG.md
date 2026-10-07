@@ -94,6 +94,16 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.10.7] - 2026-10-07
+
+### What's Changed
+* ci: run PR checks on epic/** integration branches by @bravew in https://github.com/bravew/trove/pull/35
+* docs(media): add import, ffmpeg, and shotcraft implementation plans by @bravew in https://github.com/bravew/trove/pull/36
+* feat: /import-skill for importing external skills by @bravew in https://github.com/bravew/trove/pull/44
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.10.5...v2026.10.7
+
 ## [2026.10.5] - 2026-10-05
 
 ### What's Changed

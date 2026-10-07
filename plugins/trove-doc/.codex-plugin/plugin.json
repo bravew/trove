@@ -1,7 +1,7 @@
 {
   "name": "trove-doc",
   "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
-  "version": "2026.10.5",
+  "version": "2026.10.7",
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-doc",
