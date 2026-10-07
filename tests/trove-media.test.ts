@@ -131,36 +131,30 @@ describe("trove-ffmpeg contract", () => {
     "plugins/trove-media/skills/trove-ffmpeg/scripts/_contract.py",
   );
 
-  function contractReport(): { tools: { name: string; examples: unknown[] }[] } | null {
-    const probe = spawnSync("python3", ["--version"], { encoding: "utf8" });
-    if (probe.status !== 0) return null;
-    const result = spawnSync("python3", [bundleContract, "--json"], { encoding: "utf8" });
-    if (result.status !== 0) return null;
-    return JSON.parse(result.stdout) as { tools: { name: string; examples: unknown[] }[] };
-  }
+  const hasPython = spawnSync("python3", ["--version"], { encoding: "utf8" }).status === 0;
+  if (!hasPython) console.warn("skipping the contract check: python3 is not on PATH");
 
-  const report = contractReport();
-
-  test.skipIf(report === null)(
+  test.skipIf(!hasPython)(
     "the generated Claude bundle reports 42 tools with non-empty examples",
     () => {
-      // Both transforms are exercised end to end here: `--json` parses the
-      // synced spec at `references/runtime-spec.md` for its per-tool examples.
-      expect(report?.tools.length).toBe(42);
-      for (const tool of report?.tools ?? []) {
+      // Run after beforeAll builds the bundle. A broken contract must fail,
+      // while only a missing Python interpreter permits a skip.
+      const result = spawnSync("python3", [bundleContract, "--json"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+        timeout: 30_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout) as {
+        tools: { name: string; examples: unknown[] }[];
+      };
+      expect(report.tools.length).toBe(42);
+      for (const tool of report.tools) {
         expect(tool.examples.length, `${tool.name} has no examples`).toBeGreaterThan(0);
       }
     },
   );
-
-  test("python3 was present, so the contract check ran rather than skipped", () => {
-    // A stated skip is only honest if the reason is visible.
-    const probe = spawnSync("python3", ["--version"], { encoding: "utf8" });
-    if (probe.status !== 0) {
-      console.warn("skipping the contract check: python3 is not on PATH");
-    }
-    expect(probe.status === 0 ? report !== null : true).toBe(true);
-  });
 });
 
 describe("trove-ffmpeg provenance", () => {
