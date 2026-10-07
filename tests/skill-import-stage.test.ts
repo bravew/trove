@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -127,6 +128,37 @@ describe("skill import staging", () => {
     const manifest = loadUpstreamManifest(root);
     expect(manifest.sources[0].license.expression).toBe("MIT");
     expect(checkOffline(root, manifest).artifacts[0].conclusion).toBe("no-changes");
+  });
+
+  test("stamps the lock with the upstream commit date, as the updater does", async () => {
+    const { root, upstream, request } = fixture();
+    // Back-date the commit so a wall-clock stamp cannot match by coincidence.
+    const amended = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--amend", "--no-edit", "--quiet"], {
+      cwd: upstream,
+      env: { ...process.env, GIT_COMMITTER_DATE: "2001-02-03T04:05:06Z" },
+    });
+    expect(amended.status).toBe(0);
+    const sha = git(upstream, "rev-parse", "HEAD");
+    await stageImport({ ...request, report: { ...request.report, source: { ...request.report.source, resolvedSha: sha } } });
+    const artifact = loadUpstreamManifest(root).sources[0].artifacts[0];
+    expect(artifact.baseSha).toBe(sha);
+    expect(artifact.checkedAt).toBe("2001-02-03T04:05:06Z");
+    expect(artifact.status === "active" ? artifact.importedAt : null).toBe("2001-02-03T04:05:06Z");
+  });
+
+  test("pins the license file only when frontmatter declares no license", async () => {
+    const declared = fixture();
+    await stageImport(declared.request);
+    expect(loadUpstreamManifest(declared.root).sources[0].license.evidenceDigest).toBeUndefined();
+
+    // Without a frontmatter license the sync has nothing to verify against, so
+    // staging records the digest of the LICENSE blob it just read.
+    const undeclared = fixture(DEFAULT_SKILL.replace("license: MIT\n", ""));
+    await stageImport(undeclared.request);
+    const manifest = loadUpstreamManifest(undeclared.root);
+    const expected = `sha256:${createHash("sha256").update(fs.readFileSync(path.join(undeclared.upstream, "LICENSE"))).digest("hex")}`;
+    expect(manifest.sources[0].license.evidenceDigest).toBe(expected);
+    expect(checkOffline(undeclared.root, manifest).artifacts[0].conclusion).toBe("no-changes");
   });
 
   test("rejects hard findings without writing files", async () => {

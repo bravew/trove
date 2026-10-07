@@ -5,6 +5,11 @@ transformations, replays checked-in patches, and stops before writing on a
 conflict, license change, unsafe path, unexpected file type, or size limit.
 No model decides which bytes enter the repository.
 
+`checked_at` and `imported_at` record the commit date of the locked upstream
+revision, not the time the command ran. Rerunning an import or an update
+therefore writes the same manifest bytes, and a sync to an older-dated commit
+can move these fields backwards.
+
 ## Local commands
 
 Run the offline lock gate without network access:
@@ -104,6 +109,15 @@ Paths that `walkLocal` still validates for safety and file type, but omits from
 Trove-authored files that sit next to a vendored tree (the `trove-pulse`
 wrapper `SKILL.md.tmpl`). Drift in `local_only` content is caught by
 `bun run validate` / `bun test`, not by the sync lock.
+
+### `license.evidence_digest`
+
+Optional. Set it when the source keeps its license in a root file such as
+`LICENSE` and its `SKILL.md` frontmatter declares none. The sync then hashes
+the `evidence` blob at each commit instead of reading frontmatter. A matching
+digest keeps the recorded `expression`. A missing file or a different digest
+reports `license-changed`. Importing a source with no frontmatter license
+writes the pin automatically.
 
 ### Per-artifact `policy`
 
