@@ -301,14 +301,14 @@ sources:
       - id: trove-ffmpeg
         upstream_path: .
         local_path: skills/media/trove-ffmpeg
-        base_sha: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
-        base_tree_digest: sha256:f062cbe19b9b8706e0c93ec635d13a57c8149a4cf3aceed05dcc73b67e490d4e
-        local_tree_digest: sha256:491324bd3e1566bf9f7363c2d2e40b243f241c7a2448aef2cc953e22357fe450
+        base_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
+        base_tree_digest: sha256:82c55caf5d2c0ab9bf74c65bbace37844a77c30992d15d1845ac9d06a14e8c12
+        local_tree_digest: sha256:c11b59afb0185fdd7c405a29c2e9a227e9c7ec5f1af4a443ce525be05dbe88ea
         patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        checked_sha: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
-        checked_at: 2026-10-07T13:07:41Z
+        checked_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
+        checked_at: 2026-10-05T03:21:12Z
         candidate_sha: null
-        imported_at: 2026-10-07T13:07:41Z
+        imported_at: 2026-10-05T03:21:12Z
         include:
           - SKILL.md
           - references/**
