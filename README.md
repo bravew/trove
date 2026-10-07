@@ -70,6 +70,7 @@ cd ~/.trove && git pull && ./setup
 | **trove-infra** | DevOps | Terraform, AWS CDK, Docker patterns |
 | **trove-research** | PMs and engineers | Last-30-days pulse across global and Chinese social platforms |
 | **[trove-doc](plugins/trove-doc/README.md)** | Note authors and researchers | Obsidian Markdown, Bases, JSON Canvas, vault operations, and web clipping |
+| **[trove-media](plugins/trove-media/README.md)** | Developers, designers, and PMs | Video and audio editing, transcoding, and delivery checks |
 
 Optional MCP connector metadata lives on role plugins such as `trove-design`, `trove-product`, and `trove-security`. Curated external plugins are added only when they project as installable marketplace entries.
 
