@@ -1,0 +1,21 @@
+name: trove-media
+description: "Media skills: video and audio editing, transcoding, delivery checks, and production workflows"
+author:
+  name: Trove Contributors
+homepage: https://github.com/bravew/trove
+license: MIT
+keywords: [media, video, audio, ffmpeg, transcoding, editing]
+category: media
+logo: assets/logo.svg
+brandColor: "#7C3AED"
+roles: [dev, design, pm]
+
+skills: []
+
+platforms:
+  claude:
+    strict: true
+  cursor:
+    rules_dir: ./rules/
+  codex:
+    apps: []
