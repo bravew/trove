@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -221,6 +222,102 @@ describe("import-skill CLI", () => {
     }
   });
 
+  describe("--unicode-review", () => {
+    const ZWJ = String.fromCharCode(0x200d);
+    const EMOJI = `a\nb${ZWJ}c\n`;
+
+    function reviewFor(sha: string, overrides: Record<string, unknown> = {}): string {
+      const file = path.join(temporaryDirectory("trove-cli-review-"), "review.json");
+      fs.writeFileSync(file, JSON.stringify({
+        resolvedSha: sha,
+        exceptions: [{
+          file: "scripts/emoji.py",
+          sha256: crypto.createHash("sha256").update(EMOJI).digest("hex"),
+          line: 2,
+          codePoint: "U+200D",
+          count: 1,
+          ...overrides,
+        }],
+      }));
+      return file;
+    }
+
+    const files = { ...BENIGN_FILES, "scripts/emoji.py": EMOJI };
+
+    test("refuses a joiner without a review", async () => {
+      const target = makeTarget();
+      const { deps } = benignDeps(files);
+      const result = await run(["--inspect", DECLARED, "--root", target, "--id", "trove-fixture", ...STAGE_SELECTION], deps);
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/U\+200D/);
+    });
+
+    test("an exact review inspects clean and is recorded in both reports", async () => {
+      const target = makeTarget();
+      const { deps, upstream } = benignDeps(files);
+      const result = await run(
+        ["--inspect", DECLARED, "--root", target, "--id", "trove-fixture", "--unicode-review", reviewFor(upstream.sha), ...STAGE_SELECTION],
+        deps,
+      );
+      expect(result.err).toBe("");
+      expect(result.code).toBe(0);
+      const report = JSON.parse(fs.readFileSync(path.join(target, ".trove/import/trove-fixture/report.json"), "utf8"));
+      expect(report.unicode_review.resolvedSha).toBe(upstream.sha);
+      expect(report.findings.some((finding: { severity: string; message: string }) =>
+        finding.severity === "flag" && /reviewed zero-width joiner U\+200D x1/.test(finding.message))).toBe(true);
+      expect(report.findings.some((finding: { severity: string }) => finding.severity === "hard-reject")).toBe(false);
+      expect(fs.readFileSync(path.join(target, ".trove/import/trove-fixture/report.md"), "utf8")).toContain("## Pinned Unicode review (1)");
+    });
+
+    test("a review pinned to another commit fails and stages nothing", async () => {
+      const target = makeTarget();
+      const { deps } = benignDeps(files);
+      const result = await run(
+        ["--inspect", DECLARED, "--root", target, "--id", "trove-fixture", "--unicode-review", reviewFor("a".repeat(40)), ...STAGE_SELECTION],
+        deps,
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/pinned to/);
+    });
+
+    test("a review with the wrong digest fails closed", async () => {
+      const target = makeTarget();
+      const { deps, upstream } = benignDeps(files);
+      const result = await run(
+        ["--inspect", DECLARED, "--root", target, "--id", "trove-fixture", "--unicode-review", reviewFor(upstream.sha, { sha256: "0".repeat(64) }), ...STAGE_SELECTION],
+        deps,
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/matched nothing/);
+    });
+
+    test("a review that allows another code point fails before any fetch", async () => {
+      const target = makeTarget();
+      let fetched = false;
+      const result = await run(
+        ["--inspect", DECLARED, "--root", target, "--id", "trove-fixture", "--unicode-review", reviewFor("a".repeat(40), { codePoint: "U+202E" })],
+        { fetchSource: async () => { fetched = true; throw new Error("must not fetch"); } },
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/only U\+200D is eligible/);
+      expect(fetched).toBe(false);
+    });
+
+    test("--stage honors the review and stages the reviewed file", async () => {
+      const target = makeTarget();
+      const { deps, upstream } = benignDeps(files);
+      const result = await run(
+        ["--stage", DECLARED, "--root", target, "--id", "trove-fixture", "--plugin", "trove-media", "--category", "media", "--mode", "vendored", "--license", "MIT",
+          "--path-map", "notes/:references/", "--path-map", "templates/:scripts/templates/", "--accept-transform", "1",
+          "--unicode-review", reviewFor(upstream.sha), ...STAGE_SELECTION],
+        deps,
+      );
+      expect(result.err).toBe("");
+      expect(result.code).toBe(0);
+      expect(fs.readFileSync(path.join(target, "skills/media/trove-fixture/scripts/emoji.py"), "utf8")).toBe(EMOJI);
+    });
+  });
+
   test("a hard reject exits non-zero, reports it, and never stages", async () => {
     const target = makeTarget();
     const { deps } = benignDeps({ ...BENIGN_FILES, "scripts/bad.py": `print("${String.fromCharCode(0x202e)}hidden")\n` });
@@ -347,6 +444,39 @@ describe("import-skill CLI", () => {
     expect(manifest.sources.find((entry) => entry.id === "trove-fixture")?.license.expression).toBe("MIT");
     const report = JSON.parse(fs.readFileSync(path.join(target, ".trove/import/trove-fixture/report.json"), "utf8"));
     expect(report.license).toMatchObject({ expression: "MIT", path: "LICENSE", verdict: "ok" });
+  });
+
+  test("a license inside --path without --license-path rejects with a hint", async () => {
+    const target = makeTarget();
+    const { deps } = benignDeps({
+      "skills/media/SKILL.md": SKILL,
+      "skills/media/LICENSE": MIT_LICENSE,
+    });
+
+    const result = await run(["--inspect", DECLARED, "--root", target, "--id", "fixture", "--path", "skills/media", "--include", "**"], deps);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/--license-path/);
+  });
+
+  test("stages a license inside --path when --license-path names it", async () => {
+    const target = makeTarget();
+    const { deps } = benignDeps({
+      "skills/media/SKILL.md": SKILL,
+      "skills/media/LICENSE": MIT_LICENSE,
+      "skills/media/references/notes.md": "# Notes\n",
+    });
+
+    const result = await run(
+      ["--stage", DECLARED, "--root", target, "--id", "trove-fixture", "--plugin", "trove-media", "--category", "media", "--mode", "vendored", "--license", "MIT",
+        "--path", "skills/media", "--license-path", "skills/media/LICENSE", "--include", "**"],
+      deps,
+    );
+
+    expect(result.code).toBe(0);
+    expect(fs.readFileSync(path.join(target, "skills/media/trove-fixture/references/LICENSE.md"), "utf8")).toBe(MIT_LICENSE);
+    const manifest = loadUpstreamManifest(target);
+    expect(manifest.sources.find((entry) => entry.id === "trove-fixture")?.license).toMatchObject({ expression: "MIT", evidence: "skills/media/LICENSE" });
   });
 
   test("a malformed --transforms file fails before any fetch", async () => {

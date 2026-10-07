@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { fetchSource, type FetchRequest } from "./lib/skill-import/fetch";
 import { scanSource } from "./lib/skill-import/scan";
 import { stageImport } from "./lib/skill-import/stage";
+import { parseUnicodeReview, type ReviewedUnicode } from "./lib/skill-import/unicode-review";
 import { isCanonicalArtifactPath, loadUpstreamManifest } from "./lib/upstream-manifest";
 import { checkOffline, mapPath, matchesPattern, type SyncReport } from "./lib/upstream-sync";
 import type {
@@ -45,6 +46,8 @@ export interface ImportCliReport {
   };
   license: { expression: string | null; path: string; verdict: "ok" | "review" | "rejected" };
   findings: readonly Finding[];
+  /** The pinned U+200D review the scan ran under, or null. Each use is also a flag finding. */
+  unicode_review: ReviewedUnicode | null;
   proposed_transforms: readonly ProposedTransform[];
   accepted_transforms: readonly ProposedTransform[];
   allowed_tools: unknown;
@@ -90,13 +93,14 @@ interface Options {
   splitFront: boolean;
   license?: string;
   licensePath: string;
+  unicodeReview?: ReviewedUnicode;
   dryRun: boolean;
   help: boolean;
 }
 
 const VALUE_FLAGS = new Set([
   "ref", "path", "id", "root", "json", "markdown", "mode", "plugin", "category",
-  "source-id", "rename-skill", "preamble-marker", "license", "license-path", "transforms",
+  "source-id", "rename-skill", "preamble-marker", "license", "license-path", "transforms", "unicode-review",
 ]);
 const LIST_FLAGS = new Set(["include", "exclude", "path-map", "accept-transform", "local-only"]);
 const BOOL_FLAGS = new Set(["inspect", "stage", "dry-run", "split-front", "help"]);
@@ -119,6 +123,10 @@ Selection (all paths/patterns are relative to --path):
   --path-map <from>:<to>     repeatable; both file paths or both directory prefixes
   --license-path <path>      repository-root-relative license blob; default LICENSE
                              (also added to the scan selection and excluded from staging)
+  --unicode-review <file>    pinned JSON review of exact U+200D joiners: { resolvedSha, exceptions:
+                             [{ file, sha256, line, codePoint: "U+200D", count }] }. Bound to the
+                             resolved commit and whole-file digest; stale entries fail. Every other
+                             invisible or bidi character stays a hard reject.
   --local-only <pattern>     repeatable; staged path kept out of the sync lock (vendored)
   .claude/**, .github/**, hooks/**, mcp/**, AGENTS.md, and CLAUDE.md are always
   excluded; their presence is flagged from git tree metadata only.
@@ -232,6 +240,14 @@ function loadTransformsFile(file: string): ProposedTransform[] {
   }
   if (!Array.isArray(raw)) throw new CliError(`--transforms ${file} must be a JSON array`);
   return raw.map((entry, index) => parseTransformEntry(entry, `--transforms[${index}]`));
+}
+
+function loadUnicodeReviewFile(file: string): ReviewedUnicode {
+  try {
+    return parseUnicodeReview(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new CliError(`--unicode-review ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function parseArgs(argv: readonly string[]): Options {
@@ -364,6 +380,9 @@ function parseArgs(argv: readonly string[]): Options {
       case "transforms":
         options.externalTransforms = loadTransformsFile(assertNonEmpty(value, "--transforms"));
         break;
+      case "unicode-review":
+        options.unicodeReview = loadUnicodeReviewFile(assertNonEmpty(value, "--unicode-review"));
+        break;
     }
   }
 
@@ -452,7 +471,7 @@ function suspiciousPresence(gitDirectory: string, revision: string, subtree: str
 }
 
 /** Selected file count and byte total, the same set the scanner reads. */
-function measureSelection(gitDirectory: string, revision: string, selection: Selection): { files: number; bytes: number } {
+function measureSelection(gitDirectory: string, revision: string, selection: Selection, forcePath?: string): { files: number; bytes: number } {
   const result = spawnSync("git", ["--git-dir", gitDirectory, "ls-tree", "-r", "-l", "-z", revision], {
     encoding: null,
     stdio: ["ignore", "pipe", "pipe"],
@@ -464,7 +483,7 @@ function measureSelection(gitDirectory: string, revision: string, selection: Sel
     const match = /^(\d{6}) (blob|commit|tree) ([0-9a-f]{40})\s+(\d+|-)\t([\s\S]+)$/.exec(line);
     if (!match) continue;
     const [, , , , size, filePath] = match;
-    if (!selectedIn(filePath, selection)) continue;
+    if (filePath !== forcePath && !selectedIn(filePath, selection)) continue;
     files += 1;
     bytes += size === "-" ? 0 : Number(size);
   }
@@ -554,6 +573,14 @@ function renderMarkdown(report: ImportCliReport): string {
     lines.push(`- **${finding.severity}** \`${finding.file}:${finding.line}\` — ${finding.message}`);
   }
   if (report.findings.length > 0) lines.push("");
+  if (report.unicode_review) {
+    lines.push(`## Pinned Unicode review (${report.unicode_review.exceptions.length})`, "");
+    lines.push(`Pinned to \`${report.unicode_review.resolvedSha}\`. Only U+200D is eligible; every other invisible character is still a hard reject.`, "");
+    for (const exception of report.unicode_review.exceptions) {
+      lines.push(`- \`${exception.file}:${exception.line}\` ${exception.codePoint} x${exception.count} (sha256 \`${exception.sha256}\`)`);
+    }
+    lines.push("");
+  }
   lines.push(`## Proposed transforms (${report.proposed_transforms.length})`, "");
   if (report.proposed_transforms.length === 0) lines.push("None.", "");
   report.proposed_transforms.forEach((transform, index) => {
@@ -712,26 +739,25 @@ export async function runImportCli(argv: readonly string[], deps: ImportCliDepen
     source = await fetch({ repository: options.source, ref: options.ref });
 
     // The scan is repository-relative; staging is relative to --path. The
-    // license is read separately by the engine, so it is always scanned and
-    // never part of the staged selection.
+    // governing license blob is selected by the scanner even when the
+    // selection excludes it, and is never part of the staged selection.
     const includePatterns = options.include.length > 0 ? options.include : ["**"];
     const scanSelection: Selection = {
-      include: [...new Set([...prefix(includePatterns, options.subtree), options.licensePath])],
+      include: prefix(includePatterns, options.subtree),
       exclude: [...new Set([
-        ...prefix(options.exclude, options.subtree).filter((pattern) => pattern !== options.licensePath),
+        ...prefix(options.exclude, options.subtree),
         ...prefix([...DEFAULT_EXCLUDES], options.subtree),
       ])],
       pathMap: {},
     };
-    const relativeLicense = stripPrefix(options.licensePath, options.subtree);
-    const stageSelection: Selection = {
-      include: includePatterns,
-      exclude: [...new Set([...options.exclude, ...(relativeLicense ? [relativeLicense] : []), ...DEFAULT_EXCLUDES])],
-      pathMap: options.pathMap,
-    };
-    const scan = await scanSource(source, scanSelection, { root: options.root, upstreamPath: options.subtree });
+    const scan = await scanSource(source, scanSelection, {
+      root: options.root,
+      upstreamPath: options.subtree,
+      licensePath: options.licensePath,
+      reviewedUnicode: options.unicodeReview,
+    });
     const findings = [...scan.findings, ...suspiciousPresence(source.gitDirectory, source.resolvedSha, options.subtree)];
-    const measured = measureSelection(source.gitDirectory, source.resolvedSha, scanSelection);
+    const measured = measureSelection(source.gitDirectory, source.resolvedSha, scanSelection, options.licensePath);
     const acceptedTransforms = options.stage ? resolveAccepted(options, scan.proposedTransforms) : [];
 
     // The detected license is evidence: a caller may not relabel it, and it
@@ -742,6 +768,15 @@ export async function runImportCli(argv: readonly string[], deps: ImportCliDepen
         `--license '${options.license}' does not match the detected '${detectedLicense}' in ${scan.license?.file}; the license cannot be relabeled`,
       );
     }
+
+    // Stage-relative license exclusion uses the detected file, so a license
+    // inside --path is excluded while a root license is staged untouched.
+    const relativeLicense = scan.license ? stripPrefix(scan.license.file, options.subtree) : undefined;
+    const stageSelection: Selection = {
+      include: includePatterns,
+      exclude: [...new Set([...options.exclude, ...(relativeLicense ? [relativeLicense] : []), ...DEFAULT_EXCLUDES])],
+      pathMap: options.pathMap,
+    };
 
     report = {
       schema_version: 1,
@@ -762,6 +797,7 @@ export async function runImportCli(argv: readonly string[], deps: ImportCliDepen
         verdict: licenseVerdict(findings),
       },
       findings,
+      unicode_review: options.unicodeReview ?? null,
       proposed_transforms: scan.proposedTransforms,
       accepted_transforms: acceptedTransforms,
       allowed_tools: null,
@@ -811,7 +847,7 @@ export async function runImportCli(argv: readonly string[], deps: ImportCliDepen
         acceptedTransforms,
         localOnly: options.localOnly,
         licenseExpression: options.license ?? detectedLicense ?? undefined,
-        licensePath: options.licensePath,
+        licensePath: scan.license?.file ?? options.licensePath,
         splitFront: options.splitFront,
       });
       report.allowed_tools = staged.allowedTools;
