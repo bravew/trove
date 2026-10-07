@@ -10,6 +10,7 @@ import { maintainedSkills } from "../scripts/lib/eval-structure";
 import {
   checkOffline,
   digestTree,
+  renderMarkdown,
   isCanonicalArtifactPath,
   lockEntries,
   patchEntries,
@@ -1100,6 +1101,24 @@ describe("one-artifact updater", () => {
       );
       expect(second.artifacts[0].conclusion).toBe("no-changes");
       expect(runGit(fixture.root, ["status", "--porcelain"])).toBe("");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test("renders the review checklist only when an update applies", () => {
+    const fixture = createUpdateFixture("add");
+    try {
+      const offline = checkOffline(fixture.root, fixture.manifest);
+      expect(renderMarkdown(offline)).not.toContain("## Review checklist");
+
+      const updated = updateArtifacts(fixture.root, fixture.manifest, { artifactId: "trove-example" }, {
+        verify: () => ["fixture verification"],
+      });
+      const markdown = renderMarkdown(updated);
+      expect(markdown).toContain("## Review checklist");
+      expect(markdown).toContain("shell=True");
+      expect(markdown).toContain("Do the Trove tests in `tests/` pass?");
     } finally {
       fixture.cleanup();
     }
