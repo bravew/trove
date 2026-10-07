@@ -6,6 +6,7 @@ import { validateAgentSkillFrontmatter } from "../agent-skills-spec";
 import { findSecretMatches } from "../secret-scan";
 import { validateSkillBudget } from "../skill-budget";
 import { loadUpstreamManifest } from "../upstream-manifest";
+import { matchesPattern } from "../upstream-sync";
 import type { FetchResult, Finding, ProposedTransform, Selection } from "./types";
 
 export interface ScanResult {
@@ -86,20 +87,6 @@ function run(args: readonly string[]): Buffer {
     throw new Error(`git ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
   }
   return result.stdout ?? Buffer.alloc(0);
-}
-
-/** `**` is the only wildcard, matching the upstream-sync selection rules. */
-function matchesPattern(candidate: string, pattern: string): boolean {
-  if (pattern === "**") return true;
-  if (pattern.endsWith("/**")) {
-    const prefix = pattern.slice(0, -3);
-    return candidate === prefix || candidate.startsWith(`${prefix}/`);
-  }
-  if (pattern.endsWith("/**/*") || pattern.endsWith("/**/**")) {
-    return matchesPattern(candidate, `${pattern.slice(0, pattern.indexOf("/**"))}/**`);
-  }
-  if (pattern.startsWith("**/")) return candidate === pattern.slice(3) || candidate.endsWith(`/${pattern.slice(3)}`);
-  return candidate === pattern;
 }
 
 function selected(candidate: string, selection: Selection): boolean {

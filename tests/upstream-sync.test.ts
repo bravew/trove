@@ -461,6 +461,14 @@ describe("canonical artifact paths", () => {
       const nestedSelection = readGitSelection(path.join(upstream, ".git"), sha, manifest.sources[0].artifacts[1], manifest);
       expect(rootSelection.map((entry) => entry.path)).toEqual(["SKILL.md"]);
       expect(nestedSelection.map((entry) => entry.path)).toEqual(["SKILL.md"]);
+      const all = readGitSelection(path.join(upstream, ".git"), sha, {
+        ...manifest.sources[0].artifacts[0], include: ["**"],
+      }, manifest);
+      expect(all.map((entry) => entry.path).sort()).toEqual(["SKILL.md", "skills/example/SKILL.md"]);
+      const named = readGitSelection(path.join(upstream, ".git"), sha, {
+        ...manifest.sources[0].artifacts[0], include: ["**/SKILL.md"], exclude: ["skills/**"],
+      }, manifest);
+      expect(named.map((entry) => entry.path)).toEqual(["SKILL.md"]);
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true });
     }

@@ -100,11 +100,16 @@ export function lockEntries(entries: readonly TreeEntry[], artifact: UpstreamArt
     !artifact.localOnly.some((pattern) => matchesPattern(entry.path, pattern)));
 }
 
-function matchesPattern(candidate: string, pattern: string): boolean {
+export function matchesPattern(candidate: string, pattern: string): boolean {
+  if (pattern === "**") return true;
   if (pattern.endsWith("/**")) {
     const prefix = pattern.slice(0, -3);
     return candidate === prefix || candidate.startsWith(`${prefix}/`);
   }
+  if (pattern.endsWith("/**/*") || pattern.endsWith("/**/**")) {
+    return matchesPattern(candidate, `${pattern.slice(0, pattern.indexOf("/**"))}/**`);
+  }
+  if (pattern.startsWith("**/")) return candidate === pattern.slice(3) || candidate.endsWith(`/${pattern.slice(3)}`);
   return candidate === pattern;
 }
 
