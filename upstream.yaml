@@ -293,10 +293,11 @@ sources:
   # commit by commit. See dev-doc/2026-10-trove-media-ffmpeg-plan.md §3.4.
   - id: trove-ffmpeg
     repository: https://github.com/kajisho5/ffmpeg-skill.git
-    ref: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
+    ref: main
     license:
       expression: MIT
       evidence: LICENSE
+      evidence_digest: sha256:7522b29e4d6e90f2a8fab15f07d224b1064c70692a872be9996ac1a88cf474e9
     artifacts:
       - id: trove-ffmpeg
         upstream_path: .

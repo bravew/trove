@@ -36,6 +36,13 @@ release process.
   plugin shipping `v2026.7.4`. Validation now rejects a `version:` in
   `plugin.yaml`.
 
+### Fixed
+
+- The `trove-ffmpeg` source row tracked the import SHA instead of `main`, so the
+  weekly check compared a stale head and reported `license-changed`. It now
+  tracks `main` and pins `license.evidence_digest`, and its `upstream-version`
+  and `THIRD_PARTY.md` entry read 2.5.1.
+
 ### Added
 
 - Agent Skills spec conformance is a blocking gate. `bun run validate` checks
