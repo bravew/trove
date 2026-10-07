@@ -165,7 +165,9 @@ describe("trove-ffmpeg provenance", () => {
     const artifact = source?.artifacts[0];
     expect(artifact?.localPath).toBe("skills/media/trove-ffmpeg");
     expect(artifact?.upstreamPath).toBe(".");
-    expect(artifact?.baseSha).toBe("9ada0f6dca03f1a5f1aa62ea237759c3f8e15321");
+    // Sync advances the active lock; the origin row below retains import evidence.
+    expect(artifact?.baseSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(artifact?.checkedSha).toBe(artifact?.baseSha);
     expect(repositoryPathAt(".", "upstream_path")).toBe(".");
 
     const row = manifest.skills.find(
