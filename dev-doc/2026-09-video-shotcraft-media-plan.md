@@ -255,10 +255,40 @@ autocorrelation at a 10 ms step, against least-squares fitting over
   librosa path. It names what `uv run --with` will download. Without consent, it
   reports that the track cannot be beat-synced to the stated tolerance and
   falls back to content pacing, as upstream does when there is no music yet.
-- Phase 2 measures the two methods side by side before any of this is
-  committed as guidance. If `scenes.py --beats` misses the gate on strong-beat
-  tracks, the order flips: librosa with consent first, `scenes.py` as the
-  report-only fallback.
+- Phase 1b ran `scenes.py --beats --json` on five strong-beat tracks on
+  2026-10-07. The script rejects audio-only input, so `background.py` created a
+  silent 320x180, 30 fps carrier for each track, at the track's full duration;
+  `audio.py --replace` put the music on that carrier before beat analysis. The
+  reports are preserved under `.trove/beat-analysis/` in the worktree. The
+  commands used the worktree's `skills/media/trove-ffmpeg/scripts/` wrappers
+  from its root. `PYTHONDONTWRITEBYTECODE=1` was set for each `scenes.py` run.
+  All five are `usable: false` under the default 0.5 confidence threshold. The
+  onset support count is not the upstream match percentage. Per-beat residuals
+  and upstream gate criteria remain unmeasured.
+
+  | Track | Duration (s) | BPM | Phase (s) | Onsets | Supported / grid | Confidence | Usable |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+  | `bgm-tech-house.mp3` | 288.69229 | 61.86 | 0.84 | 2878 | 297 / 297 | 0.437 | no |
+  | `house-vibez.mp3` | 111.46445 | 122.45 | 0.15 | 1132 | 228 / 228 | 0.446 | no |
+  | `cat-walk.mp3` | 123.990385 | 86.96 | 0.33 | 1190 | 174 / 180 | 0.409 | no |
+  | `tonight-hiphop.mp3` | 113.475906 | 69.77 | 0.22 | 1090 | 132 / 132 | 0.352 | no |
+  | `g-eazy-nba-type.mp3` | 104.312494 | 130.43 | 0.06 | 1070 | 226 / 227 | 0.323 | no |
+
+  Reproduce one row with the measured duration and track path:
+
+  ```bash
+  python3 skills/media/trove-ffmpeg/scripts/background.py --duration 288.69229 --width 320 --height 180 --fps 30 --color black -o .trove/beat-analysis/carrier.mp4
+  python3 skills/media/trove-ffmpeg/scripts/audio.py .trove/beat-analysis/carrier.mp4 --replace /Volumes/4TB_WD/dev/bravew/trove/_sample/video-shotcraft/assets/audio/bgm/bgm-tech-house.mp3 -o .trove/beat-analysis/bgm-tech-house.mp4
+  PYTHONDONTWRITEBYTECODE=1 python3 skills/media/trove-ffmpeg/scripts/scenes.py .trove/beat-analysis/bgm-tech-house.mp4 --beats --json > .trove/beat-analysis/bgm-tech-house.json
+  ```
+
+  Substitute the matching duration and filename from the table for other rows.
+  The upstream librosa comparison was not run because consent to download
+  packages with `uv run --with` was not given. It remains owed. All five runs
+  fail the wrapper's `usable` threshold, while the upstream residuals and match
+  percentage remain unmeasured. This data cannot establish comparative accuracy
+  or decide which method should lead. Decision 4 retains `scenes.py --beats`
+  first, with content pacing when its gate fails and librosa comparison pending.
 
 ## Corrections and adaptations to make
 
@@ -535,8 +565,11 @@ not folded into CI.
    writes `dev-doc/media-verification/issue-34.md`. A failure is reported and
    opened as a bug, but it does not gate the epic's final PR.
 4. **Beat analysis order.** **`scenes.py --beats` first, librosa through `uv`
-   only with consent when the gate fails**, or librosa first (upstream's
-   path). Phase 1b's measurement can overturn the default.
+   only with consent when the gate fails.** Phase 1b measured five tracks, and
+   all five returned `usable: false` below the default 0.5 confidence threshold.
+   Their onset support counts do not test the upstream match and residual gates.
+   The librosa comparison remains owed because it was not run without consent.
+   The current measurements do not decide which method should lead.
 5. **Delivery loudness.** **Normalise the BGM version to the named
    destination's target and re-test sync on the normalised file; measure the
    no-BGM stem only**, or deliver Remotion's levels untouched and only report

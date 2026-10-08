@@ -17,6 +17,7 @@
   ],
   "category": "media",
   "skills": [
-    "./.copilot/skills/trove-ffmpeg"
+    "./.copilot/skills/trove-ffmpeg",
+    "./.copilot/skills/trove-beat-sync"
   ]
 }

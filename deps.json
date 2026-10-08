@@ -16,6 +16,9 @@
       "trove-spec",
       "trove-user-story"
     ],
+    "trove-beat-sync": [
+      "trove-ffmpeg"
+    ],
     "trove-brainstorm": [],
     "trove-cdk": [
       "trove-principle-idempotency"
@@ -146,6 +149,9 @@
     "trove-explain": [
       "trove-architect",
       "trove-why"
+    ],
+    "trove-ffmpeg": [
+      "trove-beat-sync"
     ],
     "trove-obsidian-cli": [
       "trove-obsidian-markdown"

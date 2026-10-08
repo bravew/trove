@@ -323,7 +323,8 @@
         "copilot"
       ],
       "skills": [
-        "trove-ffmpeg"
+        "trove-ffmpeg",
+        "trove-beat-sync"
       ]
     }
   ]
