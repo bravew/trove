@@ -13,6 +13,14 @@ roles: [dev, design, pm]
 skills:
   - path: ./skills/trove-ffmpeg
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-beat-sync
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-shot-recipes
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-video-review
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-product-video
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:

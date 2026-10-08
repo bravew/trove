@@ -133,7 +133,10 @@
         "video",
         "audio",
         "ffmpeg",
-        "media"
+        "media",
+        "remotion",
+        "promo-video",
+        "motion"
       ],
       "strict": true
     }

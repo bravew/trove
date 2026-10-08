@@ -303,7 +303,10 @@
         "video",
         "audio",
         "ffmpeg",
-        "media"
+        "media",
+        "remotion",
+        "promo-video",
+        "motion"
       ],
       "roles": [
         "dev",
@@ -323,7 +326,11 @@
         "copilot"
       ],
       "skills": [
-        "trove-ffmpeg"
+        "trove-ffmpeg",
+        "trove-beat-sync",
+        "trove-shot-recipes",
+        "trove-video-review",
+        "trove-product-video"
       ]
     }
   ]

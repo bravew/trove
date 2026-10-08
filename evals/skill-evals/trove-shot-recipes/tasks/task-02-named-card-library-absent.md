@@ -1,0 +1,1 @@
+I like the card named "orbital-dashboard-reveal". Add that motion to the opening of my Remotion promo. No video-shotcraft checkout is installed, and the public library.json URL is unavailable from this environment. Give me a useful next step. Do not guess what the card does from its name; you may offer general motion direction only if you label it as independent of that card.

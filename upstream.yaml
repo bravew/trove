@@ -342,6 +342,16 @@ sources:
           - references/LICENSE.md
           - SKILL.md.tmpl
         status: active
+  - id: video-shotcraft
+    repository: https://github.com/Vincentwei1021/video-shotcraft.git
+    # Curated adaptation with pinned provenance, like cursor-pstack and
+    # obsidian-skills. Track `main` so the weekly check reports review drift for
+    # the adapted rows; each row pins the reviewed revision in `evidence_sha`.
+    ref: main
+    license:
+      expression: Apache-2.0
+      evidence: LICENSE
+    artifacts: []
 
 skills:
   - { local_path: skills/coding/trove-architect, origin: original }
@@ -409,6 +419,27 @@ skills:
     source_id: trove-ffmpeg
     upstream_path: .
     evidence_sha: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
+  - local_path: skills/media/trove-beat-sync
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [references/music-beat-sync.md, references/sound-design.md]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  # Also reviewed: references/aesthetic-rules.md, gallery/ resolution rules.
+  - local_path: skills/media/trove-shot-recipes
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [references/aesthetic-rules.md, references/shots]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  - local_path: skills/media/trove-video-review
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [references/final-review.md, references/aesthetic-rules.md]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  - local_path: skills/media/trove-product-video
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
 
 external_records:
   - local_path: curated/sentry.json
