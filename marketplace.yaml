@@ -119,6 +119,9 @@ plugins:
       - audio
       - ffmpeg
       - media
+      - remotion
+      - promo-video
+      - motion
     roles:
       - dev
       - design

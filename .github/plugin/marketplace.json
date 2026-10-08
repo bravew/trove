@@ -125,7 +125,10 @@
         "video",
         "audio",
         "ffmpeg",
-        "media"
+        "media",
+        "remotion",
+        "promo-video",
+        "motion"
       ]
     }
   ]

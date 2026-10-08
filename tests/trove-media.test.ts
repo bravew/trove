@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import YAML from "yaml";
 import { loadUpstreamManifest, repositoryPathAt } from "../scripts/lib/upstream-manifest";
 import { checkOffline } from "../scripts/lib/upstream-sync";
 import { buildOnceForTests } from "./helpers/build";
@@ -24,6 +25,132 @@ const BUNDLES = [
 ];
 
 beforeAll(buildOnceForTests, 120_000);
+
+const SHOTCRAFT_SKILLS = [
+  "trove-shot-recipes",
+  "trove-beat-sync",
+  "trove-video-review",
+  "trove-product-video",
+];
+const SHOTCRAFT_BUNDLES = [
+  "plugins/trove-media/skills",
+  "plugins/trove-media/.agents/skills",
+  "plugins/trove-media/.copilot/skills",
+  "output/cursor/.agents/skills",
+  "output/codex/.agents/skills",
+  "output/opencode/.agents/skills",
+  "output/gemini/.agents/skills",
+  "output/gemini/plugins/trove-media/skills",
+  "output/copilot/.agents/skills",
+  "output/agents/plugins/trove-media/skills",
+];
+
+function markdownFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) return markdownFiles(absolute);
+    return /\.md(?:\.tmpl)?$/.test(entry.name) ? [absolute] : [];
+  });
+}
+
+function frontmatter(file: string): Record<string, unknown> {
+  const match = fs.readFileSync(file, "utf8").match(/^---\n([\s\S]*?)\n---/);
+  if (!match) throw new Error(`missing frontmatter in ${file}`);
+  return YAML.parse(match[1]) as Record<string, unknown>;
+}
+
+describe("shotcraft adaptations", () => {
+  test("all four skills are registered on all seven platforms", () => {
+    const plugin = YAML.parse(fs.readFileSync(path.join(ROOT, "plugins/trove-media/plugin.yaml"), "utf8"));
+    for (const skill of SHOTCRAFT_SKILLS) {
+      const entry = plugin.skills.find((item: { path: string }) => item.path === `./skills/${skill}`);
+      expect(entry, `${skill} is not registered`).toBeDefined();
+      expect([...entry.platforms].sort()).toEqual(["agents", "claude", "codex", "copilot", "cursor", "gemini", "opencode"]);
+      const metadata = frontmatter(path.join(ROOT, "skills/media", skill, "SKILL.md.tmpl"));
+      expect(metadata.activation).toBeUndefined();
+      expect(metadata.auto_attach).toBeUndefined();
+      expect(metadata.paths).toBeUndefined();
+    }
+    expect(plugin.auto_attach).toBeUndefined();
+  });
+
+  test("every bundled destination retains the Apache notice and changes statement", () => {
+    for (const skill of SHOTCRAFT_SKILLS) {
+      const notice = fs.readFileSync(path.join(ROOT, "skills/media", skill, "references/LICENSE.md"), "utf8");
+      expect(notice).toContain("Apache License");
+      expect(notice).toContain("Version 2.0, January 2004");
+      expect(notice).toMatch(/end of terms and conditions/i);
+      expect(notice).toContain("Wei Yihao");
+      expect(notice).toMatch(/changes made/i);
+      for (const bundle of SHOTCRAFT_BUNDLES) {
+        expect(fs.readFileSync(path.join(ROOT, bundle, skill, "references/LICENSE.md"), "utf8")).toBe(notice);
+      }
+    }
+  });
+
+  test("generated reference links resolve within the skill's own bundle", () => {
+    for (const skill of SHOTCRAFT_SKILLS) {
+      for (const bundle of SHOTCRAFT_BUNDLES) {
+        const directory = path.join(ROOT, bundle, skill);
+        for (const file of markdownFiles(directory).filter((file) => !file.endsWith("LICENSE.md"))) {
+          const body = fs.readFileSync(file, "utf8");
+          for (const match of body.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+            const target = match[1].replace(/^<|>$/g, "").split("#")[0];
+            if (!target || /^[a-z]+:/i.test(target) || target.startsWith("/")) continue;
+            const absolute = path.resolve(path.dirname(file), target);
+            const relative = path.relative(directory, absolute);
+            expect(relative.startsWith(".."), `${file} links outside its skill: ${target}`).toBe(false);
+            expect(fs.existsSync(absolute), `${file} has broken link ${target}`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  test("provenance names the pinned source and narrowly selected paths", () => {
+    const manifest = loadUpstreamManifest(ROOT);
+    const source = manifest.sources.find((item) => item.id === "video-shotcraft");
+    expect(source?.ref).toBe("main");
+    expect(source?.license.expression).toBe("Apache-2.0");
+    expect(source?.artifacts).toEqual([]);
+    for (const skill of SHOTCRAFT_SKILLS) {
+      const row = manifest.skills.find((item) => item.localPath === `skills/media/${skill}`);
+      expect(row?.origin).toBe("adapted");
+      if (row?.origin !== "adapted") throw new Error(`${skill} lacks adapted provenance`);
+      expect(row.sourceId).toBe(source?.id);
+      expect(row.evidenceSha).toBe("5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab");
+      expect(row.upstreamPaths.length).toBeGreaterThan(0);
+      expect(row.upstreamPaths).not.toContain(".");
+      expect(row.upstreamPaths.some((item) => item.startsWith("workbench/"))).toBe(false);
+    }
+  });
+
+  test("generated bodies are English with no unresolved template tokens", () => {
+    for (const skill of SHOTCRAFT_SKILLS) {
+      for (const bundle of SHOTCRAFT_BUNDLES) {
+        for (const file of markdownFiles(path.join(ROOT, bundle, skill)).filter((file) => !file.endsWith("LICENSE.md"))) {
+          const body = fs.readFileSync(file, "utf8");
+          expect(body, file).not.toMatch(/[㐀-䶿一-鿿]/u);
+          expect(body, file).not.toMatch(/\{\{[^}]*\}\}/);
+          expect(body, file).not.toMatch(/^\s*(?:ffmpeg|ffprobe)(?:\s|$)/m);
+        }
+      }
+    }
+  });
+
+  test("every named media script exists and has a dependency edge", () => {
+    const scripts = new Set(fs.readdirSync(path.join(SOURCE, "scripts")));
+    for (const skill of SHOTCRAFT_SKILLS) {
+      const directory = path.join(ROOT, "skills/media", skill);
+      const metadata = frontmatter(path.join(directory, "SKILL.md.tmpl"));
+      const body = markdownFiles(directory).filter((file) => !file.endsWith("LICENSE.md"))
+        .map((file) => fs.readFileSync(file, "utf8")).join("\n");
+      const mentioned = [...body.matchAll(/\b([a-z][a-z0-9_]*\.py)\b/g)].map((match) => match[1]);
+      for (const script of mentioned) expect(scripts.has(script), `${skill} names missing script ${script}`).toBe(true);
+      if (mentioned.length) expect(metadata["benefits-from"], `${skill} names scripts without trove-ffmpeg`).toContain("trove-ffmpeg");
+    }
+  });
+});
 
 describe("trove-ffmpeg front", () => {
   const front = fs.readFileSync(FRONT, "utf8");
