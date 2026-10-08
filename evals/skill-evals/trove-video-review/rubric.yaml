@@ -1,0 +1,17 @@
+criteria:
+  independent_review:
+    weight: 3
+    description: "Requires a clean, independent context with no production role or process advocacy before reviewing; declines to certify a review requested in the producing context."
+  evidence_and_coverage:
+    weight: 3
+    description: "Checks plan consistency, feature coverage, shot fidelity, technical quality, data safety, and audio against supplied evidence; missing inputs remain unchecked or cannot be verified."
+  frame_numbered_report:
+    weight: 2
+    description: "Reports each finding with its P/F/V/S/B/D/A/Q item identifier and a frame number or marks its evidence unavailable; prioritizes required fixes, suggested changes, and unchecked items."
+  sensitive_data_handling:
+    weight: 3
+    description: "Flags visible sensitive information without repeating the value, sharing it, or creating unnecessary copies, and recommends masking or replacement before release."
+  media_measurements:
+    weight: 3
+    description: "Uses the allowed trove-ffmpeg scripts for key frames, true peak, and content checks; validates BGM/no-BGM frame-for-frame consistency; reports unavailable checks as unchecked when the dependency is missing."
+min_pass_score: 7.0

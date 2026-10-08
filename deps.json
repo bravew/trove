@@ -120,6 +120,10 @@
       "trove-unslop"
     ],
     "trove-verify": [],
+    "trove-video-review": [
+      "trove-ffmpeg",
+      "trove-shot-recipes"
+    ],
     "trove-visual-parity": [
       "trove-component-spec"
     ],
@@ -152,7 +156,8 @@
       "trove-why"
     ],
     "trove-ffmpeg": [
-      "trove-beat-sync"
+      "trove-beat-sync",
+      "trove-video-review"
     ],
     "trove-obsidian-cli": [
       "trove-obsidian-markdown"
@@ -198,6 +203,9 @@
     "trove-security-review": [
       "trove-review",
       "trove-ship"
+    ],
+    "trove-shot-recipes": [
+      "trove-video-review"
     ],
     "trove-spec": [
       "trove-autoplan"
