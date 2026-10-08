@@ -39,6 +39,10 @@ and CI rules are in the ffmpeg plan's "Delivery workflow" section.
 
 ## Upstream changes since the first review
 
+Phase 1 (#28) re-ran the inspect on 2026-10-07 and the remote head is still
+`5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab`, the revision this section reviewed.
+No diff is owed. The table below is the comparison to the original `5e71af3`.
+
 `5e71af3..5ddbf52` contains four commits and touches 58 files (+2,582 / −280):
 
 | Commit | Area | Effect on this plan |
@@ -127,6 +131,47 @@ delivery surface in Trove), CapCut/剪映 export (needs `pyJianYingDraft`, a ven
 and has one unverified platform path), and the Ink Press template replacement
 walkthrough as a standalone skill — the template route stays a branch inside
 `trove-product-video` that points at the user's checkout.
+
+## Per-document adaptation map
+
+Written in Phase 1 (#28) before any skill body is authored. Each adapted
+document is classified as **port** (asset-independent prose or protocol),
+**trove-ffmpeg** (a step that becomes a script call), or **drop**
+(upstream-infrastructure-only). Line counts are from `5ddbf52`.
+
+| Document | Ports | Becomes `trove-ffmpeg` | Dropped |
+| --- | --- | --- | --- |
+| `SKILL.md` (266) | The three-mode decision, the minimal read-only product check, the nine core principles, the file-routing table, mode boundaries | Beat analysis → `scenes.py --beats`; rendered-frame review → `look.py` / `check.py` | Remotion internals, the workbench app, jianying export, author promotion, gallery URLs and `fetch-media.sh`, the asset inventory |
+| `references/pipeline.md` (402) | Stage order and gates, brief and decision table, styleframe and brand-to-easing presets, feature-to-shot mapping, energy-arc storyboard with hold budgets, the capture three-piece, per-shot discipline, sound-after-lock, independent review, dual-BGM delivery, pitfalls | Reference contact sheets → `look.py --tiles`; frame review → `look.py --at`; audio extract → `audio.py` / `check.py`; loudness → `loudness.py` | Remotion scaffolding, workbench parity, the template route, gallery and `library.json` resolution, `capture-template.mjs` |
+| `references/guided-free-creation.md` (200) | Brief table and fill rules, decision table, two-round visual-direction confirmation, feature-to-shot mapping, card-name and style-key resolution, storyboard confirmation, defaults and skip rules, reply format | none | Gallery URLs, `library.json` and demo TSX resolution, Remotion specifics |
+| `references/sequences/promo-energy-arc.md` (51) | The segment table, breathing-card rules, fill-in flow, pitfalls, transition styles | none | The template reference implementation |
+| `template/TEMPLATE.md` (100) | The swap discipline and the quality checklist | Frame back-review → `look.py` | The template project as a whole |
+| `template/THEMES.md` (45) | none | none | The whole document (workbench palette UI) |
+| `references/aesthetic-rules.md` (188) | Rules R1–R4, Q1–Q11, S1–S5, C1–C3, P1–P4 as prose | S5 offset correlation and `max_volume` → `loudness.py`; Q2 and P1 pixel tools → `look.py` / `check.py` | Template refs, Mixkit files, Remotion implementation notes |
+| `references/music-beat-sync.md` (258) | The whole methodology: grid fitting, half and double checks, three-class drum mapping, hit table, anchor binding, two-error reporting, offset diagnosis | Grid fit, drum classification, acceptance metrics, stem separation, cross-check, and the post-render re-test → `scenes.py --beats` and `check.py` | Remotion TS constants, inline `uv` / `python` commands, the `analysis/` directory |
+| `references/sound-design.md` (358) | Sound ordering, BGM-first skeleton, genre vocabulary, category table, relative pinning, duration rule, volume semantics, anti-machine-gun rules, riser cadence, the offset formula | `volumedetect` and `loudnorm` → `loudness.py`; extract and correlation → `audio.py` / `check.py`; durations → `check.py` | The asset inventory, Mixkit URLs, Remotion gain behavior |
+| `references/final-review.md` (117) | The whole review checklist and the frame-numbered report format | Beat-error re-test → `scenes.py --beats`; clip check → `loudness.py`; offset check → `check.py`; sharpness → `look.py` | Review inputs that do not ship |
+| `references/jianying-export.md` (184) | The editable-versus-baked layering principle only | none | `pyJianYingDraft`, the draft formats, the venv, CapCut specifics |
+| `references/workbench.md` (158) | The future-editable authoring discipline only | none | The workbench app |
+| `references/shots/**` (157 cards, 10 categories) | Card frontmatter shape (name, one-line, use, duration, energy, tags) and the body sections (intent, motion core, parameter table, pitfalls, reference implementation), plus the resolution protocol | none | Card bodies and the `demos/**` TSX are read from the user's checkout, never vendored |
+
+Cards carry no code. The runnable Remotion implementation lives in `demos/**`
+(221 TSX files), so `trove-shot-recipes` points at the user's checkout for card
+bodies and implementations rather than shipping either.
+
+## Inspect findings (Phase 1, 2026-10-07)
+
+`import:skill --inspect` against `5ddbf52` reported 172 selected files, 768,492
+bytes, zero hard rejects, and six flags. Each is resolved here.
+
+| Flag | Resolution |
+| --- | --- |
+| `SKILL.md:263` network use | The line is upstream's own gallery URL and `gallery/fetch-media.sh`. The adapted skills reference the public gallery API and `llms.txt` as documentation only and read card text from the user's checkout. No runtime fetch is authored. |
+| `references/guided-free-creation.md:138` network use | The same gallery fetch. Resolved the same way. |
+| `references/workbench.md:120` network use | The workbench document is dropped whole, so the flag is moot. |
+| `references/shots/typography/lead-word-zoom-assemble.md:34` `{{` | The characters are inside card prose about a Remotion `style={{…}}` snippet. Cards are never resolved by Trove's template engine, so nothing collides. `trove-shot-recipes` reads card text as data at runtime. |
+| `template/TEMPLATE.md:1` support directory | The template project is dropped. The template route points at the user's checkout. |
+| `.github/ISSUE_TEMPLATE/showcase.yml:1` `.github/` present | Excluded by default and dropped by the author-promotion decision. |
 
 ## Boundaries against existing skills
 
@@ -362,7 +407,7 @@ diff the adapted paths only (`SKILL.md`, the eight references,
 `sequences/`, `shots/`, `template/TEMPLATE.md`, `template/THEMES.md`), and
 record any change in "Upstream changes since the first review". Then read all
 adapted references, including `sequences/promo-energy-arc.md`, and a
-representative sample of cards across the eleven card categories. Record, per
+representative sample of cards across the ten card categories. Record, per
 document, which rules are asset-independent (port), which are library-bound
 (port as protocol), which become `trove-ffmpeg` calls (the step table), and
 which are upstream-infrastructure-only (drop). Gate: that mapping is written
@@ -479,11 +524,16 @@ not folded into CI.
    plugin. `trove-ffmpeg` ships first; these four skills are wave 2, after it.
    The plugin, its `plugin.yaml`, and its marketplace entry are created by the
    ffmpeg plan, so this plan only adds skill entries.
-2. **Library dependency.** Preference between (a) require a user-supplied
-   `video-shotcraft` checkout path, (b) offer a pinned-SHA clone the user
-   approves, or (c) support both with (a) preferred. The plan assumes (c).
-3. **End-to-end smoke run.** Whether to block the release on one real render
-   against the upstream template, which needs Node 22 and a Chromium download.
+2. **Library dependency.** *Resolved 2026-10-07 (#28):* support both, with a
+   user-supplied checkout path preferred. The skills establish where the library
+   is — a path the user gives, an installed `video-shotcraft` skill directory,
+   or a clone the user explicitly authorizes — and state plainly what is
+   unavailable without it. No silent clone.
+3. **End-to-end smoke run.** *Resolved 2026-10-07 (#28):* record the render as a
+   manual result, do not block the release on it. #34 runs one real render
+   against the Ink Press template when Node 22 and Chromium are available and
+   writes `dev-doc/media-verification/issue-34.md`. A failure is reported and
+   opened as a bug, but it does not gate the epic's final PR.
 4. **Beat analysis order.** **`scenes.py --beats` first, librosa through `uv`
    only with consent when the gate fails**, or librosa first (upstream's
    path). Phase 1b's measurement can overturn the default.
