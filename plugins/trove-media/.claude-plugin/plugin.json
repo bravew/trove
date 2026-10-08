@@ -9,6 +9,7 @@
     "./skills/trove-ffmpeg",
     "./skills/trove-beat-sync",
     "./skills/trove-shot-recipes",
-    "./skills/trove-video-review"
+    "./skills/trove-video-review",
+    "./skills/trove-product-video"
   ]
 }

@@ -19,6 +19,8 @@ skills:
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
   - path: ./skills/trove-video-review
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-product-video
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:
