@@ -63,6 +63,12 @@
     "trove-principle-laziness": [],
     "trove-principle-migrate-then-delete": [],
     "trove-principle-type-discipline": [],
+    "trove-product-video": [
+      "trove-beat-sync",
+      "trove-ffmpeg",
+      "trove-shot-recipes",
+      "trove-video-review"
+    ],
     "trove-pulse": [],
     "trove-pulse-cn": [],
     "trove-python": [],
@@ -142,6 +148,9 @@
     "trove-architect": [
       "trove-arena"
     ],
+    "trove-beat-sync": [
+      "trove-product-video"
+    ],
     "trove-brainstorm": [
       "trove-plan"
     ],
@@ -157,6 +166,7 @@
     ],
     "trove-ffmpeg": [
       "trove-beat-sync",
+      "trove-product-video",
       "trove-video-review"
     ],
     "trove-obsidian-cli": [
@@ -205,6 +215,7 @@
       "trove-ship"
     ],
     "trove-shot-recipes": [
+      "trove-product-video",
       "trove-video-review"
     ],
     "trove-spec": [
@@ -231,6 +242,9 @@
       "trove-perf",
       "trove-refactor",
       "trove-tdd"
+    ],
+    "trove-video-review": [
+      "trove-product-video"
     ],
     "trove-worktree": [
       "trove-arena"

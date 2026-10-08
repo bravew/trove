@@ -326,7 +326,8 @@
         "trove-ffmpeg",
         "trove-beat-sync",
         "trove-shot-recipes",
-        "trove-video-review"
+        "trove-video-review",
+        "trove-product-video"
       ]
     }
   ]

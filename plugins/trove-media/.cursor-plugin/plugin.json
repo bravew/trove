@@ -6,7 +6,8 @@
     "./.agents/skills/trove-ffmpeg",
     "./.agents/skills/trove-beat-sync",
     "./.agents/skills/trove-shot-recipes",
-    "./.agents/skills/trove-video-review"
+    "./.agents/skills/trove-video-review",
+    "./.agents/skills/trove-product-video"
   ],
   "logo": "assets/logo.svg"
 }
