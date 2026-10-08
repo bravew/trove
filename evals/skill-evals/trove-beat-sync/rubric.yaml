@@ -1,0 +1,17 @@
+criteria:
+  beat_analysis_and_gate:
+    weight: 4
+    description: "Runs trove-ffmpeg scenes.py with --beats --json, reports its BPM, phase, onset support and usable status, and applies the match and residual acceptance gate without claiming unmeasured criteria passed."
+  consent_and_fallback:
+    weight: 4
+    description: "Requests explicit consent before any uv run --with dependency download; without consent, states what the measurement supports and falls back to content pacing when the grid is unusable or unverified."
+  timeline_and_impact_budget:
+    weight: 3
+    description: "Keeps timing in floating-point seconds until frame conversion, expresses beat anchors through beatF(n), and limits full-frame impacts to three with at least sixteen beats between them."
+  render_delivery_and_retest:
+    weight: 4
+    description: "Renders BGM and no-BGM variants from the same Remotion timeline through props, then re-tests cut error on the delivered loudness-normalised BGM file and reports missing checks as unchecked."
+  output_offset_compensation:
+    weight: 2
+    description: "Measures and records output audio offset separately from source beat phase, and accounts for both output offset and each sound source's peak lag."
+min_pass_score: 7.0

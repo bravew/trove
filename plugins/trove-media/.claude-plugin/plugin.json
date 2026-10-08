@@ -6,6 +6,7 @@
     "name": "Trove Contributors"
   },
   "skills": [
-    "./skills/trove-ffmpeg"
+    "./skills/trove-ffmpeg",
+    "./skills/trove-beat-sync"
   ]
 }

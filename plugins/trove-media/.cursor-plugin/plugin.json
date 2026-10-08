@@ -3,7 +3,8 @@
   "description": "Media skills: video and audio editing, transcoding, delivery checks, and production workflows",
   "version": "2026.10.7",
   "skills": [
-    "./.agents/skills/trove-ffmpeg"
+    "./.agents/skills/trove-ffmpeg",
+    "./.agents/skills/trove-beat-sync"
   ],
   "logo": "assets/logo.svg"
 }

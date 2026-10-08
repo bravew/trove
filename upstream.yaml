@@ -419,6 +419,11 @@ skills:
     source_id: trove-ffmpeg
     upstream_path: .
     evidence_sha: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
+  - local_path: skills/media/trove-beat-sync
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [references/music-beat-sync.md, references/sound-design.md]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
 
 external_records:
   - local_path: curated/sentry.json
