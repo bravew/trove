@@ -14,6 +14,7 @@ import {
 import {
   ManifestError,
   parseUpstreamManifest,
+  loadUpstreamManifest,
   type FullSha,
 } from "../scripts/lib/upstream-manifest";
 
@@ -202,6 +203,59 @@ function createReviewFixture(): ReviewFixture {
 }
 
 describe("adapted source review", () => {
+  test("a workbench-only shotcraft commit leaves all four adaptations current", () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const selection = loadUpstreamManifest(root).skills.filter(
+      (skill) => skill.origin === "adapted" && skill.sourceId === "video-shotcraft",
+    );
+    expect(selection).toHaveLength(4);
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-shotcraft-review-"));
+    try {
+      const upstream = path.join(temporary, "upstream");
+      const local = path.join(temporary, "root");
+      fs.mkdirSync(upstream);
+      fs.mkdirSync(local);
+      runGit(upstream, ["init", "-q", "-b", "main"]);
+      fs.writeFileSync(path.join(upstream, "LICENSE"), "Apache License\nVersion 2.0\n");
+      for (const skill of selection) {
+        if (skill.origin !== "adapted") throw new Error("expected adapted selection");
+        for (const relative of skill.upstreamPaths) {
+          const file = relative.endsWith(".md") ? relative : `${relative}/fixture.md`;
+          const absolute = path.join(upstream, file);
+          fs.mkdirSync(path.dirname(absolute), { recursive: true });
+          fs.writeFileSync(absolute, "reviewed methodology\n");
+        }
+      }
+      runGit(upstream, ["add", "."]);
+      runGit(upstream, ["commit", "-q", "-m", "reviewed source"]);
+      const evidenceSha = runGit(upstream, ["rev-parse", "HEAD"]) as FullSha;
+      commitFile(upstream, "workbench/ui.tsx", "export const view = 'updated';\n", "workbench only", "2026-08-29T00:00:00Z");
+      const raw = adaptedManifest(pathToFileURL(upstream).href, evidenceSha, { upstream_path: "references" });
+      (raw.sources as Record<string, unknown>[])[0].id = "video-shotcraft";
+      (raw.sources as Record<string, unknown>[])[0].license = { expression: "Apache-2.0", evidence: "LICENSE" };
+      raw.skills = selection.map((skill) => {
+        if (skill.origin !== "adapted") throw new Error("expected adapted selection");
+        return {
+          local_path: skill.localPath,
+          origin: "adapted",
+          source_id: "video-shotcraft",
+          upstream_paths: skill.upstreamPaths,
+          evidence_sha: evidenceSha,
+        };
+      });
+      const manifest = parseUpstreamManifest(raw, { allowFileRepositories: true });
+      expect(checkOnline(local, manifest).reviews).toEqual([]);
+      // The same selection must detect actual methodology drift.
+      const watched = selection[0];
+      if (watched.origin !== "adapted") throw new Error("expected adapted selection");
+      const relative = watched.upstreamPaths[0];
+      const file = relative.endsWith(".md") ? relative : `${relative}/fixture.md`;
+      commitFile(upstream, file, "changed methodology\n", "methodology changed", "2026-08-30T00:00:00Z");
+      expect(checkOnline(local, manifest).reviews.some((review) => review.skill === watched.localPath)).toBe(true);
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
+  });
   test("a commit touching only an unlisted directory is not review due", () => {
     const fixture = createReviewFixture();
     try {
