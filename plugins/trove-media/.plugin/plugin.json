@@ -19,6 +19,7 @@
   "skills": [
     "./.copilot/skills/trove-ffmpeg",
     "./.copilot/skills/trove-beat-sync",
-    "./.copilot/skills/trove-shot-recipes"
+    "./.copilot/skills/trove-shot-recipes",
+    "./.copilot/skills/trove-video-review"
   ]
 }

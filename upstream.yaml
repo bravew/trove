@@ -430,6 +430,11 @@ skills:
     source_id: video-shotcraft
     upstream_paths: [references/aesthetic-rules.md, references/shots]
     evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  - local_path: skills/media/trove-video-review
+    origin: adapted
+    source_id: video-shotcraft
+    upstream_paths: [references/final-review.md, references/aesthetic-rules.md]
+    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
 
 external_records:
   - local_path: curated/sentry.json
