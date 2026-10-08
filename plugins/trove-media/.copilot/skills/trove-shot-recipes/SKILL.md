@@ -24,7 +24,7 @@ complete promo pipeline or replace Remotion documentation.
    `source` path to open the card Markdown from that same checkout. When using
    the public index, resolve `source` against the public gallery source route.
    Do not choose a card from a similar name, summary, or style label.
-3. Read the entire card, including its “参考实现” section. Open the exact demo
+3. Read the entire card, including its demo-reference section. Open the exact demo
    TSX path named there in the same checkout. Do not substitute a similarly
    named demo or write motion based only on the card name or index summary.
 4. Before proposing changes, report the resolved card name and both source

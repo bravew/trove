@@ -11,7 +11,7 @@ matching entry's `source` gives the card path, such as
 `references/shots/typography/lead-word-zoom-assemble.md`. Open that file from
 the same checkout.
 
-Read the full card. Its “参考实现” section identifies the demo path, usually a
+Read the full card. Its demo-reference section identifies the demo path, usually a
 directory under `demos/` and a TSX filename. Open that exact TSX file from the
 same checkout. Read it as source text. Do not run it or install its
  dependencies.
