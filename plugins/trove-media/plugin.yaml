@@ -15,6 +15,8 @@ skills:
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
   - path: ./skills/trove-beat-sync
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-shot-recipes
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:

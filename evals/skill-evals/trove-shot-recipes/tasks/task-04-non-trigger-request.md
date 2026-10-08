@@ -1,0 +1,1 @@
+My product video looks a little soft after export. What should I check about its frame size, scaling, and sharpening? I am not asking for a shot card or motion recipe.
