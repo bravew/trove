@@ -97,6 +97,7 @@
       "trove-security-review",
       "trove-unslop"
     ],
+    "trove-shot-recipes": [],
     "trove-show-work": [],
     "trove-spec": [
       "trove-unslop",
