@@ -342,6 +342,16 @@ sources:
           - references/LICENSE.md
           - SKILL.md.tmpl
         status: active
+  - id: video-shotcraft
+    repository: https://github.com/Vincentwei1021/video-shotcraft.git
+    # Curated adaptation with pinned provenance, like cursor-pstack and
+    # obsidian-skills. Track `main` so the weekly check reports review drift for
+    # the adapted rows; each row pins the reviewed revision in `evidence_sha`.
+    ref: main
+    license:
+      expression: Apache-2.0
+      evidence: LICENSE
+    artifacts: []
 
 skills:
   - { local_path: skills/coding/trove-architect, origin: original }

@@ -97,6 +97,35 @@ the selection, behavioral changes, and official references used for corrections.
 Defuddle and Obsidian are optional external tools and are not vendored.
 The upstream marketplace manifests and installation instructions are not shipped.
 
+## video-shotcraft
+
+Four skills in `trove-media` are adapted from
+[Vincentwei1021/video-shotcraft](https://github.com/Vincentwei1021/video-shotcraft)
+at `5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab`, under the Apache-2.0 license,
+Copyright 2026 Wei Yihao. Each adapted skill carries the full Apache-2.0 notice
+plus a "changes made" statement in `references/LICENSE.md`, which is copied into
+host bundles. Nothing is relicensed: Trove's MIT license covers Trove's own
+authored text, and the Apache-2.0 notice governs the adapted material.
+
+Trove ships the methodology and the protocol for using the upstream library, not
+a copy of it. `trove-product-video`, `trove-shot-recipes`, `trove-beat-sync`, and
+`trove-video-review` are written in English from the Chinese source and call
+`trove-ffmpeg` scripts instead of running raw `ffmpeg`. The source entry in
+`upstream.yaml` is a curated adaptation with `artifacts: []`; each skill row pins
+the reviewed revision in `evidence_sha`.
+
+Deliberately excluded: the `assets/` audio and texture library, the `template/`
+project, the `demos/` tree, the `workbench/` app, gallery media, the CapCut and
+剪映 export path, and the upstream author-promotion step. Cards and their
+reference implementations are read from the user's own checkout when one is
+present, never vendored.
+
+The upstream `references/shots/ATTRIBUTION.md` records that card techniques were
+studied from published promos and reimplemented from scratch. Trove does not
+restate that table and implies no endorsement by any rightsholder. The
+[mapping plan](dev-doc/2026-09-video-shotcraft-media-plan.md) records the
+selection, the per-document adaptation, and the corrections.
+
 ## Curated plugin records
 
 The Sentry and Figma curated records point to external repositories at the full
