@@ -116,6 +116,14 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.10.8] - 2026-10-08
+
+### What's Changed
+* feat(media): trove-media plugin with trove-ffmpeg by @bravew in https://github.com/bravew/trove/pull/55
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.10.7...v2026.10.8
+
 ## [2026.10.7] - 2026-10-07
 
 ### What's Changed

@@ -1,7 +1,7 @@
 {
   "name": "trove-doc",
   "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "skills": [
     "./.agents/skills/trove-obsidian-markdown",
     "./.agents/skills/trove-obsidian-bases",
