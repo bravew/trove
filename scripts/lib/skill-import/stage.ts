@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import YAML from "yaml";
-import { parseUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
+import { fullShaAt, parseUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
 import {
+  commitTimestamp,
   digestTree,
   lockEntries,
   readGitSelection,
@@ -177,7 +179,9 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
   const sourceId = request.sourceId ?? request.id;
   const source = request.report.source;
   const upstreamPath = request.upstreamPath ?? ".";
-  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  // Stamp the upstream commit date, as `sync:upstream --update` does, so the
+  // lock depends only on the pinned revision and re-staging is byte-stable.
+  const timestamp = commitTimestamp(source.gitDirectory, fullShaAt(source.resolvedSha, "resolvedSha"));
   const transforms = [
     ...(request.renameSkill ? [{ kind: "rename-skill", ...request.renameSkill }] : []),
     ...(request.preambleMarker ? [{ kind: "inject-preamble", marker: request.preambleMarker }] : []),
@@ -264,10 +268,16 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
         }));
       }
     }
+    const declared = skillDocument.get("license");
     if (request.licenseExpression === undefined) {
-      const expression = skillDocument.get("license");
-      if (typeof expression !== "string" || expression.length === 0) throw new Error("licenseExpression is required when upstream frontmatter has no license");
-      document.setIn(["sources", sourceIndex, "license", "expression"], expression);
+      if (typeof declared !== "string" || declared.length === 0) throw new Error("licenseExpression is required when upstream frontmatter has no license");
+      document.setIn(["sources", sourceIndex, "license", "expression"], declared);
+    }
+    // Without a frontmatter license the sync has nothing to verify against, so
+    // pin the evidence file and let it verify that blob at every commit.
+    if (typeof declared !== "string" || declared.length === 0) {
+      const digest = `sha256:${createHash("sha256").update(license).digest("hex")}`;
+      document.setIn(["sources", sourceIndex, "license", "evidence_digest"], digest);
     }
     manifest = parseUpstreamManifest(document.toJS());
     artifact = manifest.sources[sourceIndex].artifacts[0];
@@ -292,7 +302,9 @@ export async function stageImport(request: StageRequest): Promise<StageResult> {
       if (digestTree(walkLocal(directory)) !== digestTree(entries)) {
         throw new Error("staged files do not match the candidate tree; manifest was not written");
       }
-      fs.writeFileSync(manifestPath, document.toString());
+      // `sync:upstream` writes the manifest with `lineWidth: 0`. Matching it
+      // here keeps staging from reflowing rows it never meant to touch.
+      fs.writeFileSync(manifestPath, document.toString({ lineWidth: 0 }));
     } catch (error) {
       fs.rmSync(directory, { recursive: true, force: true });
       throw error;

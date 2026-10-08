@@ -387,7 +387,31 @@ function changedPaths(before: readonly TreeEntry[], after: readonly TreeEntry[])
     .sort();
 }
 
-function licenseExpression(entries: readonly TreeEntry[]): string | null {
+/**
+ * The license a commit declares. A source that pins `evidence_digest` keeps its
+ * license in a file outside the selected tree, so that file is read at the
+ * commit and must match the pin byte for byte. Otherwise the license is the
+ * `license:` field of the selected SKILL.md frontmatter.
+ */
+function licenseExpression(
+  source: UpstreamSource,
+  gitDirectory: string,
+  revision: FullSha,
+  entries: readonly TreeEntry[],
+): string | null {
+  const pinned = source.license.evidenceDigest;
+  if (pinned === undefined) return frontmatterLicense(entries);
+  const blob = spawnSync(
+    "git",
+    ["--git-dir", gitDirectory, "cat-file", "blob", `${revision}:${source.license.evidence}`],
+    { encoding: null, env: noninteractiveGitEnv() },
+  );
+  if (blob.status !== 0) return null;
+  const digest = `sha256:${createHash("sha256").update(blob.stdout).digest("hex")}`;
+  return digest === pinned ? source.license.expression : `${source.license.evidence} changed (${digest})`;
+}
+
+function frontmatterLicense(entries: readonly TreeEntry[]): string | null {
   const skill = entries.find((entry) => entry.path === "SKILL.md");
   if (!skill) return null;
   const content = skill.bytes.toString("utf8");
@@ -599,7 +623,7 @@ function checkOnlineArtifact(
     if (digestTree(base) !== artifact.baseTreeDigest) {
       throw new SyncError(`${artifact.id}: base tree digest does not match manifest`);
     }
-    const actualLicense = licenseExpression(base);
+    const actualLicense = licenseExpression(source, prepared.gitDirectory, artifact.baseSha, base);
     if (actualLicense !== source.license.expression) {
       return {
         ...offline,
@@ -632,7 +656,7 @@ function checkOnlineArtifact(
         verification: [...offline.verification, `candidate-validation:${(error as Error).message}`],
       };
     }
-    const candidateLicense = licenseExpression(candidate);
+    const candidateLicense = licenseExpression(source, prepared.gitDirectory, prepared.candidate, candidate);
     if (candidateLicense !== source.license.expression) {
       return {
         ...offline,
@@ -701,7 +725,7 @@ interface CandidateResult {
   candidateDate?: string;
 }
 
-function commitTimestamp(gitDirectory: string, revision: FullSha): string {
+export function commitTimestamp(gitDirectory: string, revision: FullSha): string {
   const raw = runText("git", ["--git-dir", gitDirectory, "show", "-s", "--format=%cI", revision]);
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.valueOf())) throw new SyncError(`invalid commit timestamp '${raw}'`);
@@ -745,7 +769,7 @@ function candidateResult(
       };
     }
     const differences = changedPaths(base, candidate);
-    const actualLicense = licenseExpression(candidate);
+    const actualLicense = licenseExpression(source, remote.gitDirectory, remote.candidate, candidate);
     if (actualLicense !== source.license.expression) {
       return {
         report: {
@@ -826,8 +850,12 @@ function candidateResult(
   }
 }
 
+type TrackedFile =
+  | { kind: "file"; bytes: Buffer; mode: number }
+  | { kind: "symlink"; target: string };
+
 interface TrackedSnapshot {
-  files: ReadonlyMap<string, { bytes: Buffer; mode: number }>;
+  files: ReadonlyMap<string, TrackedFile>;
 }
 
 function requireCleanWorktree(root: string): void {
@@ -836,12 +864,18 @@ function requireCleanWorktree(root: string): void {
 }
 
 function snapshotTrackedFiles(root: string): TrackedSnapshot {
-  const files = new Map<string, { bytes: Buffer; mode: number }>();
+  const files = new Map<string, TrackedFile>();
   for (const repositoryPath of run("git", ["ls-files", "-z"], root).toString("utf8").split("\0").filter(Boolean)) {
     const absolute = safeAbsolute(root, repositoryPath);
     const stat = fs.lstatSync(absolute);
-    if (!stat.isFile()) throw new SyncError(`tracked path '${repositoryPath}' is not a regular file`);
-    files.set(repositoryPath, { bytes: fs.readFileSync(absolute), mode: stat.mode & 0o777 });
+    if (stat.isSymbolicLink()) {
+      // Snapshot the link itself, including dangling links, without reading its target.
+      files.set(repositoryPath, { kind: "symlink", target: fs.readlinkSync(absolute) });
+    } else if (stat.isFile()) {
+      files.set(repositoryPath, { kind: "file", bytes: fs.readFileSync(absolute), mode: stat.mode & 0o777 });
+    } else {
+      throw new SyncError(`tracked path '${repositoryPath}' is not a regular file or symlink`);
+    }
   }
   return { files };
 }
@@ -858,7 +892,14 @@ function restoreSnapshot(root: string, snapshot: TrackedSnapshot): void {
   for (const [repositoryPath, file] of snapshot.files) {
     const absolute = safeAbsolute(root, repositoryPath);
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
-    fs.writeFileSync(absolute, file.bytes, { mode: file.mode });
+    // Remove a replacement link before writing so rollback cannot follow it.
+    fs.rmSync(absolute, { recursive: true, force: true });
+    if (file.kind === "symlink") {
+      fs.symlinkSync(file.target, absolute);
+    } else {
+      fs.writeFileSync(absolute, file.bytes, { mode: file.mode });
+      fs.chmodSync(absolute, file.mode);
+    }
   }
 }
 
@@ -894,9 +935,9 @@ function updateManifestLock(
 
 function defaultVerification(root: string): readonly string[] {
   run("bun", ["run", "build"], root);
-  run("bun", ["test"], root);
+  run("bun", ["test", "./tests"], root);
   run("bun", ["run", "validate"], root);
-  return ["bun run build", "bun test", "bun run validate"];
+  return ["bun run build", "bun test ./tests", "bun run validate"];
 }
 
 function carryUnownedFiles(
@@ -935,10 +976,12 @@ function installCandidate(
   if (!candidateSha) throw new SyncError(`${artifact.id}: candidate SHA is missing`);
   const snapshot = snapshotTrackedFiles(root);
   const localDirectory = safeAbsolute(root, artifact.localPath);
-  const parent = path.dirname(localDirectory);
-  const stage = path.join(parent, `.trove-sync-stage-${process.pid}-${artifact.id}`);
-  const backup = path.join(parent, `.trove-sync-backup-${process.pid}-${artifact.id}`);
-  if (fs.existsSync(stage) || fs.existsSync(backup)) throw new SyncError(`${artifact.id}: stale update staging path exists`);
+  // Generators and validators discover every directory under skills/. Keep
+  // temporary copies in Git's private directory, including in linked worktrees.
+  const gitDirectory = runText("git", ["rev-parse", "--absolute-git-dir"], root);
+  const temporary = fs.mkdtempSync(path.join(gitDirectory, "trove-sync-"));
+  const stage = path.join(temporary, "stage");
+  const backup = path.join(temporary, "backup");
   try {
     fs.mkdirSync(stage, { recursive: true });
     writeEntries(stage, lockEntries(result.patched, artifact));
@@ -963,7 +1006,6 @@ function installCandidate(
       digestTree(lockEntries(result.patched, artifact)),
     );
     const verification = (options.verify ?? defaultVerification)(root);
-    fs.rmSync(backup, { recursive: true, force: true });
     return {
       ...result.report,
       conclusion: "updated",
@@ -971,13 +1013,13 @@ function installCandidate(
     };
   } catch (error) {
     restoreSnapshot(root, snapshot);
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(backup, { recursive: true, force: true });
     return {
       ...result.report,
       conclusion: "validation-failed",
       verification: [...result.report.verification, `validation-failed:${(error as Error).message}`],
     };
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
@@ -1065,6 +1107,19 @@ export function renderMarkdown(report: SyncReport): string {
         `| ${review.skill} | ${review.source} | review due | ${review.range} | ${review.changed_paths.join("<br>") || "none"} |`,
       );
     }
+  }
+  // The workflow posts this markdown as the update PR body, so a report that
+  // actually moved bytes carries the review checklist the sync plan §3.4
+  // requires. A check-mode summary stays uncluttered.
+  if (report.artifacts.some((artifact) => artifact.conclusion === "updated")) {
+    lines.push("", "## Review checklist", "");
+    lines.push(
+      "1. Are there new or removed scripts? Does the front still describe the skill truthfully?",
+      "2. Did either transform's match count change?",
+      "3. Does the diff add any import outside the standard library, any network use, or any `subprocess` call with `shell=True`?",
+      "4. Any new file over the policy limits?",
+      "5. Do the Trove tests in `tests/` pass?",
+    );
   }
   return `${lines.join("\n")}\n`;
 }

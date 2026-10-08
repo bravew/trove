@@ -36,8 +36,30 @@ release process.
   plugin shipping `v2026.7.4`. Validation now rejects a `version:` in
   `plugin.yaml`.
 
+### Fixed
+
+- The `trove-ffmpeg` source row tracked the import SHA instead of `main`, so the
+  weekly check compared a stale head and reported `license-changed`. It now
+  tracks `main` and pins `license.evidence_digest`, and its `upstream-version`
+  and `THIRD_PARTY.md` entry read 2.5.1.
+
 ### Added
 
+- `trove-media` plugin with `trove-ffmpeg`, a vendored and byte-synced copy of
+  `kajisho5/ffmpeg-skill` (MIT, tracked at 2.5.1). It cuts, joins, reframes,
+  captions, normalizes loudness, exports for YouTube, Reels, TikTok, and X, and
+  runs delivery checks across 42 tools. Trove adds a thin front and relocates
+  the upstream spec to `references/runtime-spec.md`. Two recorded transforms
+  keep `render.py` and `_contract.py` working inside the bundle. It needs
+  `ffmpeg` and `ffprobe` on `PATH`, and `python3` 3.9 or later. A smoke run on
+  a real clip is recorded in `dev-doc/media-verification/issue-26.md`.
+- `/import-skill` and `bun run import:skill` import an external skill after an
+  inspected review. The importer reports the license, size, hard rejects, and
+  flags, then stages a vendored or adapted skill with its `upstream.yaml`
+  provenance. Source content is treated as data. See "Importing an external
+  skill" in `CONTRIBUTING.md`.
+- Update reports that apply changes end with a review checklist, so the
+  workflow's PR body carries it.
 - Agent Skills spec conformance is a blocking gate. `bun run validate` checks
   every strict artifact against `scripts/lib/agent-skills-spec.ts`, written
   in-repo from the published specification and pinned to a recorded

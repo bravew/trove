@@ -15,6 +15,32 @@ Trove renames the skills, injects marketplace guidance, maps upstream `rules/`
 files to `references/`, and maintains local changes as patch sets. See each
 artifact entry in `upstream.yaml` for the selected files and exact revision.
 
+## ffmpeg-skill
+
+`trove-ffmpeg` in `trove-media` is vendored from
+[kajisho5/ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) at
+`008333aaf6722083392eb6bd8bd67b59884a2a26` (2.5.1), under the MIT license.
+
+**Trove redistributes upstream code, not only adapted prose.** The selection
+carries upstream's `scripts/` Python engine (42 tools plus shared modules),
+`references/`, and `templates/`, byte-for-byte apart from two recorded
+`replace-literal` transforms. `references/LICENSE.md` carries the upstream MIT
+notice, and `THIRD_PARTY.md` and `upstream.yaml` record the pinned revision, so
+the notice obligation travels with every host bundle.
+
+Upstream's own `SKILL.md` exceeds the Trove body budget, so it is byte-synced to
+`references/runtime-spec.md` and a Trove-authored `SKILL.md.tmpl` front (kept
+outside the sync lock) points at it. Both transforms exist because the vendored
+tree relocates `templates/` into `scripts/` and moves the spec under
+`references/`; each transform fails closed if upstream renames the line it
+matches.
+
+The following upstream directories are deliberately not vendored: `mcp` (a
+contract-derived MCP server, deferred with a path rewrite in plan §5.5), `docs`,
+`assets`, `evals`, `tests`, `demos`, `examples`, `bin`, `.claude`, and `.github`.
+They are omissions by decision, and `upstream.yaml`'s `not_vendored` list records
+them.
+
 ## pstack principles
 
 Six Trove principle skills are adapted from Lauren Tan's pstack principle set,

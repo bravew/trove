@@ -286,6 +286,62 @@ sources:
     # No automatic byte sync: workflows and focused references are maintained
     # locally. See dev-doc/2026-09-obsidian-skills-extraction.md.
     artifacts: []
+  # Upstream ships several releases a day, but release-bump commits touch only
+  # package.json and CHANGELOG.md, neither of which is selected, so the selected
+  # tree digest does not move and the drift report is a no-op. Real drift is
+  # accepted at most weekly, in its own sync PR. This source is not chased
+  # commit by commit. See dev-doc/2026-10-trove-media-ffmpeg-plan.md §3.4.
+  - id: trove-ffmpeg
+    repository: https://github.com/kajisho5/ffmpeg-skill.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: LICENSE
+      evidence_digest: sha256:7522b29e4d6e90f2a8fab15f07d224b1064c70692a872be9996ac1a88cf474e9
+    artifacts:
+      - id: trove-ffmpeg
+        upstream_path: .
+        local_path: skills/media/trove-ffmpeg
+        base_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
+        base_tree_digest: sha256:82c55caf5d2c0ab9bf74c65bbace37844a77c30992d15d1845ac9d06a14e8c12
+        local_tree_digest: sha256:c11b59afb0185fdd7c405a29c2e9a227e9c7ec5f1af4a443ce525be05dbe88ea
+        patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        checked_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
+        checked_at: 2026-10-05T03:21:12Z
+        candidate_sha: null
+        imported_at: 2026-10-05T03:21:12Z
+        include:
+          - SKILL.md
+          - references/**
+          - scripts/**
+          - templates/**
+        exclude:
+          - LICENSE
+          - .claude/**
+          - .github/**
+          - hooks/**
+          - mcp/**
+          - AGENTS.md
+          - CLAUDE.md
+        path_map:
+          SKILL.md: references/runtime-spec.md
+          templates/: scripts/templates/
+        transforms:
+          - kind: replace-literal
+            path: scripts/render.py
+            from: HERE.parent / "templates"
+            to: HERE / "templates"
+            minimum_occurrences: 1
+          - kind: replace-literal
+            path: scripts/_contract.py
+            from: ROOT / "SKILL.md"
+            to: ROOT / "references" / "runtime-spec.md"
+            minimum_occurrences: 2
+        patches: []
+        local_only:
+          - references/LICENSE.md
+          - SKILL.md.tmpl
+        status: active
 
 skills:
   - { local_path: skills/coding/trove-architect, origin: original }
@@ -348,6 +404,11 @@ skills:
   - { local_path: skills/workflow/trove-worktree, origin: original }
   - { local_path: skills/workflow/trove-write-skill, origin: original }
   - { local_path: skills/workflow/using-trove, origin: original }
+  - local_path: skills/media/trove-ffmpeg
+    origin: adapted
+    source_id: trove-ffmpeg
+    upstream_path: .
+    evidence_sha: 9ada0f6dca03f1a5f1aa62ea237759c3f8e15321
 
 external_records:
   - local_path: curated/sentry.json
@@ -362,6 +423,19 @@ external_records:
     note: Hosted MCP endpoint only; there is no repository pin.
 
 not_vendored:
+  # Selected by allowlist, so these are omissions by decision, not accident.
+  # `agent-tooling` is upstream's own `.claude/` and AGENTS.md surface, and
+  # `mcp` needs a path rewrite before it can ship (plan §5.5).
+  trove-ffmpeg:
+    - agent-tooling
+    - assets
+    - bin
+    - demos
+    - docs
+    - evals
+    - examples
+    - mcp
+    - tests
   awesome-copilot:
     # Reviewed and declined for the pilot. github-actions-hardening declares no
     # `license:` in its SKILL.md frontmatter at the pinned revision, and this

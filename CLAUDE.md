@@ -27,6 +27,13 @@ bun test                      # Run tests
 bun run scaffold:plugin -- --name trove-testing --role dev
 bun run scaffold:skill -- --plugin trove-dev --name trove-debug
 
+# Importing external skills (see CONTRIBUTING.md and docs/upstream-sync.md)
+bun run import:skill -- --inspect <git-url> --ref <sha>   # Report only: license, selection, flags
+bun run import:skill -- --stage <git-url> --id <name> --plugin <plugin> --category <dir> --mode vendored|adapted
+/import-skill <git-url> --ref <sha> --id <name> --plugin <plugin> --category <dir>   # Guided, in Claude Code
+bun run sync:upstream -- --check --offline   # Verify locks against local bytes, no network
+bun run sync:upstream -- --check             # Compare locks with upstream heads
+
 # Evals
 bun run eval:gate             # Quality gate (CI blocker on main)
 bun run eval:changed          # Eval only changed skills
@@ -63,8 +70,8 @@ Each stage must run in order. `bun run build` runs all three sequentially.
 
 ### Host Adapter System (`hosts/`)
 
-Six host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `agents.ts`, `opencode.ts`,
-`gemini.ts`) each define:
+Seven host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `copilot.ts`,
+`agents.ts`, `opencode.ts`, `gemini.ts`) each define:
 - Where outputs land (`pluginSubdir`, `marketplaceSubdir`)
 - Supported features (hooks, agents, MCP, rules, marketplace — varies per platform)
 - Which projection profile a `skill` artifact uses (`skillProjection`)
