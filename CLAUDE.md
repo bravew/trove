@@ -70,8 +70,8 @@ Each stage must run in order. `bun run build` runs all three sequentially.
 
 ### Host Adapter System (`hosts/`)
 
-Six host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `agents.ts`, `opencode.ts`,
-`gemini.ts`) each define:
+Seven host configs (`claude.ts`, `cursor.ts`, `codex.ts`, `copilot.ts`,
+`agents.ts`, `opencode.ts`, `gemini.ts`) each define:
 - Where outputs land (`pluginSubdir`, `marketplaceSubdir`)
 - Supported features (hooks, agents, MCP, rules, marketplace — varies per platform)
 - Which projection profile a `skill` artifact uses (`skillProjection`)
