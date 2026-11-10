@@ -8,6 +8,7 @@ import { findSecretMatches } from "../secret-scan";
 import { validateSkillBudget } from "../skill-budget";
 import { loadUpstreamManifest, repositoryPathAt } from "../upstream-manifest";
 import { matchesPattern } from "../upstream-sync";
+import { SKILL_SUPPORT_DIRS, SKILL_SUPPORT_DIRS_TEXT } from "../skill-support-dirs";
 import type { FetchResult, Finding, ProposedTransform, Selection } from "./types";
 import type { ReviewedUnicode, UnicodeException } from "./unicode-review";
 
@@ -240,7 +241,7 @@ function flagLines(text: string, pattern: RegExp): number[] {
 function supportDirectory(filePath: string): string | undefined {
   const [top] = filePath.split("/");
   if (!top || top === filePath) return undefined;
-  if (top === "references" || top === "scripts") return undefined;
+  if ((SKILL_SUPPORT_DIRS as readonly string[]).includes(top)) return undefined;
   if (isLicenseFile(filePath) || top === "SKILL.md" || top === "SKILL.md.tmpl") return undefined;
   return top;
 }
@@ -350,7 +351,7 @@ function scanFiles(
     const support = supportDirectory(relativePath);
     if (support && !reported.has(`support:${support}`)) {
       reported.add(`support:${support}`);
-      flag(file.path, 1, `support directory '${support}/' is not references/ or scripts/`);
+      flag(file.path, 1, `support directory '${support}/' is not ${SKILL_SUPPORT_DIRS_TEXT}`);
     }
 
     for (const suspicious of SUSPICIOUS_PATHS) {

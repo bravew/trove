@@ -18,6 +18,7 @@
     "./.copilot/skills/trove-design-review",
     "./.copilot/skills/trove-a11y",
     "./.copilot/skills/trove-component-spec",
-    "./.copilot/skills/trove-visual-parity"
+    "./.copilot/skills/trove-visual-parity",
+    "./.copilot/skills/trove-diagram-design"
   ]
 }

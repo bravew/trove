@@ -258,6 +258,19 @@ test("emit: punctuation and glob leaders are quoted, plain names are not", () =>
   expect(yaml).toMatch(/^  source: vercel-labs\/agent-skills$/m);
 });
 
+test("emit: a numeric-looking string stays a string", async () => {
+  const YAML = (await import("yaml")).default;
+  const fields = {
+    name: "trove-demo",
+    description: "Demo.",
+    metadata: { "upstream-version": "2.6", build: "42", hex: "0x1F", release: "2.5.1" },
+  };
+  const text = emitFrontmatter(fields);
+  expect(text).toMatch(/^  upstream-version: "2\.6"$/m);
+  expect(text).toMatch(/^  release: 2\.5\.1$/m);
+  expect(YAML.parse(text.slice(4, text.lastIndexOf("\n---")))).toEqual(fields);
+});
+
 test("emit: output round-trips through a YAML parser", async () => {
   const YAML = (await import("yaml")).default;
   const fields = projectFrontmatter(authoring, target("claude", "claude"));

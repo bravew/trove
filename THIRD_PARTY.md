@@ -41,6 +41,30 @@ contract-derived MCP server, deferred with a path rewrite in plan §5.5), `docs`
 They are omissions by decision, and `upstream.yaml`'s `not_vendored` list records
 them.
 
+## diagram-design
+
+`trove-diagram-design` in `trove-design` is vendored from
+[cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)
+at `f2496acbde9f45ccb55c24d4f75210c8a1355df8` (2.6), under the MIT license.
+
+**Trove redistributes upstream code, not only adapted prose.** The selection
+carries upstream's `references/`, its eight Python `scripts/`
+(self-check, geometry verifier, SVG and PNG export, and the draw.io, Mermaid,
+Excalidraw, and PlantUML extractors), and from `assets/` the five HTML templates
+and `icons.html`, byte-for-byte with no transforms or patches.
+`references/LICENSE.md` carries the upstream MIT notice, so the notice
+obligation travels with every host bundle.
+
+Upstream's own `SKILL.md` exceeds the Trove body budget, so it is byte-synced to
+`references/runtime-spec.md` and a Trove-authored `SKILL.md.tmpl` front (kept
+outside the sync lock) points at it.
+
+Deliberately not vendored: the example gallery (`assets/example-*.html` and
+`assets/index.html`, about 4.4 MB), which exceeds the manifest's artifact size
+limit. `upstream.yaml`'s `not_vendored` list records the omission. PNG export
+uses Playwright, an optional external tool that Trove neither ships nor
+installs.
+
 ## pstack principles
 
 Six Trove principle skills are adapted from Lauren Tan's pstack principle set,

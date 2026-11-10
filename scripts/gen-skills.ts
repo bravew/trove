@@ -23,6 +23,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { ALL_HOSTS, getHost } from "../hosts/index";
+import { SKILL_SUPPORT_DIRS } from "./lib/skill-support-dirs";
 import type { HostConfig, ProjectionKind } from "../hosts/types";
 import {
   ROOT,
@@ -60,7 +61,7 @@ interface SkillArtifact {
   content: string;
 }
 
-const SUPPORT_DIRS = ["references", "scripts"] as const;
+const SUPPORT_DIRS = SKILL_SUPPORT_DIRS;
 
 /**
  * Emit a host-native `SKILL.md`.

@@ -352,6 +352,55 @@ sources:
       expression: Apache-2.0
       evidence: LICENSE
     artifacts: []
+  # Upstream ships several release-bump commits a day that touch only plugin
+  # manifests, none of them selected, so most drift reports are no-ops. Like
+  # trove-ffmpeg, real drift is accepted at most weekly in its own sync PR.
+  # The ~4.4 MB example gallery (assets/example-*.html, assets/index.html) is
+  # left out: it exceeds maximum_artifact_bytes and the skill only needs the
+  # templates and icon sheet. See not_vendored.
+  - id: diagram-design
+    repository: https://github.com/cathrynlavery/diagram-design.git
+    ref: main
+    license:
+      expression: MIT
+      evidence: LICENSE
+    artifacts:
+      - id: trove-diagram-design
+        upstream_path: skills/diagram-design
+        local_path: skills/design/trove-diagram-design
+        base_sha: f2496acbde9f45ccb55c24d4f75210c8a1355df8
+        base_tree_digest: sha256:66a40a8f59fd5a98d07cf28a30a762f2a412464a1a90106107aa5700ebd0dea9
+        local_tree_digest: sha256:40daccfd74c81451b2cb657360f805dfce6f543c2598e0746139e7eaf24d9f0d
+        patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        checked_sha: f2496acbde9f45ccb55c24d4f75210c8a1355df8
+        checked_at: 2026-11-09T22:22:38Z
+        candidate_sha: null
+        imported_at: 2026-11-09T22:22:38Z
+        include:
+          - SKILL.md
+          - references/**
+          - scripts/**
+          - assets/template.html
+          - assets/template-dark.html
+          - assets/template-full.html
+          - assets/template-motion.html
+          - assets/template-terminal.html
+          - assets/icons.html
+        exclude:
+          - .claude/**
+          - .github/**
+          - hooks/**
+          - mcp/**
+          - AGENTS.md
+          - CLAUDE.md
+        path_map:
+          SKILL.md: references/runtime-spec.md
+        transforms: []
+        patches: []
+        local_only:
+          - SKILL.md.tmpl
+          - references/LICENSE.md
+        status: active
 
 skills:
   - { local_path: skills/coding/trove-architect, origin: original }
@@ -440,6 +489,11 @@ skills:
     source_id: video-shotcraft
     upstream_paths: [SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md]
     evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  - local_path: skills/design/trove-diagram-design
+    origin: adapted
+    source_id: diagram-design
+    upstream_path: skills/diagram-design
+    evidence_sha: f2496acbde9f45ccb55c24d4f75210c8a1355df8
 
 external_records:
   - local_path: curated/sentry.json
@@ -467,6 +521,11 @@ not_vendored:
     - examples
     - mcp
     - tests
+  # `example-gallery` is assets/example-*.html plus assets/index.html, about
+  # 4.4 MB of rendered samples. It exceeds maximum_artifact_bytes; the Trove
+  # front tells the agent to start from the templates and type references.
+  diagram-design:
+    - example-gallery
   awesome-copilot:
     # Reviewed and declined for the pilot. github-actions-hardening declares no
     # `license:` in its SKILL.md frontmatter at the pinned revision, and this

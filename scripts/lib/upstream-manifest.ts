@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
+import { SKILL_SUPPORT_DIRS, SKILL_SUPPORT_DIRS_TEXT } from "./skill-support-dirs";
 
 export type FullSha = string & { readonly __brand: "FullSha" };
 export type Sha256Digest = string & { readonly __brand: "Sha256Digest" };
@@ -35,7 +36,7 @@ export type ArtifactTransform =
       minimumOccurrences: number;
     };
 
-const CANONICAL_PREFIXES = ["references/", "scripts/"] as const;
+const CANONICAL_PREFIXES = SKILL_SUPPORT_DIRS.map((dir) => `${dir}/`);
 
 export function isCanonicalArtifactPath(candidate: string): boolean {
   return candidate === "SKILL.md.tmpl" ||
@@ -298,7 +299,7 @@ function parseTransform(value: unknown, where: string): ArtifactTransform {
     strictKeys(record, where, ["kind", "path", "from", "to", "minimum_occurrences"]);
     const pathname = repositoryPathAt(record.path, `${where}.path`);
     if (!isCanonicalArtifactPath(pathname)) {
-      fail(`${where}.path`, "must be SKILL.md.tmpl or under references/ or scripts/");
+      fail(`${where}.path`, `must be SKILL.md.tmpl or under ${SKILL_SUPPORT_DIRS_TEXT}`);
     }
     return {
       kind,

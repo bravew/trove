@@ -18,6 +18,7 @@ import type { PluginYaml } from "../hosts/types";
 import { projectPluginLogo } from "./lib/plugin-logo";
 import { isUnownedSupportName } from "./lib/support-files";
 import { checkGeneratedFreshness } from "./lib/generated-freshness";
+import { SKILL_SUPPORT_DIRS } from "./lib/skill-support-dirs";
 
 const ROOT = process.env.TROVE_GENERATOR_ROOT ?? path.resolve(import.meta.dir, "..");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
@@ -577,8 +578,8 @@ function copySkillsToPlugin(pluginName: string, plugin: PluginYaml): void {
       console.warn(`  WARNING: ${skillName}/SKILL.md not found. Run build:skills first.`);
     }
 
-    // Copy references/ and scripts/ if they exist
-    for (const subdir of ["references", "scripts"]) {
+    // Copy the support directories that exist
+    for (const subdir of SKILL_SUPPORT_DIRS) {
       const src = path.join(skillSourceDir, subdir);
       if (fs.existsSync(src)) {
         copyDirRecursive(src, path.join(destDir, subdir));
@@ -631,7 +632,7 @@ function copyCursorSkillsToPlugin(pluginName: string, plugin: PluginYaml): void 
 
     const sourceDir = findSkillSource(skillName, pluginName);
     if (sourceDir) {
-      for (const subdir of ["references", "scripts"]) {
+      for (const subdir of SKILL_SUPPORT_DIRS) {
         const src = path.join(sourceDir, subdir);
         if (fs.existsSync(src)) copyDirRecursive(src, path.join(destDir, subdir));
       }
