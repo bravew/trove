@@ -19,6 +19,7 @@ import { scanSource } from "./lib/skill-import/scan";
 import { stageImport } from "./lib/skill-import/stage";
 import { parseUnicodeReview, type ReviewedUnicode } from "./lib/skill-import/unicode-review";
 import { isCanonicalArtifactPath, loadUpstreamManifest } from "./lib/upstream-manifest";
+import { SKILL_SUPPORT_DIRS_TEXT } from "./lib/skill-support-dirs";
 import { checkOffline, mapPath, matchesPattern, type SyncReport } from "./lib/upstream-sync";
 import type {
   FetchResult,
@@ -221,7 +222,7 @@ function parseTransformEntry(value: unknown, where: string): ProposedTransform {
   if (record.kind !== "replace-literal") throw new CliError(`${where}.kind must be 'replace-literal'`);
   const pathname = assertRepositoryPath(stringAt(record.path, `${where}.path`), `${where}.path`);
   if (!isCanonicalArtifactPath(pathname)) {
-    throw new CliError(`${where}.path must be SKILL.md.tmpl or under references/ or scripts/`);
+    throw new CliError(`${where}.path must be SKILL.md.tmpl or under ${SKILL_SUPPORT_DIRS_TEXT}`);
   }
   const from = stringAt(record.from, `${where}.from`);
   const to = stringAt(record.to, `${where}.to`);

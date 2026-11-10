@@ -127,7 +127,8 @@
         "trove-design-review",
         "trove-a11y",
         "trove-component-spec",
-        "trove-visual-parity"
+        "trove-visual-parity",
+        "trove-diagram-design"
       ]
     },
     {

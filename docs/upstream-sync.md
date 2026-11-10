@@ -81,8 +81,11 @@ appear in `upstream-report.json` with no workflow-logic change.
 
 ## Manifest keys that change lock coverage
 
-Canonical artifact paths are `SKILL.md.tmpl`, `references/**`, and
-`scripts/**`. Everything else is rejected.
+Canonical artifact paths are `SKILL.md.tmpl`, `references/**`, `scripts/**`,
+and `assets/**`. Everything else is rejected. The list lives in
+`scripts/lib/skill-support-dirs.ts`; the build copies the same directories into
+every host output and plugin bundle. Binary and size limits still apply inside
+`assets/`.
 
 ### `replace-literal`
 

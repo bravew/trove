@@ -358,7 +358,8 @@ describe("canonical artifact paths", () => {
     expect(isCanonicalArtifactPath("scripts/lib/x.py")).toBe(true);
     expect(isCanonicalArtifactPath("SKILL.md")).toBe(false);
     expect(isCanonicalArtifactPath("scripts")).toBe(false);
-    expect(isCanonicalArtifactPath("assets/demo.mp4")).toBe(false);
+    expect(isCanonicalArtifactPath("assets/template.html")).toBe(true);
+    expect(isCanonicalArtifactPath("demos/demo.mp4")).toBe(false);
     expect(isCanonicalArtifactPath("agents/openai.yaml")).toBe(false);
   });
 
@@ -510,10 +511,10 @@ describe("canonical artifact paths", () => {
   });
 
   test("still rejects a transformed path outside the prefixes", () => {
-    const artifact = fixtureArtifact({ pathMap: { "SKILL.md": "SKILL.md.tmpl", "assets/": "assets/" } });
+    const artifact = fixtureArtifact({ pathMap: { "SKILL.md": "SKILL.md.tmpl", "demos/": "demos/" } });
     expect(() => transformSelection([
       { path: "SKILL.md", mode: "100644", bytes: Buffer.from("---\nname: example\n---\n") },
-      { path: "assets/demo.mp4", mode: "100644", bytes: Buffer.from("demo") },
+      { path: "demos/demo.mp4", mode: "100644", bytes: Buffer.from("demo") },
     ], artifact)).toThrow("outside canonical template content");
   });
 
@@ -521,7 +522,7 @@ describe("canonical artifact paths", () => {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-canonical-patch-"));
     try {
       const accepted = "upstream-patches/example/scripts.patch";
-      const rejected = "upstream-patches/example/assets.patch";
+      const rejected = "upstream-patches/example/demos.patch";
       fs.mkdirSync(path.join(temporary, "upstream-patches/example"), { recursive: true });
       fs.writeFileSync(
         path.join(temporary, accepted),
@@ -539,10 +540,10 @@ describe("canonical artifact paths", () => {
       fs.writeFileSync(
         path.join(temporary, rejected),
         [
-          "diff --git a/assets/demo.mp4 b/assets/demo.mp4",
+          "diff --git a/demos/demo.mp4 b/demos/demo.mp4",
           "index 1111111..2222222 100644",
-          "--- a/assets/demo.mp4",
-          "+++ b/assets/demo.mp4",
+          "--- a/demos/demo.mp4",
+          "+++ b/demos/demo.mp4",
           "",
         ].join("\n"),
       );
@@ -573,12 +574,12 @@ describe("replace-literal transform", () => {
     expect(() => fixtureArtifact({
       transforms: [{
         kind: "replace-literal",
-        path: "assets/demo.md",
+        path: "demos/demo.md",
         from: "/x",
         to: "/y",
         minimum_occurrences: 1,
       }],
-    })).toThrow("must be SKILL.md.tmpl or under references/ or scripts/");
+    })).toThrow("must be SKILL.md.tmpl or under references/, scripts/, or assets/");
   });
 
   test("rewrites a mapped path and fails closed when the literal is missing", () => {

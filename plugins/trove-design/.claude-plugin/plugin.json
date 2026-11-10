@@ -9,6 +9,7 @@
     "./skills/trove-design-review",
     "./skills/trove-a11y",
     "./skills/trove-component-spec",
-    "./skills/trove-visual-parity"
+    "./skills/trove-visual-parity",
+    "./skills/trove-diagram-design"
   ]
 }

@@ -276,15 +276,27 @@ export function projectFrontmatter(
 /**
  * Plain scalars that YAML reads back as exactly the string written: no
  * leading indicator character, no separator punctuation, and not one of the
- * literals a YAML 1.1 parser would coerce to a boolean or null.
+ * literals a YAML 1.1 parser would coerce to a boolean or null, and not
+ * something a parser reads as a number. A version such as "2.6" is the case
+ * that matters: unquoted it comes back as the float 2.6, and the Agent Skills
+ * spec defines metadata as string -> string.
  */
 const PLAIN_SCALAR = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const YAML_LITERALS = new Set([
   "true", "false", "yes", "no", "on", "off", "null", "y", "n",
 ]);
 
+/** Decimal, exponent, hex (`0x1F`), and octal (`0o17`, `017`) forms. */
+function readsAsNumber(value: string): boolean {
+  return !Number.isNaN(Number(value));
+}
+
 function scalar(value: string): string {
-  if (PLAIN_SCALAR.test(value) && !YAML_LITERALS.has(value.toLowerCase())) return value;
+  if (
+    PLAIN_SCALAR.test(value) &&
+    !YAML_LITERALS.has(value.toLowerCase()) &&
+    !readsAsNumber(value)
+  ) return value;
   // JSON is a valid YAML double-quoted scalar and every JSON escape is also a
   // YAML one, so this needs no separate escaping pass.
   return JSON.stringify(value);
