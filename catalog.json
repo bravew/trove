@@ -13,7 +13,7 @@
       "roles": [
         "dev"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-workflow",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -68,7 +68,7 @@
       "roles": [
         "dev"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-dev",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -112,7 +112,7 @@
       "roles": [
         "design"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-design",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -145,7 +145,7 @@
       "roles": [
         "pm"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-product",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -176,7 +176,7 @@
         "dev",
         "devops"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-security",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -207,7 +207,7 @@
       "roles": [
         "devops"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-infra",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -241,7 +241,7 @@
         "pm",
         "dev"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-research",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -276,7 +276,7 @@
         "design",
         "pm"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-doc",
       "logo": "assets/logo.svg",
       "platforms": [
@@ -314,7 +314,7 @@
         "design",
         "pm"
       ],
-      "version": "2026.10.8",
+      "version": "2026.11.10",
       "source": "./plugins/trove-media",
       "logo": "assets/logo.svg",
       "platforms": [

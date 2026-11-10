@@ -116,6 +116,15 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.11.10] - 2026-11-10
+
+### What's Changed
+* feat(media): video-shotcraft skills for trove-media by @bravew in https://github.com/bravew/trove/pull/63
+* feat(design): import pinned diagram-design skill by @bravew in https://github.com/bravew/trove/pull/66
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.10.8...v2026.11.10
+
 ## [2026.10.8] - 2026-10-08
 
 ### What's Changed
