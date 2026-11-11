@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-11-11T04:04:12.440Z",
+  "model": "claude-sonnet-5-5",
+  "effort": "high",
+  "fallbacks": "default",
+  "maxTokens": 8192,
+  "aborted": {
+    "error": "JudgeRateLimitError",
+    "message": "Judge was rate limited. The server asked for a wait of 8748. A limit this long will not clear inside the run, so it stops instead of sleeping.",
+    "skill": "trove-swift",
+    "task": "task-01-observable-view"
+  },
+  "skippedSkills": [
+    "trove-json-canvas",
+    "trove-plan",
+    "trove-principle-encode-in-structure",
+    "trove-spec",
+    "trove-tdd",
+    "trove-terraform",
+    "trove-typescript",
+    "trove-write-skill",
+    "using-trove"
+  ],
+  "usage": {
+    "input": 0,
+    "output": 0,
+    "calls": 0,
+    "fallbackCalls": 0,
+    "servedModels": {},
+    "responses": []
+  },
+  "results": [],
+  "summary": {
+    "passed": 0,
+    "failed": 0,
+    "total": 0
+  }
+}

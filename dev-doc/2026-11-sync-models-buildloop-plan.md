@@ -609,8 +609,16 @@ that names the LUTs as BuildLoop's grade, shipped by maintainer decision on
   Every task that failed the baseline now passes on its latest text, and no
   rubric, weight, or threshold changed. These are selected-suite follow-ups.
   They do not turn the original full-gate run green, and one call per task
-  cannot separate small moves from judge variance. A full `eval:gate` on main
-  after merge is the release gate.
+  cannot separate small moves from judge variance.
+  A full `eval:gate` on the PR 67 tree then ran on 2026-11-11 in three parts
+  after rate limits, 249 calls with no fallback. It found seven failures: a
+  Terraform task, a runner parse error, two skill gaps (`trove-lambda` inbound
+  IPC check, `trove-autoplan` bundled fix and feature), and four tasks missing
+  the material their rubric grades. Each was fixed and its suite rescored.
+  Taking the latest score per task, all 227 tasks pass, mean 8.53, lowest 7.1,
+  and `trove-take-cut` passes all four tasks on its new wording. The record is
+  `dev-doc/model-refresh/2026-11-full-gate.md`. It is stitched from three runs,
+  so the single-run `eval:gate` on main after merge stays the release check.
 
 ### CP3: Low-risk vendored sync plus curated pins
 

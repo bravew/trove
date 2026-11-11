@@ -87,12 +87,25 @@ release process.
   that land on the same rendered frame. `lint_plan.py` takes the frame rate
   from `--fps` (default 30), because the plan schema has no frame rate. The
   Remotion composition names `zod` as a direct dependency.
-- Eleven eval tasks now supply the material their rubric grades. Examples:
+- Seventeen eval tasks now supply the material their rubric grades. Examples:
   the code that `trove-explain` must cite, the benchmark numbers that
   `trove-perf` must report, and a Vite and React Router setup that matches
   `trove-react-view-transitions`. The tasks span the view-transitions, arena,
-  verify, react-best-practices, perf, explain, and beat-sync suites. Rubrics,
-  weights, and thresholds are unchanged.
+  verify, react-best-practices, perf, explain, beat-sync, terraform, docker,
+  react, autoplan, and lambda suites. Rubrics, weights, and thresholds are
+  unchanged.
+- The eval runner no longer fails to score a judgment when the judge's prose
+  quotes code with braces, such as `{bgm: false}`, before its JSON. It now
+  keeps the first fenced or balanced object that parses with a `scores` field,
+  and a reply with none quotes its opening text in the error.
+- `trove-lambda` shows how to check `BACKEND_IPC_TOKEN` on an inbound event,
+  in constant time and before any work, and how to parse SNS delivered
+  directly. It previously showed only the outbound token.
+- `trove-autoplan` splits a request that bundles a bug fix with new behavior.
+  The fix is routed out and the pipeline plans only the new behavior.
+- The `changed-skill-quality` and skill quality report workflows run on Node
+  22.23.4. On 22.12.0 the `node-gyp` that builds `better-sqlite3` crashed on
+  a missing `zlib.createZstdDecompress`, so the job failed during install.
 - Eval JSON extraction ignores braces inside quoted strings, including escaped
   quotes and backslashes. A valid rationale containing `}` no longer truncates
   the response before parsing.
