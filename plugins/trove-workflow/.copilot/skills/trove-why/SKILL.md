@@ -17,7 +17,7 @@ Reconstruct *intent* from fragmentary historical evidence. Never infer intent fr
 
 ## Evidence sources
 
-Query the evidence sources that are actually available, one bounded read-only pass each (delegate in parallel when several apply — see [docs/orchestration.md](../../docs/orchestration.md)):
+Query the evidence sources that are actually available, one bounded read-only pass each (delegate in parallel through `trove-dispatch` when several apply):
 
 | Category | Where | Tools (fully-qualified) |
 |---|---|---|
