@@ -1,0 +1,472 @@
+{
+  "purpose": "Original failed judgments retained for investigation. These rationales evaluate imagined responses, not executed skill workflows. No failure is waived.",
+  "baseline": "2026-11-judge-baseline.tsv",
+  "runs": [
+    {
+      "source": "sonnet-5-5.json",
+      "source_sha256": "92c61fa29a7951ae77f757a07419a9cab66c20896829b65b3f1ddf12aa69ee90",
+      "timestamp": "2026-11-10T10:51:52.993Z",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "summary": {
+        "passed": 117,
+        "failed": 10,
+        "total": 127
+      },
+      "failures": [
+        {
+          "skill": "trove-swift",
+          "task": "task-03-navigation-stack",
+          "score": null,
+          "passed": false,
+          "details": {},
+          "rationale": "Error: JSON Parse error: Expected '}'",
+          "error": "SyntaxError"
+        },
+        {
+          "skill": "trove-react-view-transitions",
+          "task": "task-01-page-transition",
+          "score": 6.4,
+          "passed": false,
+          "details": {
+            "api_usage_correctness": 7,
+            "transition_naming": 5,
+            "css_pseudo_elements": 8,
+            "framework_integration": 6
+          },
+          "rationale": "This is an estimate of a typical response, not a graded real output. The assistant would wrap `router.push` in `document.startViewTransition`, with a `'startViewTransition' in document` guard so unsupported browsers navigate normally. It would skip the transition on initial load by only triggering on client-side navigation, and add a `prefers-reduced-motion` override. The CSS would define `::view-transition-old(root)` and `::view-transition-new(root)` with fade-and-slide keyframes, sensible durations and easing, and correct pseudo-element targeting, so css_pseudo_elements scores highest. Weak points: (1) The task requires Next.js App Router, but the skill assumes Vite and React Router, and `<ViewTransition>` and `addTransitionType` are only covered in a Next.js reference. A typical response would use raw `startViewTransition` and likely skip the React `<ViewTransition>` / `addTransitionType` APIs, which costs api_usage_correctness. (2) The `startViewTransition` callback in Next.js must return a promise that resolves once the new route has rendered, which is easy to get subtly wrong. (3) Only `root` is animated, with no `view-transition-name` on persistent headers or navs and no shared-element names, so transition_naming is mediocre. This is partly because the task doesn't ask for them. (4) Directional forward/back animation is likely missing, and browser back/forward doesn't trigger transitions. The total of 6.4 is below the 7 pass threshold."
+        },
+        {
+          "skill": "trove-design-review",
+          "task": "task-01-color-drift",
+          "score": 6.1,
+          "passed": false,
+          "details": {
+            "visual_fidelity": 7,
+            "interaction_consistency": 4,
+            "design_system_tokens": 9,
+            "structured_findings": 5
+          },
+          "rationale": "A reasonable response follows the SKILL.md template. It names the drift concretely: #3b82f6 (Tailwind blue-500) is hardcoded where --color-primary-600 (#2563eb) is specified, in two places. It recommends swapping in the token, which scores well on token compliance. It also notes that #3b82f6 on white is about 3.7:1, which fails the WCAG AA 4.5:1 text requirement, while #2563eb is about 5.2:1 and passes. Visual fidelity is good but not top-tier because it lacks a rendered or screenshot comparison. Interaction consistency is weak because the task only covers a static color. The response would at best speculate that hover, focus and active states derived from the primary color may also have drifted. Structured findings are limited because the SKILL.md output format has no severity levels (blocker, important, suggestion), and the task gives no file paths, so the response probably lacks file:line references or relies on placeholders. The weighted average of 6.1 is below the pass threshold of 7."
+        },
+        {
+          "skill": "trove-design-review",
+          "task": "task-02-spacing",
+          "score": 5.1,
+          "passed": false,
+          "details": {
+            "visual_fidelity": 6,
+            "interaction_consistency": 3,
+            "design_system_tokens": 8,
+            "structured_findings": 4
+          },
+          "rationale": "A reasonable response following the SKILL.md template would give a Match Score and list the discrepancies. The two 12px cards and the 18px card are off-token. The 18px value also breaks the 4px grid, while 12px is on the grid but has no token. It would recommend snapping to --space-2 (8px) or --space-4 (16px), or proposing a new --space-3 token if 12px is intentional. That earns a strong score on design_system_tokens (8), since it flags hardcoded spacing where tokens exist and covers the grid violation. Visual fidelity is mid (6): the mismatches are concrete, but there is no actual design spec or Figma to compare against and it can't say which value the designer intended. Interaction consistency is low (3) because the task is about static spacing and the template doesn't prompt for interaction drift, so the response likely skips it or says it is out of scope. Structured findings is low-mid (4): the output follows the SKILL.md template, which has no blocker/important/suggestion severity levels, and without file access the findings cite 'two cards' and 'another card' rather than file:line or specific screens. The weighted average of 5.1 is below the 7 pass threshold, mainly because the rubric expects severity labels, location references, and interaction checks that the skill's output format doesn't elicit."
+        },
+        {
+          "skill": "trove-design-review",
+          "task": "task-03-interaction",
+          "score": 6.4,
+          "passed": false,
+          "details": {
+            "visual_fidelity": 5,
+            "interaction_consistency": 9,
+            "design_system_tokens": 4,
+            "structured_findings": 7
+          },
+          "rationale": "This scores a hypothetical response that follows the SKILL.md template. The task is narrowly about interaction drift, and no code or visual spec was supplied. Interaction consistency is strong: the response would identify the missing Escape handler as a deviation from the spec, rank it as important or blocker, and tie it to keyboard accessibility (WCAG 2.1.1). It would likely also check related modal behaviors such as focus trapping, focus return, and aria-modal. Structured findings are decent because severity levels are used, but with no code provided there is no real file:line reference, so the response can only cite 'Modal component' as the screen. Visual fidelity is mediocre because the task gave no visual mismatches to compare, so the response can only state that none were verified. Design-token findings are weak for the same reason: with no code to inspect, it can only suggest checking for hardcoded values. The weighted average of 6.4 falls below the 7 threshold, mainly because the task gave little material for the visual and token criteria."
+        },
+        {
+          "skill": "trove-arena",
+          "task": "task-03-converge-or-reframe",
+          "score": 6.4,
+          "passed": false,
+          "details": {
+            "rubric_before_spawn": 7,
+            "isolated_candidate_paths": 5,
+            "grafts_and_records_rejections": 9,
+            "declines_when_trivial": 5
+          },
+          "rationale": "This is a simulated response, and the task is post-fan-out, so only some criteria are exercised. A reasonable response would treat the two-candidate convergence on read-through with TTL as a strong signal. It would then score all three against the pre-written rubric in a fresh read-only cross-judge pass, and examine the event-driven candidate for graftable ideas, such as targeted invalidation hooks for hot keys. It would also record why the event-driven design lost, and recommend reframing instead of averaging if the divergence reveals an underspecified requirement like staleness tolerance. That earns a high score on grafts_and_records_rejections (9). It earns a moderate score on rubric_before_spawn (7), because the response would reference the rubric as the picker's tool but cannot show it being written before spawning. It earns lower scores on isolated_candidate_paths (5) and declines_when_trivial (5), because the candidates already ran and the task is neither trivial nor about spawning, so the response has little reason to address isolation or the decline-routing behavior. The weighted average of 6.5 falls below the minimum pass score of 7, mainly because two of the four criteria are barely exercised by this prompt."
+        },
+        {
+          "skill": "trove-verify",
+          "task": "task-01-done",
+          "score": 6.3,
+          "passed": false,
+          "details": {
+            "runs_relevant_check": 6,
+            "rereads_diff": 5,
+            "generated_freshness": 6,
+            "states_gaps": 9,
+            "verifies_real_artifact": 5
+          },
+          "rationale": "This is a simulated evaluation. The prompt gives no indication of what 'this' is, and the working directory is not a git repository. A reasonable assistant following the skill would list the directory, look for a test, lint, or build command, and look for generator files. It would then find no diff to reread and no named artifact to check. It would pick Option C from the Decision Gate and ask the user what changed and how to run it, rather than claim completion. That earns high marks for stating gaps (9). It is middling on the other criteria. It can name the relevant checks but cannot run them without context (6). It cannot reread a diff without git, though it can inspect files by modification time (5). It can scan for generators and note that none were found, which is N/A rather than a real freshness check (6). It cannot verify a real artifact without knowing what the change was supposed to affect (5). The weighted average of 6.3 falls below the pass threshold of 7. That reflects the underspecified task and environment, not careless behavior by the assistant."
+        },
+        {
+          "skill": "trove-verify",
+          "task": "task-02-no-tests",
+          "score": 6.2,
+          "passed": false,
+          "details": {
+            "runs_relevant_check": 6,
+            "rereads_diff": 5,
+            "generated_freshness": 5,
+            "states_gaps": 9,
+            "verifies_real_artifact": 5
+          },
+          "rationale": "A reasonable response declines to say 'complete' just because no tests exist. It follows the Decision Gate, defaulting to option B/C, and says plainly that the outcome is unverified. This earns a high states_gaps score. It also proposes manual and structural checks: exercise the actual artifact (hit the endpoint, view the rendered UI, count migrated rows), reread the touched files, and confirm any generated outputs are fresh. Those proposals are mostly described rather than executed. The working directory is not a git repo, so there is no diff to inspect. No generator is identified, so freshness is addressed only generically. The response names what a real-artifact check would look like but does not perform one, so it stays at a proxy level. That leaves runs_relevant_check, rereads_diff, generated_freshness and verifies_real_artifact in the middle range, and the weighted average falls just under the 7 threshold."
+        },
+        {
+          "skill": "trove-react-best-practices",
+          "task": "task-01-eliminate-waterfall",
+          "score": 6,
+          "passed": false,
+          "details": {
+            "avoids_waterfalls": 8,
+            "bundle_discipline": 4,
+            "rerender_minimization": 4,
+            "server_client_correctness": 8
+          },
+          "rationale": "This is a hypothetical response, scored against the rubric. The skill guides a reasonable response to see that getUser -> getOrgForUser -> getRecentInvoices is a strict dependency chain, so Promise.all cannot parallelize those three calls. The response would not force it. It would instead move the dependent fetch chain into an async child component behind a <Suspense> boundary, so the page shell streams while invoices load. It would also parallelize any genuinely independent work, such as static layout data or other widgets, and start those promises early. It would wrap getUser in React cache() so repeated calls in the same request are deduplicated. Waterfall handling and server/client correctness are therefore strong (8 each). It loses points because it does not cover preload patterns or per-request deduplication in depth. The bundle-size and re-render criteria barely apply to a pure server-component data-fetching task. A response focused on the task would at most mention direct imports or dynamic imports in passing, and would not touch memoization or transitions, so those scores are modest (4 each). The weighted average of 6.0 falls below the 7 minimum, mainly because half the rubric weight targets concerns this task does not exercise."
+        },
+        {
+          "skill": "trove-react-best-practices",
+          "task": "task-03-rerender-fix",
+          "score": 6,
+          "passed": false,
+          "details": {
+            "avoids_waterfalls": 5,
+            "bundle_discipline": 5,
+            "rerender_minimization": 9,
+            "server_client_correctness": 6
+          },
+          "rationale": "The simulated response diagnoses the root cause correctly. The inline `filters` object gets a new identity on every render, which defeats `React.memo` on the cards, and each keystroke re-renders Dashboard because the search state lives there. Its fixes follow the skill's rerender rules: push the search input state down into a leaf component or use `useDeferredValue`/`startTransition`, hoist static default filters (`rerender-memo-with-default-value`), derive `filters` from primitive values instead of running effects (`rerender-derived-state-no-effect`), and wrap the cards in `memo` with a single targeted `useMemo` rather than memoizing everywhere. It also explains when memoization won't help: props that change every render, cheap children, memoization overhead that exceeds the render cost, and children that subscribe to a context or store that changes anyway. That earns a 9 on rerender_minimization. The other three criteria are largely outside the scope of this task, which has no data fetching, no imports to analyze and no server components. The response has nothing to demonstrate on waterfalls or bundle size, so those score a neutral 5 each. For server_client_correctness it keeps module-level constants immutable and stays client-side, so it gets a 6. The weighted average falls below the 7 threshold because 60% of the weight sits on criteria this task does not exercise, not because the re-render analysis is weak."
+        }
+      ]
+    },
+    {
+      "source": "sonnet-5-5-remaining.json",
+      "source_sha256": "a097a85d255914a277445a3fe58eebd03106b5d68524548833b04e3d6d34b9b2",
+      "timestamp": "2026-11-10T15:44:15.629Z",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "summary": {
+        "passed": 95,
+        "failed": 5,
+        "total": 100
+      },
+      "failures": [
+        {
+          "skill": "trove-perf",
+          "task": "task-02-measure-not-guess",
+          "score": 6.7,
+          "passed": false,
+          "details": {
+            "baseline_before_fix": 6,
+            "measures_not_guesses": 7,
+            "cites_delta": 4,
+            "no_unmeasured_optimization": 10
+          },
+          "rationale": "The imagined response declines to memoize the comparator on a hunch. It says the sort is only a suspect and that re-renders, layout or an N+1 are just as likely. It proposes profiling first (React Profiler or a Chrome performance trace), saving the artifact, and fixing only what the profile shows to be hot. That earns full marks for not optimizing an unmeasured path. It earns partial credit for sequencing: it puts the baseline before any change and names the method, but it never captures a baseline or saves an artifact. It stays on the plan and does not locate the cost with a real profile, so measures_not_guesses is only moderately high. It also has no baseline, post-fix or delta numbers and no artifact path, because no fix was made. The plan to report them is not the same as reporting them, so cites_delta is low. The weighted average of 6.7 falls just under the 7 pass threshold."
+        },
+        {
+          "skill": "trove-perf",
+          "task": "task-03-cite-delta",
+          "score": 4.7,
+          "passed": false,
+          "details": {
+            "baseline_before_fix": 4,
+            "measures_not_guesses": 5,
+            "cites_delta": 3,
+            "no_unmeasured_optimization": 7
+          },
+          "rationale": "A reasonable response would be honest that no baseline or artifact exists, since the user added selectinload before any measurement. It would decline to fabricate numbers, offer to recover a baseline by reverting the change, and give a write-up template in the Baseline/Post-fix/Delta/Change format with placeholders. It would also suggest counting queries with a SQLAlchemy event listener or echo logging. That honesty and the measurement plan earn partial credit on baseline_before_fix and measures_not_guesses, but no measurement was actually captured and the N+1 cost was never located by profiling. cites_delta is low because the output has placeholders instead of real baseline, post-fix, and delta numbers with artifact paths. no_unmeasured_optimization scores higher because the response adds no further optimization beyond the user's selectinload and only proposes measuring it. The pass threshold of 7 is not met, because the task cannot be completed without measurements that were never taken."
+        },
+        {
+          "skill": "trove-autoplan",
+          "task": "task-03-bug-fix-input",
+          "score": 6.1,
+          "passed": false,
+          "details": {
+            "delegates_to_leaves": 8,
+            "stages_in_order": 5,
+            "decision_gate_present": 6,
+            "output_shape": 5
+          },
+          "rationale": "Assumed response: autoplan recognizes 'Fix the off-by-one in pagination' as a bug fix, declines the spec → story → release-note pipeline, and hands off to trove-commit and trove-review. It adds a short confirmation asking whether the user wants the full pipeline anyway. This matches the SKILL.md's 'defer to a sibling skill' rule and its orchestrator stance, and the task itself asks for it. delegates_to_leaves scores 8: it delegates by name and inlines nothing, but to trove-commit/trove-review rather than the three planning leaves. decision_gate_present scores 6: the confirmation prompt works as a gate, but it is not the SKILL.md's scope-of-stage-1 gate, and the skill does not define a routing gate. stages_in_order and output_shape score 5: correctly skipping the pipeline means there is no stage order or consolidated packet to assess, so these criteria can't be met. The SKILL.md also lacks an explicit 'not for bug fixes' rule, so the decline relies on the generic sibling-routing line. The rubric is written for the happy path and doesn't cover this wrong-tool case, so the sub-7 result reflects that mismatch rather than an incorrect response."
+        },
+        {
+          "skill": "trove-explain",
+          "task": "task-02-explain-flow",
+          "score": 6.7,
+          "passed": false,
+          "details": {
+            "audience_calibrated": 6,
+            "data_flow_traced": 8,
+            "cites_files": 4,
+            "no_filler": 8,
+            "reads_real_code": 5,
+            "scales_to_complexity": 9
+          },
+          "rationale": "The imagined response uses the skill's output format and stays under 500 words. It traces the payload from the submit handler through the `useCheckout.ts` mutation, the `api/checkout.ts` request, the `checkout_service.py` validation and persistence, and back to the rendered response, with a clear ASCII diagram and per-file attribution. It correctly treats this as a simple single-flow subsystem and does a single pass with no sub-agent fan-out. Weaknesses: (1) the task states the code is not real, so no file:line citations are possible, and the response can only cite file names and flag steps as inferred, which falls short of the rubric's file:line requirement; (2) it cannot read real code, so every behavioral claim is a typical-structure guess, which it labels honestly but which still scores low on this criterion; (3) no audience was specified, so it defaults to a mid-level developer explanation without much depth calibration. Filler is minimal and the flow is traced as data transformations rather than a function list, but the citation and real-code constraints keep the weighted average just under the 7 pass threshold."
+        },
+        {
+          "skill": "trove-beat-sync",
+          "task": "task-02-no-bgm-props",
+          "score": 5.6,
+          "passed": false,
+          "details": {
+            "beat_analysis_and_gate": 5,
+            "consent_and_fallback": 4,
+            "timeline_and_impact_budget": 4,
+            "render_delivery_and_retest": 9,
+            "output_offset_compensation": 6
+          },
+          "rationale": "This scores a hypothetical response, not a real one. The task is narrow, so a reasonable response would get the core delivery workflow right. It would render the BGM version from the Remotion timeline and render the no-BGM version from the same timeline with a prop such as `{\"bgm\": false}`. It would reject stripping the track from the finished file with ffmpeg, which is the main pitfall. It would normalise the BGM render with loudness.py and report only the peak of the no-BGM stem. It would re-run `scenes.py DELIVERED_NORMALISED_BGM_FILE --beats`, report cut error in frames, and mark tools it could not run as unchecked. That earns a high render_delivery_and_retest score. Beat analysis is only partly covered, because the response would refer to the re-test but probably not report BPM, phase, onset support, `usable`, or the match and residual gate with `--json`. Consent and fallback would be mentioned at most briefly, because the task never triggers a librosa download. beatF(n), float-second timing and the impact budget would barely come up, since the timeline is already built and left unchanged. Output offset would be covered by re-measuring after the final encode and recording codec and bitrate, but not by separating it from source beat phase or from each sound source's peak lag. The weighted average is below the pass threshold of 7."
+        }
+      ]
+    }
+  ],
+  "parser_followup": {
+    "local_regression": "Valid unfenced JSON containing a closing brace in a rationale string failed extraction before the fix and passes after the fix.",
+    "original_swift_cause": "Unknown. The original response text was not retained.",
+    "first_live_followup": {
+      "error": "JudgeRateLimitError",
+      "message": "Judge was rate limited. The server asked for a wait of 16468. A limit this long will not clear inside the run, so it stops instead of sleeping.",
+      "skill": "trove-swift",
+      "task": "task-01-observable-view"
+    },
+    "second_live_followup": {
+      "source": "swift-after-parser-fix.json",
+      "source_sha256": "2ff6bedf610cb49c89549cc168f6fa0460f78eedff1bf8d7bd0a87dd0687ddc1",
+      "timestamp": "2026-11-10T20:31:24.418Z",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "served_models": {
+        "claude-sonnet-5-5": 3
+      },
+      "fallback_calls": 0,
+      "skipped_suites": 68,
+      "results": [
+        {
+          "task": "task-01-observable-view",
+          "score": 8.5,
+          "passed": true
+        },
+        {
+          "task": "task-02-async-fetch",
+          "score": 7.3,
+          "passed": true
+        },
+        {
+          "task": "task-03-navigation-stack",
+          "score": 8.7,
+          "passed": true
+        }
+      ],
+      "reading": "Consistent with the parser fix. Not proof of the original cause, which stays unknown. Not a gate result and not a baseline row."
+    }
+  },
+  "skill_fix_followup": {
+    "decision": "D8, 2026-11-10",
+    "source": "d8-rescore.json",
+    "source_sha256": "3f07c545d9f9e0f348ec11060e67cf6f63570c3761354cdc42ce9355284f143b",
+    "timestamp": "2026-11-10T20:56:00.486Z",
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "served_models": {
+      "claude-sonnet-5-5": 10
+    },
+    "fallback_calls": 0,
+    "skipped_suites": 66,
+    "changed_skills": [
+      "trove-design-review",
+      "trove-autoplan",
+      "trove-take-cut"
+    ],
+    "unchanged": "rubrics, criterion weights, min_pass_score, tasks, judge prompt, runner",
+    "results": [
+      {
+        "skill": "trove-take-cut",
+        "task": "task-01-multi-take",
+        "score": 8.8,
+        "passed": true,
+        "details": {
+          "routes_cutting_through_trove_ffmpeg": 9,
+          "waveform_not_asr": 9,
+          "records_the_decision": 9,
+          "verifies_before_done": 9,
+          "stays_in_scope": 8
+        }
+      },
+      {
+        "skill": "trove-take-cut",
+        "task": "task-02-user-override",
+        "score": 8.8,
+        "passed": true,
+        "details": {
+          "routes_cutting_through_trove_ffmpeg": 9,
+          "waveform_not_asr": 9,
+          "records_the_decision": 8,
+          "verifies_before_done": 9,
+          "stays_in_scope": 9
+        }
+      },
+      {
+        "skill": "trove-take-cut",
+        "task": "task-03-non-trigger",
+        "score": 10,
+        "passed": true,
+        "details": {
+          "routes_cutting_through_trove_ffmpeg": 10,
+          "waveform_not_asr": 10,
+          "records_the_decision": 10,
+          "verifies_before_done": 10,
+          "stays_in_scope": 10
+        }
+      },
+      {
+        "skill": "trove-take-cut",
+        "task": "task-04-already-cut",
+        "score": 8.5,
+        "passed": true,
+        "details": {
+          "routes_cutting_through_trove_ffmpeg": 9,
+          "waveform_not_asr": 8,
+          "records_the_decision": 8,
+          "verifies_before_done": 8,
+          "stays_in_scope": 10
+        }
+      },
+      {
+        "skill": "trove-design-review",
+        "task": "task-01-color-drift",
+        "score": 7.6,
+        "passed": true,
+        "details": {
+          "visual_fidelity": 8,
+          "interaction_consistency": 6,
+          "design_system_tokens": 9,
+          "structured_findings": 8
+        }
+      },
+      {
+        "skill": "trove-design-review",
+        "task": "task-02-spacing",
+        "score": 7.2,
+        "passed": true,
+        "details": {
+          "visual_fidelity": 7,
+          "interaction_consistency": 5,
+          "design_system_tokens": 9,
+          "structured_findings": 9
+        }
+      },
+      {
+        "skill": "trove-design-review",
+        "task": "task-03-interaction",
+        "score": 7.2,
+        "passed": true,
+        "details": {
+          "visual_fidelity": 5,
+          "interaction_consistency": 9,
+          "design_system_tokens": 6,
+          "structured_findings": 9
+        }
+      },
+      {
+        "skill": "trove-autoplan",
+        "task": "task-01-feature-idea",
+        "score": 8.5,
+        "passed": true,
+        "details": {
+          "delegates_to_leaves": 8,
+          "stages_in_order": 9,
+          "decision_gate_present": 8,
+          "output_shape": 9
+        }
+      },
+      {
+        "skill": "trove-autoplan",
+        "task": "task-02-vague-idea",
+        "score": 8,
+        "passed": true,
+        "details": {
+          "delegates_to_leaves": 9,
+          "stages_in_order": 7,
+          "decision_gate_present": 9,
+          "output_shape": 7
+        }
+      },
+      {
+        "skill": "trove-autoplan",
+        "task": "task-03-bug-fix-input",
+        "score": 8.2,
+        "passed": true,
+        "details": {
+          "delegates_to_leaves": 9,
+          "stages_in_order": 7,
+          "decision_gate_present": 9,
+          "output_shape": 8
+        }
+      }
+    ],
+    "remaining_under_minimum": 10,
+    "reading": "Not a gate result and not a baseline row. One call per task."
+  },
+  "task_correction_followup": {
+    "decision": "D9",
+    "source": "2026-11-task-corrections-results.json",
+    "source_sha256": "3db1fcae0fec514ba98a493f5f7066b42450f737fd49e74223b7bbee7a343bf1",
+    "timestamp": "2026-11-10T21:27:52Z",
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "selected_tasks": 22,
+    "scored_tasks": 0,
+    "error": "JudgeRateLimitError",
+    "retry_after_seconds": 14528,
+    "reading": "Ten contradictory or underspecified tasks were corrected. The first seven-suite rescore stopped before its first response. Six more attempts inside the rate-limit window also scored nothing. See task_correction_rescore for the run that completed. Original baseline rows remain unchanged."
+  },
+  "task_correction_rescore": {
+    "decision": "D9",
+    "source": "2026-11-task-corrections-rescore.json",
+    "source_sha256": "f6a6abb08c3ba537326d8bc6719ccf01335b5286e3d3ec55aacc760c0403b906",
+    "timestamp": "2026-11-11T01:34:56.108Z",
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "selected_tasks": 22,
+    "scored_tasks": 22,
+    "passed": 21,
+    "fallback_calls": 0,
+    "corrected_tasks_before_after": {
+      "trove-react-view-transitions/task-01-page-transition": [6.4, 8.3],
+      "trove-arena/task-03-converge-or-reframe": [6.4, 8.8],
+      "trove-verify/task-01-done": [6.3, 9.0],
+      "trove-verify/task-02-no-tests": [6.2, 8.2],
+      "trove-react-best-practices/task-01-eliminate-waterfall": [6.0, 8.6],
+      "trove-react-best-practices/task-03-rerender-fix": [6.0, 8.8],
+      "trove-perf/task-02-measure-not-guess": [6.7, 9.2],
+      "trove-perf/task-03-cite-delta": [4.7, 8.6],
+      "trove-explain/task-02-explain-flow": [6.7, 8.6],
+      "trove-beat-sync/task-02-no-bgm-props": [5.6, 8.2]
+    },
+    "new_failure": {
+      "task": "trove-explain/task-03-explain-architecture",
+      "baseline": 7.1,
+      "score": 6.4,
+      "edited_before_run": false,
+      "details": {"audience_calibrated": 8, "data_flow_traced": 6, "cites_files": 3, "no_filler": 8, "reads_real_code": 4, "scales_to_complexity": 9},
+      "cause_per_rationale": "The task named 'this project' but supplied no code, so the rubric's file:line and reads_real_code criteria had nothing to cite. Same gap as the corrected explain task-02."
+    },
+    "explain_task03_followup": {
+      "change": "Added a three-file fictional fixture with numbered lines. Question, audience, and two-paragraph limit unchanged.",
+      "source": "2026-11-explain-task03-rescore.json",
+      "source_sha256": "3d6d075351d313bee95870cf6d909a7076b944f16b74a8c8790c1e51d7ec8571",
+      "timestamp": "2026-11-11T02:07:39.297Z",
+      "scores": {"task-01-explain-function": 8.3, "task-02-explain-flow": 8.6, "task-03-explain-architecture": 8.3},
+      "fallback_calls": 0,
+      "task03_rationale_cites_fixture": true
+    },
+    "reading": "Selected-suite follow-ups, not a gate result and not baseline rows. One call per task cannot separate small moves from judge variance. Every task in the seven suites has a passing score on its latest text."
+  }
+}

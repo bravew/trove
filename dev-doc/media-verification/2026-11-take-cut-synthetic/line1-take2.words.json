@@ -1,0 +1,56 @@
+{
+  "source": "line1-take2.wav",
+  "language": "en",
+  "words": [
+    {
+      "text": "Keep",
+      "start": 0.0,
+      "end": 0.16
+    },
+    {
+      "text": "the",
+      "start": 0.16,
+      "end": 0.36
+    },
+    {
+      "text": "original,",
+      "start": 0.36,
+      "end": 0.76
+    },
+    {
+      "text": "ah,",
+      "start": 1.08,
+      "end": 1.4
+    },
+    {
+      "text": "sorry,",
+      "start": 1.68,
+      "end": 2.02
+    },
+    {
+      "text": "keep",
+      "start": 2.36,
+      "end": 2.56
+    },
+    {
+      "text": "the",
+      "start": 2.56,
+      "end": 2.76
+    },
+    {
+      "text": "original",
+      "start": 2.76,
+      "end": 3.16
+    },
+    {
+      "text": "recording",
+      "start": 3.16,
+      "end": 3.66
+    },
+    {
+      "text": "safe.",
+      "start": 3.66,
+      "end": 4.06
+    }
+  ]
+}

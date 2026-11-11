@@ -1,0 +1,166 @@
+{
+ "source": "cut.mp4",
+ "language": "en",
+ "words": [
+  {
+   "text": "All",
+   "start": 0.0,
+   "end": 0.24
+  },
+  {
+   "text": "10",
+   "start": 0.24,
+   "end": 0.6
+  },
+  {
+   "text": "corrected",
+   "start": 0.6,
+   "end": 1.28
+  },
+  {
+   "text": "eval's",
+   "start": 1.28,
+   "end": 2.12
+  },
+  {
+   "text": "testing",
+   "start": 2.12,
+   "end": 2.46
+  },
+  {
+   "text": "now",
+   "start": 2.46,
+   "end": 3.26
+  },
+  {
+   "text": "passed.",
+   "start": 3.26,
+   "end": 3.58
+  },
+  {
+   "text": "So",
+   "start": 4.0,
+   "end": 4.06
+  },
+  {
+   "text": "the",
+   "start": 4.06,
+   "end": 4.24
+  },
+  {
+   "text": "CP2",
+   "start": 4.24,
+   "end": 4.72
+  },
+  {
+   "text": "failure",
+   "start": 4.72,
+   "end": 4.98
+  },
+  {
+   "text": "are",
+   "start": 4.98,
+   "end": 5.34
+  },
+  {
+   "text": "resolving",
+   "start": 5.34,
+   "end": 5.96
+  },
+  {
+   "text": "the",
+   "start": 5.96,
+   "end": 6.22
+  },
+  {
+   "text": "follow",
+   "start": 6.22,
+   "end": 6.44
+  },
+  {
+   "text": "-up",
+   "start": 6.44,
+   "end": 6.64
+  },
+  {
+   "text": "run.",
+   "start": 6.64,
+   "end": 6.88
+  },
+  {
+   "text": "The",
+   "start": 7.06,
+   "end": 7.14
+  },
+  {
+   "text": "planning",
+   "start": 7.14,
+   "end": 7.34
+  },
+  {
+   "text": "is",
+   "start": 7.34,
+   "end": 7.6
+  },
+  {
+   "text": "still",
+   "start": 7.6,
+   "end": 7.82
+  },
+  {
+   "text": "not",
+   "start": 7.82,
+   "end": 8.04
+  },
+  {
+   "text": "complete.",
+   "start": 8.04,
+   "end": 8.56
+  },
+  {
+   "text": "CP6",
+   "start": 9.0,
+   "end": 9.56
+  },
+  {
+   "text": "and",
+   "start": 9.56,
+   "end": 9.78
+  },
+  {
+   "text": "CP7",
+   "start": 9.78,
+   "end": 10.2
+  },
+  {
+   "text": "need",
+   "start": 10.2,
+   "end": 10.44
+  },
+  {
+   "text": "their",
+   "start": 10.44,
+   "end": 10.68
+  },
+  {
+   "text": "something",
+   "start": 10.68,
+   "end": 11.02
+  },
+  {
+   "text": "I",
+   "start": 11.02,
+   "end": 11.44
+  },
+  {
+   "text": "cannot",
+   "start": 11.44,
+   "end": 11.78
+  },
+  {
+   "text": "predict.",
+   "start": 11.78,
+   "end": 12.08
+  }
+ ]
+}

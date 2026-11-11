@@ -1,0 +1,47 @@
+{
+  "source": "multi-take-recording.mov",
+  "lines": [
+    {
+      "line": 1,
+      "text": "All 10 corrected evals testing now pass. So the CP2 failures are resolved in the follow-up runs.",
+      "kept": {
+        "take": 1,
+        "of": 1
+      },
+      "window": {
+        "start": 5.6,
+        "end": 12.9
+      },
+      "reason": "Only reading. It has a slip, 'the CP2 failure are resulting' (or 'resolving'), so no clean reading exists. Kept as the cleanest available. The window starts at 5.6 s to leave out a 0.18 s stray syllable at 5.28 s, separated from 'All' by 0.3 s of gated silence.",
+      "pause_after": 0.68
+    },
+    {
+      "line": 2,
+      "text": "The plan is still not complete.",
+      "kept": {
+        "take": 1,
+        "of": 2
+      },
+      "window": {
+        "start": 13.1,
+        "end": 15.2
+      },
+      "reason": "Reading 1 is one fluent run followed by a 0.7 s pause. Reading 2 (16.56 to 19.14 s) follows a 'CP2' false start, hesitates 0.48 s before 'still', and runs into the next line after 0.36 s.",
+      "pause_after": 0.7
+    },
+    {
+      "line": 3,
+      "text": "CP6 and CP7 need something I cannot produce.",
+      "kept": {
+        "take": 1,
+        "of": 1
+      },
+      "window": {
+        "start": 19.35,
+        "end": 23.2
+      },
+      "reason": "Only reading. It has a flubbed word, 'need there, something'. Kept as the cleanest available. The 'Okay.' at 23.56 s is an end-of-take marker and is excluded.",
+      "pause_after": 0.66
+    }
+  ]
+}

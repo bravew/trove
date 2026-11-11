@@ -1,0 +1,41 @@
+{
+ "source": "cut.mp4",
+ "language": "en",
+ "words": [
+  {
+   "text": "Hey,",
+   "start": 0.0,
+   "end": 0.26
+  },
+  {
+   "text": "uh,",
+   "start": 0.72,
+   "end": 0.72
+  },
+  {
+   "text": "hello",
+   "start": 0.96,
+   "end": 1.2
+  },
+  {
+   "text": "there.",
+   "start": 1.2,
+   "end": 1.54
+  },
+  {
+   "text": "Well,",
+   "start": 1.84,
+   "end": 1.94
+  },
+  {
+   "text": "good",
+   "start": 2.52,
+   "end": 2.68
+  },
+  {
+   "text": "morning.",
+   "start": 2.68,
+   "end": 3.0
+  }
+ ]
+}

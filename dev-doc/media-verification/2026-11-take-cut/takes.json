@@ -1,0 +1,33 @@
+{
+ "source": "filler_en.mp4",
+ "lines": [
+  {
+   "line": 1,
+   "text": "Hey, hello there.",
+   "kept": {
+    "take": 2,
+    "of": 2
+   },
+   "window": {
+    "start": 6.1,
+    "end": 8.8
+   },
+   "reason": "Both readings contain \"uh\" between \"Hey\" and \"hello\" when each take is transcribed alone. Neither is clean, so the default keeps the last. The filler stays unless the user asks for silence.py --filler.",
+   "pause_after": 1.42
+  },
+  {
+   "line": 2,
+   "text": "Well, good morning.",
+   "kept": {
+    "take": 2,
+    "of": 2
+   },
+   "window": {
+    "start": 9.2,
+    "end": 11.418
+   },
+   "reason": "Both readings contain \"um\" between \"Well\" and \"good\" when each take is transcribed alone. Neither is clean, so the default keeps the last. It ends 0.4 s before the file does.",
+   "pause_after": 0.4
+  }
+ ]
+}

@@ -8,6 +8,29 @@ release process.
 
 ### Behavior changes — read before upgrading
 
+- **`trove-ffmpeg` now requires FFmpeg 6.1+ and Python 3.10+.** It moved from
+  upstream 2.5.1 to 3.2.3. The 3.0 release changed the cut defaults, so a cut
+  that previously re-encoded may now stream-copy unless you ask for a
+  frame-exact cut. New references cover flags, reports, requests, timestamps,
+  and the workflow.
+- **`trove-react-view-transitions` targets stable React 19.3.** `<ViewTransition>`
+  and `addTransitionType` shipped in React 19.3, so the skill no longer tells
+  Vite projects to install `react@canary`.
+- **`trove-pulse` no longer offers the browser-cookie and CDP lanes.** The sync to
+  upstream `7869eb17` (v3.32.0) excludes `agentcookie.py`, `chrome_cdp.py`, and
+  `box_chrome_login.py`, and the setup wizard no longer describes them. The three
+  cookie modules that already shipped are unchanged. `reddit_rss.py` is gone
+  because upstream deleted it.
+- **`trove-pulse-cn` is now upstream 4.0.0.** It adds the hot-search board, the
+  overseas opt-in, and a `login <platform>` flow that stores a session the user
+  creates in its own config directory. It does not read the browser's cookie
+  store. The hot-board image is excluded.
+- **New sound effects need a provenance record.** `trove-product-video`,
+  `trove-beat-sync`, and `trove-video-review` follow upstream's retirement of its
+  shared effect library. CC0 is the default, CC BY only when the credit ships with
+  the video, and the template project's bundled audio is historical material for
+  preview, not a source pool.
+
 - **Auto-attach now works in Claude Code.** Skills declaring
   `auto_attach.globs` never emitted Claude's `paths` field, so they never
   auto-attached. They do now. Ten skills are affected, several with broad
@@ -38,6 +61,46 @@ release process.
 
 ### Fixed
 
+- `trove-take-cut` keeps a one-sample pulse as a cut with duration, accepts a
+  line retaken later in the session than the line after it, and
+  `verify_cut.py` rejects a word whose time range runs backwards. A
+  zero-length word, which recognizers give a short filler, still passes. The
+  skill now tells you to keep fillers in the transcript and to transcribe each
+  reading alone, because a full-file pass can drop the "uh" that decides the
+  keeper. It also says to lower `cut_points.py --threshold` on a quiet,
+  noise-gated recording, where the default clipped the "s" of a word in a real
+  run.
+- `trove-design-review` gives every finding a severity (blocker, important, or
+  suggestion) and a location, and names related states to check.
+  `trove-autoplan` declines the planning pipeline for a bug fix, regression,
+  or refactor and routes it to `trove-debug`, `trove-review`, and
+  `trove-commit`.
+- `trove-video-edit` insets portrait captions by 20% of the frame height.
+  The old 8% CSS padding was calculated from the width, so it never cleared a
+  vertical caption. SDR finals are rendered with `--color-space bt709`, which
+  writes limited-range BT.709 tags instead of an untagged `bt470bg` matrix.
+- `trove-broll-ingest` refuses a catalog entry with an empty field, a negative
+  start, or a non-finite span, and writes nothing. It also refuses a select
+  already catalogued under another spelling, such as `./a.mp4`.
+  `trove-video-edit` rejects a plan with no source file, an unknown beat kind,
+  a caption with no text, a beat that starts before the source, or two beats
+  that land on the same rendered frame. `lint_plan.py` takes the frame rate
+  from `--fps` (default 30), because the plan schema has no frame rate. The
+  Remotion composition names `zod` as a direct dependency.
+- Eleven eval tasks now supply the material their rubric grades. Examples:
+  the code that `trove-explain` must cite, the benchmark numbers that
+  `trove-perf` must report, and a Vite and React Router setup that matches
+  `trove-react-view-transitions`. The tasks span the view-transitions, arena,
+  verify, react-best-practices, perf, explain, and beat-sync suites. Rubrics,
+  weights, and thresholds are unchanged.
+- Eval JSON extraction ignores braces inside quoted strings, including escaped
+  quotes and backslashes. A valid rationale containing `}` no longer truncates
+  the response before parsing.
+- The Copilot install smoke reads `plugin list --json` when the CLI no longer
+  writes `config.json`. Copilot 1.0.95 loads plugins live from the marketplace
+  directory instead of copying them, so the byte comparison had nothing to
+  compare and the smoke failed before checking the inventory. The pinned 1.0.69
+  job still compares copied bytes.
 - The `trove-ffmpeg` source row tracked the import SHA instead of `main`, so the
   weekly check compared a stale head and reported `license-changed`. It now
   tracks `main` and pins `license.evidence_digest`, and its `upstream-version`
@@ -45,6 +108,15 @@ release process.
 
 ### Added
 
+- `trove-take-cut`, `trove-broll-ingest`, and `trove-video-edit` in
+  `trove-media`. The first cuts a raw multi-take recording to one keeper per
+  line, taking cut points from the waveform rather than the transcript. The
+  second finds the usable moments in raw footage, grades each from the probed
+  transfer, and catalogs it in a library the user names. The third edits a
+  pre-cut talking-head clip from a single plan, rendering a preview before the
+  final. All three are original skills and call `trove-ffmpeg` for the cutting,
+  grading, and audio. `trove-broll-ingest` ships four LUT grades under
+  `assets/luts/`.
 - `trove-media` plugin with `trove-ffmpeg`, a vendored and byte-synced copy of
   `kajisho5/ffmpeg-skill` (MIT, tracked at 2.5.1). It cuts, joins, reframes,
   captions, normalizes loudness, exports for YouTube, Reels, TikTok, and X, and
@@ -89,6 +161,19 @@ release process.
 
 ### Changed
 
+- The eval judge runs on `claude-sonnet-5-5` at explicit effort `high`, sends the
+  server-side default refusal fallback, and records the served model and whether
+  a fallback was used. A refusal or a truncated response fails with a named error
+  instead of a score. `security-reviewer` uses `opus`.
+- An eval run that stops on a rate limit or an unreachable judge keeps the scores
+  it already has. The results file gains an `aborted` field naming the cause and
+  the task it stopped on. `EVAL_SKIP_SKILLS` names suites to leave out when
+  collecting the rest. That run records them in `skippedSkills`, and `--gate`
+  exits 1 for it even when every selected task passes.
+- `trove-pulse` checks a Hacker News submission's body as well as its title, and
+  a multi-word topic must match its longest word. A title-only check dropped
+  stories that name the topic in the body and kept ones that matched a filler
+  word.
 - Upstream sync can vendor `scripts/**`, apply `replace-literal` rewrites,
   exclude Trove-authored files from the lock via `local_only`, and raise size
   caps per artifact. `bun run validate` secret-scans skill `scripts/**`

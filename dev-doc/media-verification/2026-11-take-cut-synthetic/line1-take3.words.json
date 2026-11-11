@@ -1,0 +1,31 @@
+{
+  "source": "line1-take3.wav",
+  "language": "en",
+  "words": [
+    {
+      "text": "Keep",
+      "start": 0.0,
+      "end": 0.16
+    },
+    {
+      "text": "the",
+      "start": 0.16,
+      "end": 0.36
+    },
+    {
+      "text": "original",
+      "start": 0.36,
+      "end": 0.76
+    },
+    {
+      "text": "recording",
+      "start": 0.76,
+      "end": 1.28
+    },
+    {
+      "text": "safe.",
+      "start": 1.28,
+      "end": 1.66
+    }
+  ]
+}

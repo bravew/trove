@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "engine": "macOS say Samantha, 155 words/minute",
+  "takes": [
+    {
+      "line": 1,
+      "take": 1,
+      "text": "Keep the original recording safe.",
+      "start": 1.0,
+      "end": 3.111125,
+      "file": "line1-take1.wav"
+    },
+    {
+      "line": 1,
+      "take": 2,
+      "text": "Keep the original, uh, sorry. Keep the original recording safe.",
+      "start": 4.1111249999999995,
+      "end": 8.613875,
+      "file": "line1-take2.wav"
+    },
+    {
+      "line": 1,
+      "take": 3,
+      "text": "Keep the original recording safe.",
+      "start": 9.613875,
+      "end": 11.725,
+      "file": "line1-take3.wav"
+    },
+    {
+      "line": 2,
+      "take": 1,
+      "text": "Choose the cleanest reading for each line.",
+      "start": 12.725,
+      "end": 15.021875,
+      "file": "line2-take1.wav"
+    },
+    {
+      "line": 2,
+      "take": 2,
+      "text": "Choose the, um, wrong reading. Sorry. Choose the cleanest reading for each line.",
+      "start": 16.021875,
+      "end": 21.290875,
+      "file": "line2-take2.wav"
+    }
+  ]
+}
