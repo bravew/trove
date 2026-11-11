@@ -59,6 +59,26 @@ test("judge parses unfenced JSON with braces and escaped quotes inside rationale
   }
 });
 
+test("judge skips code braces in prose before the scoring JSON", async () => {
+  const preambles = [
+    "The response would gate audio on `{bgm: false}` before rendering.\n",
+    "A view body like `var body: some View { Text(\"a\") }` is expected.\n",
+    "It passes `{ \"bgm\": false }` as props.\n",
+  ];
+  for (const preamble of preambles) {
+    for (const block of [judgment, "```json\n" + judgment + "\n```"]) {
+      const result = await judge(clientFor(response({ content: [{ type: "text", text: preamble + block }] })));
+      expect(result.weighted_average).toBe(8);
+      expect(result.rationale).toBe("OK");
+    }
+  }
+});
+
+test("a reply with no scoring JSON fails by name and keeps a sample of the text", async () => {
+  const text = "No judgment here, only `{bgm: false}` in prose.";
+  await expect(judge(clientFor(response({ content: [{ type: "text", text }] })))).rejects.toThrow(/no scoring JSON.*bgm: false/s);
+});
+
 test("refusal is named before parsing even if its content is valid scoring JSON", async () => {
   await expect(judge(clientFor(response({
     stop_reason: "refusal", stop_details: { type: "refusal", category: "cyber", explanation: "Declined" },

@@ -212,6 +212,50 @@ function getChangedSkills(): Set<string> {
 
 // ─── LLM Judge ─────────────────────────────────────────────
 
+/** The balanced `{ ... }` starting at `start`, matching structural braces only:
+ * rationale strings can contain braces, escaped quotes, and backslashes. */
+function balancedObject(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth++;
+    else if (char === "}") depth--;
+    if (depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+
+/** The judge's scoring object. Prose before it may quote code with braces,
+ * such as `{bgm: false}`, so the first `{` is not necessarily the judgment.
+ * Fenced ```json blocks are tried first, then every balanced object in order,
+ * and the first one that parses with a `scores` object wins. */
+function extractJudgment(text: string): JudgeResponse {
+  const candidates: string[] = [];
+  for (const match of text.matchAll(/```json\s*\n([\s\S]*?)\n\s*```/g)) candidates.push(match[1].trim());
+  for (let i = text.indexOf("{"); i !== -1; i = text.indexOf("{", i + 1)) {
+    const object = balancedObject(text, i);
+    if (object) candidates.push(object);
+  }
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate) as JudgeResponse;
+      if (value && typeof value.scores === "object" && value.scores !== null) return value;
+    } catch {
+      // Not the judgment; try the next candidate.
+    }
+  }
+  throw new Error(`Judge returned no scoring JSON. Response sample: ${text.slice(0, 300)}`);
+}
+
 export async function judgeWithLLM(
   client: Anthropic,
   skillContent: string,
@@ -303,43 +347,7 @@ Score each criterion 0-10 and compute a weighted average. Return JSON only:
     .map((b) => b.text)
     .join("");
 
-  // Extract JSON block — prefer ```json fenced block, fall back to first { ... }
-  let jsonStr: string | null = null;
-  const fencedMatch = text.match(/```json\s*\n([\s\S]*?)\n\s*```/);
-  if (fencedMatch) {
-    jsonStr = fencedMatch[1].trim();
-  } else {
-    // Match structural braces only; rationale strings can contain braces,
-    // escaped quotes, and escaped backslashes.
-    const startIdx = text.indexOf("{");
-    if (startIdx !== -1) {
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let i = startIdx; i < text.length; i++) {
-        const char = text[i];
-        if (inString) {
-          if (escaped) escaped = false;
-          else if (char === "\\") escaped = true;
-          else if (char === '"') inString = false;
-          continue;
-        }
-        if (char === '"') inString = true;
-        else if (char === "{") depth++;
-        else if (char === "}") depth--;
-        if (depth === 0) {
-          jsonStr = text.slice(startIdx, i + 1);
-          break;
-        }
-      }
-    }
-  }
-
-  if (!jsonStr) {
-    throw new Error(`Judge did not return valid JSON. Response: ${text.slice(0, 200)}`);
-  }
-
-  const parsed = JSON.parse(jsonStr) as JudgeResponse;
+  const parsed = extractJudgment(text);
 
   // Validate and recompute weighted average for safety
   const totalWeight = Object.values(rubric.criteria).reduce((s, c) => s + c.weight, 0);
