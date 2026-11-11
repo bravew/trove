@@ -3,6 +3,8 @@ name: trove-take-cut
 description: "Cut a raw multi-take recording down to one keeper per line. Use when the same lines were read several times and the retakes, stumbles, and dead air should go. Not for footage that is already a single take, and not for a single trim."
 metadata:
   inspired-by: "BuildLoop video skills"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

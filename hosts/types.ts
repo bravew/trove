@@ -152,6 +152,11 @@ export interface PluginYaml {
   skills?: Array<{
     path: string;
     platforms?: string[];
+    /**
+     * Discovery category id from `categories.yaml`. Required: every skill is
+     * assigned explicitly rather than inheriting its plugin's category.
+     */
+    category?: string;
     auto_attach?: { globs?: string[] };
     deprecation?: {
       until?: string;

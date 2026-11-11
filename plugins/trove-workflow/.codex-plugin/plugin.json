@@ -2,10 +2,16 @@
   "name": "trove-workflow",
   "description": "Workflow methodology skills and session bootstrap",
   "version": "2026.11.11",
+  "keywords": [
+    "workflow",
+    "methodology",
+    "bootstrap",
+    "planning"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-workflow",
-    "category": "workflow",
+    "category": "Engineering",
     "shortDescription": "Workflow methodology skills and session bootstrap",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

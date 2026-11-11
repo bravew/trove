@@ -1,6 +1,9 @@
 ---
 name: trove-explain
 description: "Explain code, architecture, or data flow at the appropriate level for the audience. Use when someone needs to understand unfamiliar code, a module, or system design."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

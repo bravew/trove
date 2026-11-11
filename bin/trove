@@ -42,10 +42,30 @@ interface CatalogPlugin {
   platforms: string[];
   skills: string[];
   curated?: boolean;
+  categoryId?: string;
+  categoryLabel?: string;
+}
+
+interface CatalogSkill {
+  name: string;
+  plugin: string;
+  categoryId: string;
+  categoryLabel: string;
+  description: string;
+  platforms: string[];
+}
+
+interface CatalogCategory {
+  id: string;
+  label: string;
+  plugins: string[];
+  skills: string[];
 }
 
 interface Catalog {
   plugins: CatalogPlugin[];
+  categories?: CatalogCategory[];
+  skills?: CatalogSkill[];
 }
 
 interface DepsArtifact {
@@ -82,16 +102,36 @@ function loadDeps(): DepsArtifact | null {
 
 // ─── Catalog commands ────────────────────────────────────────
 
-function cmdSearch(query: string): void {
+function cmdSearch(query: string, skills = false): void {
   const catalog = loadCatalog();
   const q = query.toLowerCase();
+
+  if (skills) {
+    // Each skill matches on its own name, description, or category. A skill is
+    // not returned just because its parent plugin matched.
+    const matches = requireSkillIndex(catalog).filter((skill) =>
+      skill.name.toLowerCase().includes(q) ||
+      skill.description.toLowerCase().includes(q) ||
+      skill.categoryId.toLowerCase().includes(q) ||
+      skill.categoryLabel.toLowerCase().includes(q),
+    );
+    if (matches.length === 0) {
+      console.log(`No skills found for "${query}".`);
+      return;
+    }
+    console.log(`Found ${matches.length} skill(s) matching "${query}":\n`);
+    for (const skill of matches) printSkillSummary(skill);
+    return;
+  }
 
   const matches = catalog.plugins.filter((p) => {
     return (
       p.name.toLowerCase().includes(q) ||
       p.description.toLowerCase().includes(q) ||
       p.tags?.some((t) => t.toLowerCase().includes(q)) ||
-      p.category?.toLowerCase().includes(q)
+      p.category?.toLowerCase().includes(q) ||
+      p.categoryId?.toLowerCase().includes(q) ||
+      p.categoryLabel?.toLowerCase().includes(q)
     );
   });
 
@@ -106,12 +146,113 @@ function cmdSearch(query: string): void {
   }
 }
 
+/**
+ * A category argument matches a plugin's legacy selector, its canonical id,
+ * or its display label. The comparison is case-insensitive, but the values
+ * stay distinct: `workflow` is only the workflow plugin, while `engineering`
+ * is both plugins that share that label.
+ */
+function sameCategory(value: string | undefined, query: string): boolean {
+  return value?.toLowerCase() === query.toLowerCase();
+}
+
+function pluginMatchesCategory(plugin: CatalogPlugin, query: string): boolean {
+  return (
+    sameCategory(plugin.category, query) ||
+    sameCategory(plugin.categoryId, query) ||
+    sameCategory(plugin.categoryLabel, query)
+  );
+}
+
+/** Skills have no legacy selector: they match a canonical id or display label. */
+function skillMatchesCategory(skill: CatalogSkill, query: string): boolean {
+  return sameCategory(skill.categoryId, query) || sameCategory(skill.categoryLabel, query);
+}
+
+function requireSkillIndex(catalog: Catalog): CatalogSkill[] {
+  if (!catalog.skills) {
+    console.error("catalog.json has no skill index. Rebuild it with `bun run build`.");
+    process.exit(1);
+  }
+  return catalog.skills;
+}
+
+interface TaxonomyEntry {
+  id: string;
+  label: string;
+}
+
+/** The full reference vocabulary, read from categories.yaml. */
+function loadVocabulary(): TaxonomyEntry[] {
+  const file = path.join(ROOT, "categories.yaml");
+  if (!fs.existsSync(file)) return [];
+  const raw = YAML.parse(fs.readFileSync(file, "utf-8")) as { categories?: unknown };
+  const list = Array.isArray(raw?.categories) ? raw.categories : [];
+  return list.filter((entry): entry is TaxonomyEntry =>
+    !!entry && typeof entry === "object" &&
+    typeof (entry as TaxonomyEntry).id === "string" &&
+    typeof (entry as TaxonomyEntry).label === "string");
+}
+
+/**
+ * Rejects a value that names no category in use, so a typo fails loudly
+ * instead of printing an empty list. Legacy plugin selectors count as known.
+ */
+function assertKnownCategory(catalog: Catalog, query: string): void {
+  const known =
+    catalog.plugins.some((plugin) => pluginMatchesCategory(plugin, query)) ||
+    (catalog.skills ?? []).some((skill) => skillMatchesCategory(skill, query)) ||
+    loadVocabulary().some((entry) => sameCategory(entry.id, query) || sameCategory(entry.label, query));
+  if (known) return;
+  console.error(`Unknown category '${query}'. Run \`trove categories\` to see the categories in use.`);
+  process.exit(1);
+}
+
+function cmdCategories(all: boolean): void {
+  const catalog = loadCatalog();
+  const categories = catalog.categories ?? [];
+  if (categories.length === 0) {
+    console.log("No categories. Rebuild the catalog with `bun run build`.");
+    return;
+  }
+  console.log(`${categories.length} categor${categories.length === 1 ? "y" : "ies"} with content:\n`);
+  for (const category of categories) {
+    console.log(`${category.label} (${category.id})`);
+    console.log(`  plugins: ${category.plugins.length}   skills: ${category.skills.length}`);
+  }
+  if (!all) return;
+
+  const used = new Set(categories.map((category) => category.id));
+  const unused = loadVocabulary().filter((entry) => !used.has(entry.id));
+  console.log(`\n${unused.length} more in the reference vocabulary, with no plugins or skills yet:\n`);
+  for (const entry of unused) console.log(`${entry.label} (${entry.id})`);
+}
+
+function cmdListSkills(options: { category?: string; platform?: string }): void {
+  const catalog = loadCatalog();
+  let skills = requireSkillIndex(catalog);
+  if (options.category) {
+    assertKnownCategory(catalog, options.category);
+    skills = skills.filter((skill) => skillMatchesCategory(skill, options.category!));
+  }
+  if (options.platform) {
+    skills = skills.filter((skill) => skill.platforms.includes(options.platform!));
+  }
+  if (skills.length === 0) {
+    console.log("No skills found matching the filters.");
+    return;
+  }
+  console.log(`${skills.length} skill(s):\n`);
+  for (const skill of skills) printSkillSummary(skill);
+}
+
 function cmdList(options: { category?: string; role?: string; platform?: string }): void {
   const catalog = loadCatalog();
   let plugins = catalog.plugins;
 
   if (options.category) {
-    plugins = plugins.filter((p) => p.category === options.category);
+    assertKnownCategory(catalog, options.category);
+    plugins = plugins.filter((p) => pluginMatchesCategory(p, options.category!));
   }
   if (options.role) {
     plugins = plugins.filter((p) => p.roles?.includes(options.role!));
@@ -157,7 +298,7 @@ function cmdInfo(name: string): void {
   console.log(`\n${plugin.name} v${plugin.version || "?"}`);
   console.log("─".repeat(40));
   console.log(`Description: ${plugin.description}`);
-  console.log(`Category:    ${plugin.category || "—"}`);
+  console.log(`Category:    ${plugin.categoryLabel ? `${plugin.categoryLabel} (${plugin.categoryId})` : plugin.category || "—"}`);
   console.log(`Roles:       ${plugin.roles?.join(", ") || "all"}`);
   console.log(`Platforms:   ${plugin.platforms.join(", ") || "—"}`);
   console.log(`Tags:        ${plugin.tags?.join(", ") || "—"}`);
@@ -208,7 +349,9 @@ function cmdSkillInfo(catalog: Catalog, pluginName: string, skillName: string): 
 
   console.log(`\n${plugin.name}:${skillName} v${plugin.version || "?"}`);
   console.log("─".repeat(40));
+  const indexed = catalog.skills?.find((skill) => skill.plugin === plugin.name && skill.name === skillName);
   console.log(`Plugin:      ${plugin.name}`);
+  if (indexed) console.log(`Category:    ${indexed.categoryLabel} (${indexed.categoryId})`);
   console.log(`Description: ${parsed?.description || "—"}`);
   console.log(`Source:      ${skillFile ? path.relative(ROOT, skillFile) : "—"}`);
 
@@ -237,8 +380,9 @@ function cmdHealth(): void {
   const totalSkills = catalog.plugins.reduce((s, p) => s + p.skills.length, 0);
   console.log(`Skills:      ${totalSkills}`);
 
-  const categories = new Set(catalog.plugins.map((p) => p.category).filter(Boolean));
-  console.log(`Categories:  ${categories.size} (${Array.from(categories).join(", ")})`);
+  const categories = catalog.categories?.map((category) => category.label) ??
+    Array.from(new Set(catalog.plugins.map((p) => p.category).filter(Boolean)));
+  console.log(`Categories:  ${categories.length} (${categories.join(", ")})`);
 
   const platforms = new Set(catalog.plugins.flatMap((p) => p.platforms));
   console.log(`Platforms:   ${platforms.size} (${Array.from(platforms).join(", ")})`);
@@ -261,6 +405,13 @@ function cmdHealth(): void {
 
 // ─── Catalog helpers ────────────────────────────────────────
 
+function printSkillSummary(skill: CatalogSkill): void {
+  console.log(`  ${skill.plugin}:${skill.name}`);
+  console.log(`    ${skill.description || "—"}`);
+  console.log(`    category: ${skill.categoryLabel} (${skill.categoryId})   platforms: ${skill.platforms.join(", ")}`);
+  console.log("");
+}
+
 function printPluginSummary(p: CatalogPlugin): void {
   const version = p.version ? ` v${p.version}` : "";
   const curated = p.curated ? " [curated]" : "";
@@ -268,6 +419,7 @@ function printPluginSummary(p: CatalogPlugin): void {
 
   console.log(`  ${p.name}${version}${curated}`);
   console.log(`    ${p.description}`);
+  if (p.categoryLabel) console.log(`    category: ${p.categoryLabel} (${p.categoryId})`);
   if (p.tags?.length) console.log(`    tags: ${p.tags.join(", ")}`);
   console.log(`    roles: ${p.roles?.join(", ") || "all"}${platforms}`);
   if (p.skills.length > 0) console.log(`    skills (${p.skills.length}): ${p.skills.join(", ")}`);
@@ -592,8 +744,10 @@ function usage(): void {
   console.log(`Trove CLI v${version}`);
   console.log("");
   console.log("Catalog commands:");
-  console.log("  search <query>              Search plugins by keyword");
+  console.log("  search [--skills] <query>   Search plugins, or skills with --skills");
   console.log("  list [--category=X]         List plugins (filter by category, role, platform)");
+  console.log("  list --skills [--category=X] List skills (filter by category, platform)");
+  console.log("  categories [--all]          Categories in use; --all adds the full vocabulary");
   console.log("  info <plugin[:skill]>       Show plugin or skill details");
   console.log("  health                      Check marketplace health");
   console.log("");
@@ -613,6 +767,8 @@ function usage(): void {
   console.log("Examples:");
   console.log('  trove search "security"');
   console.log("  trove list --role=design");
+  console.log("  trove list --skills --category=code");
+  console.log('  trove list --category="IT & security"');
   console.log("  trove info trove-dev");
   console.log("");
   console.log(`State: ${troveHome()}  (override with TROVE_HOME)`);
@@ -629,24 +785,34 @@ const [command, ...commandArgs] = process.argv.slice(2);
 const [sub, ...rest] = commandArgs;
 
 switch (command) {
-  case "search":
-    if (!commandArgs[0]) {
-      console.error("Usage: trove search <query>");
+  case "search": {
+    const skills = commandArgs.includes("--skills");
+    const terms = commandArgs.filter((arg) => arg !== "--skills");
+    if (!terms[0]) {
+      console.error("Usage: trove search [--skills] <query>");
       process.exit(1);
     }
-    cmdSearch(commandArgs.join(" "));
+    cmdSearch(terms.join(" "), skills);
     break;
+  }
 
   case "list": {
     const options: { category?: string; role?: string; platform?: string } = {};
+    // Split on the first "=" only: a label such as "IT & security" stays whole.
+    const valueOf = (arg: string) => arg.slice(arg.indexOf("=") + 1);
     for (const arg of commandArgs) {
-      if (arg.startsWith("--category=")) options.category = arg.split("=")[1];
-      if (arg.startsWith("--role=")) options.role = arg.split("=")[1];
-      if (arg.startsWith("--platform=")) options.platform = arg.split("=")[1];
+      if (arg.startsWith("--category=")) options.category = valueOf(arg);
+      if (arg.startsWith("--role=")) options.role = valueOf(arg);
+      if (arg.startsWith("--platform=")) options.platform = valueOf(arg);
     }
-    cmdList(options);
+    if (commandArgs.includes("--skills")) cmdListSkills(options);
+    else cmdList(options);
     break;
   }
+
+  case "categories":
+    cmdCategories(commandArgs.includes("--all"));
+    break;
 
   case "info":
     if (!commandArgs[0]) {

@@ -5,6 +5,8 @@ when_to_use: "why does this work this way; why did we choose; design rationale; 
 user-invocable: true
 metadata:
   inspired-by: "Lauren Tan pstack why skill"
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

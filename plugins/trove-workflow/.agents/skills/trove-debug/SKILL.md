@@ -1,6 +1,9 @@
 ---
 name: trove-debug
 description: "Systematic debugging workflow. Use for bug reports, failing tests, broken behavior, red CI, regressions, or unexplained production symptoms."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

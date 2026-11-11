@@ -2,6 +2,9 @@
 name: trove-security-review
 description: "Security review skill that checks code for common vulnerabilities. Covers OWASP Top 10, secret detection, and secure coding patterns."
 when_to_use: "security review; owasp check; vulnerability audit"
+metadata:
+  trove-category: it-security
+  trove-category-label: "IT & security"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

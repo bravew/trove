@@ -3,13 +3,16 @@
  * Scaffold a new plugin with standard directory structure.
  *
  * Usage:
- *   bun run scaffold:plugin -- --name trove-testing --role dev
+ *   bun run scaffold:plugin -- --name trove-testing --role dev --category engineering
  *   bun run scaffold:plugin -- --name trove-ops --role devops --category operations
+ *
+ * `--category` is the plugin's browsing category id from categories.yaml.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
+import { loadTaxonomy } from "./lib/categories";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
@@ -20,7 +23,7 @@ function parseArgs(): { name: string; role: string; category: string } {
   const args = process.argv.slice(2);
   let name = "";
   let role = "dev";
-  let category = "development";
+  let category = "engineering";
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--name" && args[i + 1]) name = args[++i];
@@ -29,12 +32,18 @@ function parseArgs(): { name: string; role: string; category: string } {
   }
 
   if (!name) {
-    console.error("Usage: bun run scaffold:plugin -- --name <plugin-name> [--role dev] [--category development]");
+    console.error("Usage: bun run scaffold:plugin -- --name <plugin-name> [--role dev] [--category engineering]");
     process.exit(1);
   }
 
   if (!name.startsWith("trove-")) {
     console.error(`Plugin name must start with 'trove-'. Got: ${name}`);
+    process.exit(1);
+  }
+
+  const known = loadTaxonomy(ROOT).categories.map((entry) => entry.id);
+  if (!known.includes(category)) {
+    console.error(`Unknown --category '${category}'. Choose an id from categories.yaml.`);
     process.exit(1);
   }
 

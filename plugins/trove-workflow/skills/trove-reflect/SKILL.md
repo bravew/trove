@@ -3,6 +3,9 @@ name: trove-reflect
 description: "Mine the current session for durable learnings and route each into a concrete edit — a skill change or a learnings entry — never auto-applied. Use when the user says \"reflect\", or after a session that surfaced a recurring correction or a non-obvious project quirk."
 when_to_use: "reflect on this session; what did we learn; capture learnings"
 user-invocable: true
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

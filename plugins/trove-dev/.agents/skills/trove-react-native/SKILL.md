@@ -4,6 +4,8 @@ description: "React Native and Expo best practices for building performant mobil
 metadata:
   source: vercel-labs/agent-skills
   upstream-version: 1.0.0
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

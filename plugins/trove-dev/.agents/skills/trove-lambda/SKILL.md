@@ -4,6 +4,9 @@ description: "AWS Lambda handler patterns with CDK infrastructure conventions. A
 paths:
   - "**/lambda_handler.py"
   - "**/lambda_function.py"
+metadata:
+  trove-category: servers-cloud
+  trove-category-label: "Servers & cloud"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

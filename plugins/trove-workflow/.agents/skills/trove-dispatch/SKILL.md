@@ -1,6 +1,9 @@
 ---
 name: trove-dispatch
 description: "Parallel-agent dispatch workflow. Use when a request contains multiple independent tasks that can be safely delegated."
+metadata:
+  trove-category: ai-models-agents
+  trove-category-label: "AI models & agents"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

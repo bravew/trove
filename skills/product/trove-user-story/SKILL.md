@@ -2,6 +2,9 @@
 name: trove-user-story
 description: "User story writing skill. Generates well-structured user stories with acceptance criteria, edge cases, and test scenarios."
 when_to_use: "user story; acceptance criteria; write a story"
+metadata:
+  trove-category: product
+  trove-category-label: Product
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

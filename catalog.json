@@ -50,7 +50,9 @@
         "trove-principle-migrate-then-delete",
         "trove-principle-idempotency",
         "trove-principle-encode-in-structure"
-      ]
+      ],
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering"
     },
     {
       "name": "trove-dev",
@@ -97,7 +99,9 @@
         "trove-tdd",
         "trove-architect",
         "trove-perf"
-      ]
+      ],
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering"
     },
     {
       "name": "trove-design",
@@ -129,7 +133,9 @@
         "trove-component-spec",
         "trove-visual-parity",
         "trove-diagram-design"
-      ]
+      ],
+      "categoryId": "design",
+      "categoryLabel": "Design"
     },
     {
       "name": "trove-product",
@@ -160,7 +166,9 @@
         "trove-spec",
         "trove-user-story",
         "trove-release-notes"
-      ]
+      ],
+      "categoryId": "product",
+      "categoryLabel": "Product"
     },
     {
       "name": "trove-security",
@@ -190,7 +198,9 @@
       "skills": [
         "trove-security-review",
         "trove-secret-scan"
-      ]
+      ],
+      "categoryId": "it-security",
+      "categoryLabel": "IT & security"
     },
     {
       "name": "trove-infra",
@@ -222,7 +232,9 @@
         "trove-terraform",
         "trove-cdk",
         "trove-docker"
-      ]
+      ],
+      "categoryId": "servers-cloud",
+      "categoryLabel": "Servers & cloud"
     },
     {
       "name": "trove-research",
@@ -256,7 +268,9 @@
       "skills": [
         "trove-pulse",
         "trove-pulse-cn"
-      ]
+      ],
+      "categoryId": "research",
+      "categoryLabel": "Research"
     },
     {
       "name": "trove-doc",
@@ -294,7 +308,9 @@
         "trove-json-canvas",
         "trove-obsidian-cli",
         "trove-web-clip"
-      ]
+      ],
+      "categoryId": "notes-memory",
+      "categoryLabel": "Notes & memory"
     },
     {
       "name": "trove-media",
@@ -335,6 +351,1270 @@
         "trove-take-cut",
         "trove-broll-ingest",
         "trove-video-edit"
+      ],
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media"
+    }
+  ],
+  "categories": [
+    {
+      "id": "ai-models-agents",
+      "label": "AI models & agents",
+      "plugins": [],
+      "skills": [
+        "trove-arena",
+        "trove-dispatch",
+        "trove-write-skill",
+        "using-trove"
+      ]
+    },
+    {
+      "id": "code",
+      "label": "Code",
+      "plugins": [],
+      "skills": [
+        "trove-architect",
+        "trove-perf",
+        "trove-principle-data-shape",
+        "trove-principle-encode-in-structure",
+        "trove-principle-idempotency",
+        "trove-principle-laziness",
+        "trove-principle-migrate-then-delete",
+        "trove-principle-type-discipline",
+        "trove-python",
+        "trove-react",
+        "trove-react-best-practices",
+        "trove-react-native",
+        "trove-react-view-transitions",
+        "trove-refactor",
+        "trove-swift",
+        "trove-tdd",
+        "trove-typescript",
+        "trove-vue"
+      ]
+    },
+    {
+      "id": "design",
+      "label": "Design",
+      "plugins": [
+        "trove-design"
+      ],
+      "skills": [
+        "trove-a11y",
+        "trove-component-spec",
+        "trove-design-review",
+        "trove-visual-parity"
+      ]
+    },
+    {
+      "id": "designs-media",
+      "label": "Designs & media",
+      "plugins": [
+        "trove-media"
+      ],
+      "skills": [
+        "trove-beat-sync",
+        "trove-broll-ingest",
+        "trove-diagram-design",
+        "trove-ffmpeg",
+        "trove-json-canvas",
+        "trove-product-video",
+        "trove-shot-recipes",
+        "trove-take-cut",
+        "trove-video-edit",
+        "trove-video-review"
+      ]
+    },
+    {
+      "id": "engineering",
+      "label": "Engineering",
+      "plugins": [
+        "trove-dev",
+        "trove-workflow"
+      ],
+      "skills": [
+        "trove-brainstorm",
+        "trove-debug",
+        "trove-execute-plan",
+        "trove-explain",
+        "trove-plan",
+        "trove-reflect",
+        "trove-show-work",
+        "trove-test-gap-audit",
+        "trove-verify",
+        "trove-why",
+        "trove-worktree"
+      ]
+    },
+    {
+      "id": "files-documents",
+      "label": "Files & documents",
+      "plugins": [],
+      "skills": [
+        "trove-web-clip"
+      ]
+    },
+    {
+      "id": "it-security",
+      "label": "IT & security",
+      "plugins": [
+        "trove-security"
+      ],
+      "skills": [
+        "trove-secret-scan",
+        "trove-security-review"
+      ]
+    },
+    {
+      "id": "notes-memory",
+      "label": "Notes & memory",
+      "plugins": [
+        "trove-doc"
+      ],
+      "skills": [
+        "trove-obsidian-bases",
+        "trove-obsidian-cli",
+        "trove-obsidian-markdown"
+      ]
+    },
+    {
+      "id": "product",
+      "label": "Product",
+      "plugins": [
+        "trove-product"
+      ],
+      "skills": [
+        "trove-autoplan",
+        "trove-spec",
+        "trove-user-story"
+      ]
+    },
+    {
+      "id": "pull-requests",
+      "label": "Pull requests",
+      "plugins": [],
+      "skills": [
+        "trove-commit",
+        "trove-receive-review",
+        "trove-review",
+        "trove-ship"
+      ]
+    },
+    {
+      "id": "reference-docs",
+      "label": "Reference docs",
+      "plugins": [],
+      "skills": [
+        "trove-docs-sync-audit"
+      ]
+    },
+    {
+      "id": "research",
+      "label": "Research",
+      "plugins": [
+        "trove-research"
+      ],
+      "skills": [
+        "trove-pulse",
+        "trove-pulse-cn"
+      ]
+    },
+    {
+      "id": "servers-cloud",
+      "label": "Servers & cloud",
+      "plugins": [
+        "trove-infra"
+      ],
+      "skills": [
+        "trove-cdk",
+        "trove-docker",
+        "trove-lambda",
+        "trove-terraform"
+      ]
+    },
+    {
+      "id": "writing",
+      "label": "Writing",
+      "plugins": [],
+      "skills": [
+        "trove-release-notes",
+        "trove-unslop"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "name": "trove-a11y",
+      "plugin": "trove-design",
+      "categoryId": "design",
+      "categoryLabel": "Design",
+      "description": "Accessibility checking skill for web and mobile interfaces. Auto-activates on UI component files. Checks WCAG compliance and ARIA patterns.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-architect",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Design the shape before the code: sketch types, signatures, and module structure with not-implemented bodies, agree, then fill in. Scrap the sketch when implementation proves it wrong. Use for non-trivial work where jumping straight to code would lock in the wrong shape.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-arena",
+      "plugin": "trove-workflow",
+      "categoryId": "ai-models-agents",
+      "categoryLabel": "AI models & agents",
+      "description": "Spawn N parallel candidate attempts at one hard, novel artifact, pick the strongest base, graft the best ideas from the losers into it, then verify. A heavyweight technique — most work routes to trove-architect instead. Use only for a genuinely novel, hard-to-reverse design decision with no precedent.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-autoplan",
+      "plugin": "trove-workflow",
+      "categoryId": "product",
+      "categoryLabel": "Product",
+      "description": "Front-door planning workflow. Take an idea and produce implementation-ready output by composing the Trove product skills (spec → user stories → release-note preview). Defers all detail to the leaf skills it calls.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-beat-sync",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Fit and validate a music beat grid before storyboarding, map motion and cuts to beatF(n), control full-frame impacts, compensate measured audio offsets, and verify beat sync on delivered renders. Use when a video timeline needs music-driven timing or BGM and no-BGM versions.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-brainstorm",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Feature and design brainstorming gate. Use before implementing a new feature, UI, refactor, or product change when no approved design exists.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-broll-ingest",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Find the usable moments in raw footage, cut each one, grade it, and add it to a b-roll library. Use when a raw clip or a folder of raws needs selecting, grading, and cataloguing. Not for a talking-head script and not for a finished edit.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-cdk",
+      "plugin": "trove-infra",
+      "categoryId": "servers-cloud",
+      "categoryLabel": "Servers & cloud",
+      "description": "AWS CDK (TypeScript) conventions for infrastructure as code. Auto-activates on CDK project files.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-commit",
+      "plugin": "trove-dev",
+      "categoryId": "pull-requests",
+      "categoryLabel": "Pull requests",
+      "description": "Git commit workflow and message conventions. Use when creating, drafting, or reviewing atomic commits with conventional messages.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-component-spec",
+      "plugin": "trove-design",
+      "categoryId": "design",
+      "categoryLabel": "Design",
+      "description": "Generate component specifications from design requirements. Produces structured specs with props, states, interactions, and accessibility requirements.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-debug",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Systematic debugging workflow. Use for bug reports, failing tests, broken behavior, red CI, regressions, or unexplained production symptoms.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-design-review",
+      "plugin": "trove-design",
+      "categoryId": "design",
+      "categoryLabel": "Design",
+      "description": "Design review skill for evaluating UI/UX implementations against design specs. Checks visual fidelity, interaction patterns, and design system compliance.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-diagram-design",
+      "plugin": "trove-design",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Create diagrams and charts as self-contained HTML files with inline SVG and an editorial design system, exported to SVG or PNG: architecture and architecture delta, flowchart, sequence, state machine, ER and database schema, swimlane, timeline, Gantt, org chart, tree, quadrant, Venn, pyramid, Sankey, treemap, heatmap, bar, line, scatter, Wardley map, user journey, service blueprint, deployment, dependency graph, UML class, and more. Imports draw.io, Mermaid, Excalidraw, and PlantUML sources and redraws them, and onboards a project's brand tokens first. Use when the user asks for a diagram, chart, or visual explanation as a file. Do not use it for JSON Canvas boards (trove-json-canvas) or for plotting code in a charting library.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-dispatch",
+      "plugin": "trove-workflow",
+      "categoryId": "ai-models-agents",
+      "categoryLabel": "AI models & agents",
+      "description": "Parallel-agent dispatch workflow. Use when a request contains multiple independent tasks that can be safely delegated.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-docker",
+      "plugin": "trove-infra",
+      "categoryId": "servers-cloud",
+      "categoryLabel": "Servers & cloud",
+      "description": "Dockerfile and Docker Compose best practices. Auto-activates on Docker files.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-docs-sync-audit",
+      "plugin": "trove-dev",
+      "categoryId": "reference-docs",
+      "categoryLabel": "Reference docs",
+      "description": "Read-only documentation drift audit comparing what the docs claim against what the code does. Covers READMEs, setup guides, API and env docs, changelogs, examples, and generated docs. Use when asked whether docs are stale, missing, or inconsistent after a code change. This is not a code review.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-execute-plan",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Execute an approved implementation plan one checkpoint at a time with verification before advancing.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-explain",
+      "plugin": "trove-dev",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Explain code, architecture, or data flow at the appropriate level for the audience. Use when someone needs to understand unfamiliar code, a module, or system design.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-ffmpeg",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Edit video and audio locally with the vendored ffmpeg engine: cut, trim, and join clips; reframe and resize to 9:16 or 1:1; change speed; burn in captions, subtitles, logos, and titles; remove silence; sync multicam and external mics; normalise loudness; convert HDR to SDR; apply LUTs; mix background music with ducking; export for YouTube, Reels, TikTok, and X; run delivery compliance checks; detect scenes and build highlight reels, contact sheets, and whole-edit project files. Use when the request names an actual media file, a delivery target, or an edit ffmpeg performs. Do not use it for questions that merely mention video in passing.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-json-canvas",
+      "plugin": "trove-doc",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Create, edit, and validate JSON Canvas .canvas files with text, file, link, and group nodes and directed edges. Use for portable visual boards and Obsidian canvases, not HTML canvas code, images, slides, or Mermaid diagrams.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-lambda",
+      "plugin": "trove-dev",
+      "categoryId": "servers-cloud",
+      "categoryLabel": "Servers & cloud",
+      "description": "AWS Lambda handler patterns with CDK infrastructure conventions. Auto-activates when working with Lambda handler or CDK files. Covers handler structure, SQS/SNS parsing, IPC patterns, Powertools logging, and CDK best practices.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-obsidian-bases",
+      "plugin": "trove-doc",
+      "categoryId": "notes-memory",
+      "categoryLabel": "Notes & memory",
+      "description": "Create and repair Obsidian Bases .base files with note filters, formulas, table or card views, grouping, and summaries. Use for Obsidian note views, not SQL databases, spreadsheets, or generic tables.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-obsidian-cli",
+      "plugin": "trove-doc",
+      "categoryId": "notes-memory",
+      "categoryLabel": "Notes & memory",
+      "description": "Use the Obsidian CLI to search, read, and make requested changes to an established vault, or inspect an Obsidian plugin during development. Use for explicit Obsidian app operations; requires an available desktop CLI.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-obsidian-markdown",
+      "plugin": "trove-doc",
+      "categoryId": "notes-memory",
+      "categoryLabel": "Notes & memory",
+      "description": "Create and edit Obsidian notes with properties, wikilinks, block references, embeds, and callouts. Use for Markdown in a confirmed Obsidian vault or an explicit request for Obsidian syntax, not ordinary repository Markdown.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-perf",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Diagnose and fix a measured performance problem against a baseline: measure first, fix, re-measure, and cite the delta with an artifact path. Use for slow endpoints, slow queries, or any \"make this faster\" backed by a measurement.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-plan",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Implementation planning workflow. Use after brainstorm approval or for multi-step work that needs verifiable checkpoints.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-data-shape",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Foundational Thinking — get the data shape right before writing logic. Choose core types and structures first; a late data-structure change is a rewrite, early it is a one-line diff. Use before writing logic, choosing core types, or sequencing scaffold-vs-feature work.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-encode-in-structure",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Encode Lessons in Structure — when you catch yourself writing the same instruction a second time, encode it as a lint, rubric, metadata flag, runtime check, or script instead of more prose. The repeated instruction is the symptom. Use when a correction recurs, or when tempted to add another \"remember to…\" line.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-idempotency",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Make Operations Idempotent — design commands, lifecycle steps, and processing loops to converge to the same end state regardless of how many times they run or where a previous run stopped. Use when designing operations that run amid crashes, restarts, and retries (jobs, deploys, lifecycle steps, queues).",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-laziness",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Laziness Protocol — aim for the most result with the least code and complexity; bias toward deletion and the smallest change that solves the problem. Use when refactoring, weighing diff size, or tempted to add abstractions, layers, or signal threading.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-migrate-then-delete",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Migrate Callers Then Delete Legacy APIs — when introducing a new internal API while old callers exist, migrate every caller and delete the old API in the same refactor wave instead of leaving a compatibility layer. Use when replacing an internal API, function, or module that has no external dependents.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-principle-type-discipline",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Type System Discipline — treat the type checker as a proof assistant: make illegal states unrepresentable, brand semantic primitives, parse external data at boundaries, exhaust variants, don't lie to the compiler. Applies to any statically typed language. Use when designing types or a signature in TypeScript, Python (hints/Pydantic), Swift, or similar.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-product-video",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Plan and produce a cinematic product promo from a frontend project or product interface. Use for a full product video, a video-shotcraft template adaptation, or a requested vertical re-composition. Do not use for general video editing.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-pulse",
+      "plugin": "trove-research",
+      "categoryId": "research",
+      "categoryLabel": "Research",
+      "description": "Research what people actually said about a topic in the last 30 days across Reddit, X, YouTube, Hacker News, GitHub, Polymarket, and the web (upstream: last30days), ranked by real engagement rather than editorial pick. Use for market and competitor checks, sentiment reads, launch reception, and \"what changed recently\" questions.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-pulse-cn",
+      "plugin": "trove-research",
+      "categoryId": "research",
+      "categoryLabel": "Research",
+      "description": "Research what Chinese internet users actually said in the last 30 days across Weibo, Xiaohongshu (RED), Bilibili, Zhihu, Douyin, WeChat public accounts, Baidu and Toutiao: engagement-weighted ranking, cross-platform clustering, cited Markdown/JSON/HTML reports. Also shows today's cross-platform hot-search board (全网热榜, --hot) and can add Hacker News / GitHub / Reddit or an installed upstream last30days for X/YouTube/TikTok.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-python",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Python/FastAPI coding conventions and best practices. Auto-activates when working with Python files. Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-react",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "React 19 coding conventions and performance patterns. Auto-activates when working with React/TypeScript files. Covers hooks, state management, TanStack Query, Zustand, immutable updates, and component conventions.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-react-best-practices",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "React and Next.js performance optimization guidelines (Vercel Engineering, 70 rules across 8 categories). Use when writing, reviewing, or refactoring React code specifically for performance: eliminating waterfalls, bundle size, re-render optimization, or server/client data fetching. Complements trove-react, which carries project-specific conventions.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-react-native",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "React Native and Expo best practices for building performant mobile apps. Use when building React Native components, optimizing list/scroll performance, implementing Reanimated animations, or working with native modules. Triggers on tasks involving React Native, Expo, mobile performance, FlashList, or native platform APIs. User-invocable; no auto-attach (no RN project in the current Trove workspace).",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-react-view-transitions",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Implement smooth, native-feeling animations with React's View Transition API (the `ViewTransition` component, `addTransitionType`, CSS view-transition pseudo-elements). Use for page transitions, shared element morphs, Suspense reveals, list identity, or animating between React UI states without a third-party animation library.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-receive-review",
+      "plugin": "trove-workflow",
+      "categoryId": "pull-requests",
+      "categoryLabel": "Pull requests",
+      "description": "Review-feedback handling workflow. Use when the user provides PR comments, code review feedback, or requested changes.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-refactor",
+      "plugin": "trove-workflow",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Behavior-preserving change to structure: rename, extract, inline, dedupe, move, or migrate an internal API. Pin behavior first, migrate callers and delete the legacy API in one wave, prove behavior unchanged on the real artifact. Use for refactors and internal-API migrations.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-reflect",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Mine the current session for durable learnings and route each into a concrete edit — a skill change or a learnings entry — never auto-applied. Use when the user says \"reflect\", or after a session that surfaced a recurring correction or a non-obvious project quirk.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-release-notes",
+      "plugin": "trove-product",
+      "categoryId": "writing",
+      "categoryLabel": "Writing",
+      "description": "Release notes generator. Creates user-facing release notes from git history, PR descriptions, and changelog entries.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-review",
+      "plugin": "trove-dev",
+      "categoryId": "pull-requests",
+      "categoryLabel": "Pull requests",
+      "description": "Code review skill that checks for common issues, security vulnerabilities, and style violations. Use when reviewing code changes or PRs.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-secret-scan",
+      "plugin": "trove-security",
+      "categoryId": "it-security",
+      "categoryLabel": "IT & security",
+      "description": "Scan files for accidentally committed secrets, API keys, and credentials. Flags common secret patterns and suggests remediation.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-security-review",
+      "plugin": "trove-security",
+      "categoryId": "it-security",
+      "categoryLabel": "IT & security",
+      "description": "Security review skill that checks code for common vulnerabilities. Covers OWASP Top 10, secret detection, and secure coding patterns.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-ship",
+      "plugin": "trove-workflow",
+      "categoryId": "pull-requests",
+      "categoryLabel": "Pull requests",
+      "description": "Front-door ship workflow. Prepare a change for landing by composing the review and commit skills, surfacing a final Decision Gate before any destructive action. Thin orchestrator — defers detail to leaf skills.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-shot-recipes",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Resolve video-shotcraft shot cards and adapt their motion for Remotion scenes. Use when a user names a shot card or asks to find and apply a shot recipe.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-show-work",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Keep a reviewable decision trail for long-running or unattended work: an append-only TSV log with one row per decision (what, why, evidence, result). Use for autonomous or multi-phase runs, or work a human reviews after stepping away.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-spec",
+      "plugin": "trove-product",
+      "categoryId": "product",
+      "categoryLabel": "Product",
+      "description": "Product spec writing skill. Generates structured feature specifications with user stories, acceptance criteria, and technical considerations.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-swift",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Swift 6 and SwiftUI coding conventions for iOS development. Auto-activates when working with Swift files. Covers @Observable, async/await, NavigationStack, Swift Testing, and accessibility.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-take-cut",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Cut a raw multi-take recording down to one keeper per line. Use when the same lines were read several times and the retakes, stumbles, and dead air should go. Not for footage that is already a single take, and not for a single trim.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-tdd",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Write a focused regression test that fails before the fix and passes after. Use when the user asks for TDD, a failing test, or a regression test, or when a bug has a cheap local test target. Skip when the test path is expensive, integration-heavy, or unclear.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-terraform",
+      "plugin": "trove-infra",
+      "categoryId": "servers-cloud",
+      "categoryLabel": "Servers & cloud",
+      "description": "Terraform/OpenTofu conventions and best practices. Auto-activates on .tf files. Covers module structure, state management, and security patterns.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-test-gap-audit",
+      "plugin": "trove-dev",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Read-only audit for missing, weak, stale, or mis-scoped test coverage. Audits the whole repository when no scope is named, or one feature, PR, branch, route, service, or risky change when it is. Use when asked what tests are missing, whether coverage is enough, or what regression tests would prove a change safe. This is not a bug hunt and not a security review; use trove-tdd to write the test it recommends.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-typescript",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "TypeScript type-system discipline for any .ts/.tsx file: make illegal states unrepresentable, validate at boundaries, avoid as/any. Use when reading or editing TypeScript that isn't covered by a framework-specific skill. Defers to trove-react / trove-react-best-practices on .tsx component work.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-unslop",
+      "plugin": "trove-workflow",
+      "categoryId": "writing",
+      "categoryLabel": "Writing",
+      "description": "Cut AI tells from writing — PR descriptions, release notes, specs, commit bodies, and replies. Use before finalizing prose, or when the user asks to clean up, de-slop, or make text sound human.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-user-story",
+      "plugin": "trove-product",
+      "categoryId": "product",
+      "categoryLabel": "Product",
+      "description": "User story writing skill. Generates well-structured user stories with acceptance criteria, edge cases, and test scenarios.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-verify",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Completion verification workflow. Use before claiming done, fixed, complete, ready, or shipped.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-video-edit",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Edit a pre-cut talking-head video: captions, overlays, zooms, and a music bed. Use when the cut is already made and the edit is what remains. Not for raw multi-take footage and not for finding b-roll in a clip.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-video-review",
+      "plugin": "trove-media",
+      "categoryId": "designs-media",
+      "categoryLabel": "Designs & media",
+      "description": "Independently review a finished product video against its brief, plan, shot references, technical requirements, and data-safety rules. Produce a frame-numbered findings report before delivery.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-visual-parity",
+      "plugin": "trove-design",
+      "categoryId": "design",
+      "categoryLabel": "Design",
+      "description": "Achieve pixel-exact UI equivalence between two implementations via image diff. Establish a baseline harness first, migrate one component at a time, verify each with a screenshot diff within a tuned threshold. Use when migrating a styling system or matching a new implementation (e.g. React) to an existing one (e.g. Vue).",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-vue",
+      "plugin": "trove-dev",
+      "categoryId": "code",
+      "categoryLabel": "Code",
+      "description": "Vue 3 Composition API conventions and best practices. Auto-activates when working with Vue single-file components. Covers reactivity, component patterns, Vue Router, and Pinia state management.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-web-clip",
+      "plugin": "trove-doc",
+      "categoryId": "files-documents",
+      "categoryLabel": "Files & documents",
+      "description": "Extract readable Markdown from a supplied web page or HTML file, preserving source attribution and useful structure. Use for article clipping or clean page extraction, with optional Defuddle CLI support and host-tool fallbacks.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "gemini",
+        "opencode",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-why",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Reconstruct design rationale and decision history from evidence — source control, issue tracker (Linear), docs (Notion), chat (Slack), error tracking (Sentry) — with calibrated confidence. Use for \"why does X work this way\", \"why did we pick Y\", regressions, and postmortems. Use trove-explain for how it works now.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-worktree",
+      "plugin": "trove-workflow",
+      "categoryId": "engineering",
+      "categoryLabel": "Engineering",
+      "description": "Git worktree workflow for spikes, risky experiments, and broad refactors that should not disturb the user's current branch.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "trove-write-skill",
+      "plugin": "trove-workflow",
+      "categoryId": "ai-models-agents",
+      "categoryLabel": "AI models & agents",
+      "description": "Skill authoring workflow. Use when creating or updating a Codex or Trove skill, including rubrics, tasks, metadata, and validation.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
+      ]
+    },
+    {
+      "name": "using-trove",
+      "plugin": "trove-workflow",
+      "categoryId": "ai-models-agents",
+      "categoryLabel": "AI models & agents",
+      "description": "Skill discipline anchor for the Trove marketplace. Loaded once per session; routes the agent to the right trove-* skill before code, planning, review, or git actions.",
+      "platforms": [
+        "claude",
+        "cursor",
+        "codex",
+        "agents",
+        "opencode",
+        "gemini",
+        "copilot"
       ]
     }
   ]

@@ -42,6 +42,7 @@ import {
   validateCopilotSkillFrontmatter,
 } from "./lib/agent-skills-spec";
 import { validateCopilotPluginManifest } from "./lib/copilot-contract";
+import { assignmentErrors } from "./lib/categories";
 import { pluginLogoFindings } from "./lib/plugin-logo";
 import { checkOffline } from "./lib/upstream-sync";
 import { loadUpstreamManifest, validateManifestInventory } from "./lib/upstream-manifest";
@@ -995,6 +996,12 @@ if (validateAll || pluginsOnly) {
     }
 
     validateSkillOwnership();
+
+    // Every plugin and skill names exactly one category from categories.yaml.
+    // Commands and agents are not categorized.
+    const categoryErrors = assignmentErrors(ROOT);
+    if (categoryErrors.length === 0) ok("every plugin and skill has a known category");
+    for (const finding of categoryErrors) error(`${finding.where}: ${finding.message}`);
   }
 }
 

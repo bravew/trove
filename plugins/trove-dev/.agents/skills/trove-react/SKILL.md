@@ -4,6 +4,9 @@ description: "React 19 coding conventions and performance patterns. Auto-activat
 paths:
   - "**/*.tsx"
   - "**/*.jsx"
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

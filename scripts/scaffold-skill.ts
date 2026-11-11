@@ -3,13 +3,18 @@
  * Scaffold a new skill template and register it in the parent plugin.
  *
  * Usage:
- *   bun run scaffold:skill -- --plugin trove-dev --name trove-debug
- *   bun run scaffold:skill -- --plugin trove-dev --name trove-test --auto-attach "**\/*.test.ts"
+ *   bun run scaffold:skill -- --plugin trove-dev --name trove-debug --discovery-category engineering
+ *   bun run scaffold:skill -- --plugin trove-dev --name trove-test --discovery-category code --auto-attach "**\/*.test.ts"
+ *
+ * `--category` is the source directory under skills/. `--discovery-category`
+ * is the browsing category id from categories.yaml; every registered skill
+ * needs one, so the scaffold asks for it instead of guessing.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
+import { loadTaxonomy } from "./lib/categories";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SKILLS_DIR = path.join(ROOT, "skills");
@@ -17,22 +22,35 @@ const PLUGINS_DIR = path.join(ROOT, "plugins");
 
 // ─── Arg parsing ────────────────────────────────────────────
 
-function parseArgs(): { plugin: string; name: string; category: string; autoAttach?: string } {
+interface SkillArgs {
+  plugin: string;
+  name: string;
+  category: string;
+  discoveryCategory: string;
+  autoAttach?: string;
+}
+
+function parseArgs(): SkillArgs {
   const args = process.argv.slice(2);
   let plugin = "";
   let name = "";
   let category = "shared";
+  let discoveryCategory = "";
   let autoAttach: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--plugin" && args[i + 1]) plugin = args[++i];
     if (args[i] === "--name" && args[i + 1]) name = args[++i];
     if (args[i] === "--category" && args[i + 1]) category = args[++i];
+    if (args[i] === "--discovery-category" && args[i + 1]) discoveryCategory = args[++i];
     if (args[i] === "--auto-attach" && args[i + 1]) autoAttach = args[++i];
   }
 
-  if (!plugin || !name) {
-    console.error("Usage: bun run scaffold:skill -- --plugin <plugin-name> --name <skill-name> [--category shared] [--auto-attach '**/*.py']");
+  if (!plugin || !name || !discoveryCategory) {
+    console.error(
+      "Usage: bun run scaffold:skill -- --plugin <plugin-name> --name <skill-name> " +
+        "--discovery-category <id> [--category shared] [--auto-attach '**/*.py']",
+    );
     process.exit(1);
   }
 
@@ -41,12 +59,18 @@ function parseArgs(): { plugin: string; name: string; category: string; autoAtta
     process.exit(1);
   }
 
-  return { plugin, name, category, autoAttach };
+  const known = loadTaxonomy(ROOT).categories.map((entry) => entry.id);
+  if (!known.includes(discoveryCategory)) {
+    console.error(`Unknown --discovery-category '${discoveryCategory}'. Choose an id from categories.yaml.`);
+    process.exit(1);
+  }
+
+  return { plugin, name, category, discoveryCategory, autoAttach };
 }
 
 // ─── Main ───────────────────────────────────────────────────
 
-const { plugin, name, category, autoAttach } = parseArgs();
+const { plugin, name, category, discoveryCategory, autoAttach } = parseArgs();
 
 // Validate plugin exists
 const pluginDir = path.join(PLUGINS_DIR, plugin);
@@ -124,6 +148,7 @@ if (!pluginYaml.skills) pluginYaml.skills = [];
 const skillEntry: Record<string, unknown> = {
   path: `./skills/${name}`,
   platforms: ["claude", "cursor", "codex", "agents", "copilot"],
+  category: discoveryCategory,
 };
 
 if (autoAttach) {

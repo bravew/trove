@@ -1,6 +1,9 @@
 ---
 name: trove-commit
 description: "Git commit workflow and message conventions. Use when creating, drafting, or reviewing atomic commits with conventional messages."
+metadata:
+  trove-category: pull-requests
+  trove-category-label: "Pull requests"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

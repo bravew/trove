@@ -1,6 +1,9 @@
 ---
 name: trove-principle-type-discipline
 description: "Type System Discipline — treat the type checker as a proof assistant: make illegal states unrepresentable, brand semantic primitives, parse external data at boundaries, exhaust variants, don't lie to the compiler. Applies to any statically typed language. Use when designing types or a signature in TypeScript, Python (hints/Pydantic), Swift, or similar."
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

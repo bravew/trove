@@ -1,6 +1,9 @@
 ---
 name: trove-review
 description: "Code review skill that checks for common issues, security vulnerabilities, and style violations. Use when reviewing code changes or PRs."
+metadata:
+  trove-category: pull-requests
+  trove-category-label: "Pull requests"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

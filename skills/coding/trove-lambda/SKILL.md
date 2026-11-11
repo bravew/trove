@@ -6,6 +6,9 @@ paths:
   - "**/lambda_function.py"
 when_to_use: "lambda handler; aws lambda; sqs handler; sns handler"
 user-invocable: false
+metadata:
+  trove-category: servers-cloud
+  trove-category-label: "Servers & cloud"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

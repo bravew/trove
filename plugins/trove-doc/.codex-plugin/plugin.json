@@ -2,10 +2,19 @@
   "name": "trove-doc",
   "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
   "version": "2026.11.11",
+  "keywords": [
+    "documentation",
+    "obsidian",
+    "markdown",
+    "bases",
+    "json-canvas",
+    "notes",
+    "web-clip"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-doc",
-    "category": "documentation",
+    "category": "Notes & memory",
     "shortDescription": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

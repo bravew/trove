@@ -3,6 +3,9 @@ name: trove-python
 description: "Python/FastAPI coding conventions and best practices. Auto-activates when working with Python files. Covers async patterns, type hints, SQLAlchemy, Pydantic, logging, and error handling."
 paths:
   - "**/*.py"
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

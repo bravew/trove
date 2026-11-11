@@ -1,6 +1,9 @@
 ---
 name: trove-execute-plan
 description: "Execute an approved implementation plan one checkpoint at a time with verification before advancing."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

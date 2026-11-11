@@ -154,7 +154,7 @@ bun run build:skills -- --host cursor
 ### Add a new skill to an existing plugin
 
 ```bash
-bun run scaffold:skill -- --plugin trove-dev --name trove-debug
+bun run scaffold:skill -- --plugin trove-dev --name trove-debug --discovery-category engineering
 # edit skills/<category>/trove-debug/SKILL.md.tmpl
 bun run build && bun run validate && bun test
 ```

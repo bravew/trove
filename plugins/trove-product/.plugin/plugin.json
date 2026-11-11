@@ -14,7 +14,7 @@
     "release-notes",
     "triage"
   ],
-  "category": "product",
+  "category": "Product",
   "skills": [
     "./.copilot/skills/trove-spec",
     "./.copilot/skills/trove-user-story",

@@ -3,6 +3,8 @@ name: trove-video-edit
 description: "Edit a pre-cut talking-head video: captions, overlays, zooms, and a music bed. Use when the cut is already made and the edit is what remains. Not for raw multi-take footage and not for finding b-roll in a clip."
 metadata:
   inspired-by: "BuildLoop video skills"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

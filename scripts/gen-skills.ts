@@ -35,6 +35,7 @@ import {
   type TemplateFile,
   type ParsedTemplate,
 } from "./lib/skill-parser";
+import { resolveSkillCategory } from "./lib/categories";
 import { emitFrontmatter, projectFrontmatter } from "./lib/projection";
 import { isUnownedSupportName } from "./lib/support-files";
 
@@ -71,7 +72,18 @@ const SUPPORT_DIRS = SKILL_SUPPORT_DIRS;
  * ever receives fields its profile allows.
  */
 function projectSkill(template: TemplateFile, parsed: ParsedTemplate, host: HostConfig): SkillArtifact {
-  const fields = projectFrontmatter(parsed.authoring, {
+  // The category is a Trove convention carried in metadata, which the spec
+  // defines as string values. A template that already sets either key keeps
+  // its own value. Copilot drops metadata below, since its profile has none.
+  const category = resolveSkillCategory(template.skillName);
+  const metadata = { ...parsed.authoring.metadata };
+  if (category) {
+    metadata["trove-category"] ??= category.category.id;
+    metadata["trove-category-label"] ??= category.category.label;
+  }
+  const authoring = { ...parsed.authoring, metadata };
+
+  const fields = projectFrontmatter(authoring, {
     profile: host.skillProjection,
     hostName: host.name,
     supportsToolAllowlist: host.capabilities.supportsToolAllowlistMetadata,

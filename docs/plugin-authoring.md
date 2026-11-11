@@ -7,7 +7,7 @@ Plugins bundle skills, hooks, agents, and MCP server declarations. One plugin ma
 ### 1. Scaffold
 
 ```bash
-bun run scaffold:plugin -- --name trove-testing --role dev --category development
+bun run scaffold:plugin -- --name trove-testing --role dev --category engineering
 ```
 
 Creates:
@@ -30,10 +30,14 @@ plugins/trove-testing/
 ### 2. Add a skill
 
 ```bash
-bun run scaffold:skill -- --plugin trove-testing --name trove-unit-test --auto-attach "**/*.test.ts"
+bun run scaffold:skill -- --plugin trove-testing --name trove-unit-test \
+  --discovery-category code --auto-attach "**/*.test.ts"
 ```
 
 Creates a `SKILL.md.tmpl` template and registers it in the plugin's `plugin.yaml`.
+`--category` picks the source directory under `skills/`; `--discovery-category`
+is the browsing category from [categories.md](./categories.md). They are
+separate on purpose: moving a skill between browsing categories never moves files.
 
 ### 3. Write the skill body
 
@@ -121,7 +125,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [testing, unit-test, e2e]
-category: development                    # development | design | product | security | infrastructure | observability | research | documentation
+category: engineering                    # browsing category id from categories.yaml (see categories.md)
 logo: assets/logo.svg                    # plugin-relative; svg, png, webp, or jpg
 brandColor: "#2563EB"                    # optional; Codex card color, #RRGGBB, 2:1 against white
 roles: [dev]                             # dev | design | pm | devops
@@ -129,6 +133,7 @@ roles: [dev]                             # dev | design | pm | devops
 skills:
   - path: ./skills/trove-unit-test        # relative to plugin root
     platforms: [claude, cursor, codex, copilot, agents, gemini]
+    category: code                       # required browsing category id for this skill
     auto_attach:
       globs: ["**/*.test.ts"]            # mirrors the skill's own activation.globs
 
@@ -215,10 +220,14 @@ plugins:
   - name: trove-testing
     source: trove-testing                 # path under plugins/, or a github source object for curated externals
     description: "Testing skills and patterns"
-    category: development
     tags: [testing, unit-test, e2e]
     roles: [dev]
 ```
+
+A local plugin's category lives only in its `plugin.yaml`. Validation rejects a
+`category` on a local `marketplace.yaml` entry, because it would be a second
+source that drifts. A curated external entry keeps its own `category`, since
+Trove does not author that plugin.
 
 For curated third-party plugins, only add an entry when it projects as a real
 installable plugin for at least one host, and pin the SHA on the source ref:

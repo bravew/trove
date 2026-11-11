@@ -1,6 +1,9 @@
 ---
 name: trove-show-work
 description: "Keep a reviewable decision trail for long-running or unattended work: an append-only TSV log with one row per decision (what, why, evidence, result). Use for autonomous or multi-phase runs, or work a human reviews after stepping away."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

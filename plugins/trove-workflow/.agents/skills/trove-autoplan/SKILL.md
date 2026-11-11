@@ -1,6 +1,9 @@
 ---
 name: trove-autoplan
 description: "Front-door planning workflow. Take an idea and produce implementation-ready output by composing the Trove product skills (spec → user stories → release-note preview). Defers all detail to the leaf skills it calls."
+metadata:
+  trove-category: product
+  trove-category-label: Product
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

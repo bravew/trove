@@ -8,6 +8,8 @@ metadata:
   source: kepano/obsidian-skills
   upstream-skill: defuddle
   upstream-revision: 3ccff5338ea700537839b21900aa5358a0402c98
+  trove-category: files-documents
+  trove-category-label: "Files & documents"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

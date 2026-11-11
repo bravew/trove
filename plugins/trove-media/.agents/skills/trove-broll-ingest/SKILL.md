@@ -3,6 +3,8 @@ name: trove-broll-ingest
 description: "Find the usable moments in raw footage, cut each one, grade it, and add it to a b-roll library. Use when a raw clip or a folder of raws needs selecting, grading, and cataloguing. Not for a talking-head script and not for a finished edit."
 metadata:
   inspired-by: "BuildLoop video skills"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

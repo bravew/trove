@@ -18,7 +18,7 @@ You need [Bun](https://bun.sh/) ≥ 1.0. Everything else (TypeScript, YAML parse
 ### Add a skill to an existing plugin
 
 ```bash
-bun run scaffold:skill -- --plugin trove-dev --name trove-debug
+bun run scaffold:skill -- --plugin trove-dev --name trove-debug --discovery-category engineering
 # edit skills/<category>/trove-debug/SKILL.md.tmpl
 bun run build && bun run validate
 # open a PR against main
@@ -27,7 +27,7 @@ bun run build && bun run validate
 ### Create a new plugin
 
 ```bash
-bun run scaffold:plugin -- --name trove-analytics --role pm
+bun run scaffold:plugin -- --name trove-analytics --role pm --category data
 # add skills, hooks, MCP servers as needed
 # register in marketplace.yaml
 bun run build && bun run validate

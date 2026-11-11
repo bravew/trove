@@ -1,6 +1,9 @@
 ---
 name: trove-secret-scan
 description: "Scan files for accidentally committed secrets, API keys, and credentials. Flags common secret patterns and suggests remediation."
+metadata:
+  trove-category: it-security
+  trove-category-label: "IT & security"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

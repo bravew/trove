@@ -2,10 +2,18 @@
   "name": "trove-media",
   "description": "Media skills: video and audio editing, transcoding, delivery checks, and production workflows",
   "version": "2026.11.11",
+  "keywords": [
+    "media",
+    "video",
+    "audio",
+    "ffmpeg",
+    "transcoding",
+    "editing"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-media",
-    "category": "media",
+    "category": "Designs & media",
     "shortDescription": "Media skills: video and audio editing, transcoding, delivery checks, and production workflows",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

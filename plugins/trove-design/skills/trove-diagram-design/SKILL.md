@@ -7,6 +7,8 @@ user-invocable: true
 metadata:
   source: cathrynlavery/diagram-design
   upstream-version: "2.6"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

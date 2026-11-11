@@ -12,12 +12,15 @@ test("plugin validation rejects tags in registered plugin-local descriptions", (
       fs.cpSync(path.join(ROOT, dir), path.join(fixture, dir), { recursive: true });
     }
     fs.copyFileSync(path.join(ROOT, "VERSION"), path.join(fixture, "VERSION"));
+    // Validation checks every registered skill's discovery category.
+    fs.copyFileSync(path.join(ROOT, "categories.yaml"), path.join(fixture, "categories.yaml"));
     fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(fixture, "node_modules"), "dir");
     const plugin = path.join(fixture, "plugins/trove-fixture");
     const skill = path.join(plugin, "skills/trove-local/SKILL.md");
     fs.mkdirSync(path.dirname(skill), { recursive: true });
     fs.writeFileSync(path.join(plugin, "plugin.yaml"),
-      "name: trove-fixture\ndescription: Validation fixture\nskills:\n  - path: skills/trove-local\n");
+      "name: trove-fixture\ndescription: Validation fixture\ncategory: code\n" +
+        "skills:\n  - path: skills/trove-local\n    category: code\n");
     const run = () => {
       const result = Bun.spawnSync([process.execPath, "scripts/validate.ts", "--plugins"], { cwd: fixture });
       return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };

@@ -1,6 +1,9 @@
 ---
 name: trove-principle-laziness
 description: "Laziness Protocol — aim for the most result with the least code and complexity; bias toward deletion and the smallest change that solves the problem. Use when refactoring, weighing diff size, or tempted to add abstractions, layers, or signal threading."
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

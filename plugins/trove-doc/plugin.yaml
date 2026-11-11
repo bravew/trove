@@ -5,7 +5,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [documentation, obsidian, markdown, bases, json-canvas, notes, web-clip]
-category: documentation
+category: notes-memory
 logo: assets/logo.svg
 brandColor: "#1F2937"
 roles: [dev, design, pm]
@@ -13,18 +13,23 @@ roles: [dev, design, pm]
 skills:
   - path: ./skills/trove-obsidian-markdown
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: notes-memory
   - path: ./skills/trove-obsidian-bases
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
     auto_attach:
       globs: ["**/*.base"]
+    category: notes-memory
   - path: ./skills/trove-json-canvas
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
     auto_attach:
       globs: ["**/*.canvas"]
+    category: designs-media
   - path: ./skills/trove-obsidian-cli
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: notes-memory
   - path: ./skills/trove-web-clip
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: files-documents
 
 platforms:
   claude:

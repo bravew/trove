@@ -3,6 +3,8 @@ name: trove-why
 description: "Reconstruct design rationale and decision history from evidence — source control, issue tracker (Linear), docs (Notion), chat (Slack), error tracking (Sentry) — with calibrated confidence. Use for \"why does X work this way\", \"why did we pick Y\", regressions, and postmortems. Use trove-explain for how it works now."
 metadata:
   inspired-by: "Lauren Tan pstack why skill"
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

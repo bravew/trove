@@ -1,6 +1,9 @@
 ---
 name: trove-verify
 description: "Completion verification workflow. Use before claiming done, fixed, complete, ready, or shipped."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

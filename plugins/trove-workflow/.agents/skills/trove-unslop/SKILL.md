@@ -1,6 +1,9 @@
 ---
 name: trove-unslop
 description: "Cut AI tells from writing — PR descriptions, release notes, specs, commit bodies, and replies. Use before finalizing prose, or when the user asks to clean up, de-slop, or make text sound human."
+metadata:
+  trove-category: writing
+  trove-category-label: Writing
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

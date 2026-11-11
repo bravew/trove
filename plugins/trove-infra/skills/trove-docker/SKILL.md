@@ -6,6 +6,9 @@ paths:
   - "**/docker-compose*.yml"
 when_to_use: "dockerfile; docker compose; containerize"
 user-invocable: false
+metadata:
+  trove-category: servers-cloud
+  trove-category-label: "Servers & cloud"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

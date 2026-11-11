@@ -15,7 +15,7 @@
     "workflow",
     "debugging"
   ],
-  "category": "development",
+  "category": "Engineering",
   "skills": [
     "./.copilot/skills/trove-python",
     "./.copilot/skills/trove-react",

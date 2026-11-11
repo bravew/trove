@@ -3,6 +3,9 @@ name: trove-verify
 description: "Completion verification workflow. Use before claiming done, fixed, complete, ready, or shipped."
 when_to_use: "verify this; before done; completion check; claim done"
 user-invocable: true
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
