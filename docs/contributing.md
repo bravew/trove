@@ -68,7 +68,7 @@ External plugins live as JSON stubs in `curated/`. Each requires a SHA pin on `s
 
 **Don't bump `VERSION` or write a `## [x.y.z]` CHANGELOG header in your PR.** `release.yml` owns both — it bumps on merge, prepends the auto-generated release notes (PR-driven, grouped by label) to `CHANGELOG.md`, commits, tags, force-pushes the result to `canary`, and publishes a GitHub Release with the same body. The in-repo `CHANGELOG.md` and the [Releases page](https://github.com/bravew/trove/releases) stay in lockstep. Hand-bumping in a feature branch collides with the release workflow.
 
-CalVer (`YYYY.M.D`) means same-day merges share a tag. The first merge of the day creates the GitHub Release and the `CHANGELOG.md` entry with notes covering commits since the previous day's tag; subsequent same-day merges land on `main` and `canary` but don't open a new tag, release, or CHANGELOG entry — those late merges roll into the next day's entry. If a busy day's release should reflect every merge, edit the Release and the CHANGELOG entry manually after the day rolls over.
+The version is calendar-based and monotonic within a day: the first merge of the day is `YYYY.M.D`, and each later merge is `YYYY.M.D.N`. The counter matters because hosts compare the generated `plugin.json` version against the installed one and skip an update when they match. A same-day merge under an unchanged version would ship new files that nobody installs. Every merge therefore gets its own tag, Release, and `CHANGELOG.md` entry.
 
 ## Naming conventions
 
@@ -76,7 +76,7 @@ CalVer (`YYYY.M.D`) means same-day merges share a tag. The first merge of the da
 |-------|------------|---------|
 | Plugin name | `trove-<name>` (kebab-case) | `trove-dev` |
 | Skill name | `trove-<name>` (kebab-case, ≤ 64 chars, no colons) | `trove-python` |
-| Category | One of: `development`, `design`, `product`, `security`, `infrastructure`, `observability`, `research`, `documentation` | `development` |
+| Category | An id from [`categories.yaml`](../categories.yaml); see [categories.md](./categories.md) | `engineering` |
 | Role | One of: `dev`, `design`, `pm`, `devops` | `dev` |
 | Branch | `feat/<thing>`, `fix/<thing>`, `chore/<thing>` | `feat/p6-routing-graph` |
 
