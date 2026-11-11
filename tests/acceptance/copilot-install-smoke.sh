@@ -77,7 +77,15 @@ for plugin in "${plugins[@]}"; do
   isolated "$COPILOT_BIN" plugin install "$plugin@trove" >/dev/null
 done
 
-isolated bun "$ROOT/scripts/verify-copilot-install.ts" "$ROOT" "$FIXTURE_ROOT/copilot-home"
+# 1.0.95 records installs in settings.json and loads them live from the
+# marketplace directory. Older releases copied the bytes and listed them in
+# config.json, which the verifier reads when no listing is passed.
+if [[ -f "$FIXTURE_ROOT/copilot-home/config.json" ]]; then
+  isolated bun "$ROOT/scripts/verify-copilot-install.ts" "$ROOT" "$FIXTURE_ROOT/copilot-home"
+else
+  isolated "$COPILOT_BIN" plugin list --json > "$FIXTURE_ROOT/plugins.json"
+  isolated bun "$ROOT/scripts/verify-copilot-install.ts" "$ROOT" "$FIXTURE_ROOT/copilot-home" "$FIXTURE_ROOT/plugins.json"
+fi
 git -C "$ROOT" status --porcelain=v1 --untracked-files=all > "$FIXTURE_ROOT/status.after"
 cmp "$FIXTURE_ROOT/status.before" "$FIXTURE_ROOT/status.after" >/dev/null || {
   echo "Copilot smoke modified the repository" >&2
