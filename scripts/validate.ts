@@ -752,6 +752,18 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
     error(`${relPath}: ${finding.message}`);
   }
 
+  // Claude Desktop's marketplace sync rejects XML-like tags in a skill
+  // description ("SKILL.md description cannot contain XML tags") and claude.ai
+  // stores it with angle brackets stripped, so `<Foo>` never survives the trip.
+  const claudeDescription = flattenSkillText(claudeFm.description);
+  const xmlTag = claudeDescription.match(/<\/?[A-Za-z][^<>]*>/);
+  if (xmlTag) {
+    error(
+      `${relPath}: description must not contain XML-like tags (found '${xmlTag[0]}'); ` +
+        `Claude Desktop marketplace sync rejects them`,
+    );
+  }
+
   // Check for unresolved placeholders (in .md files, not .tmpl)
   if (filePath.endsWith(".md") && !filePath.endsWith(".tmpl")) {
     const unresolved = content.match(/\{\{(\w+)\}\}/g);

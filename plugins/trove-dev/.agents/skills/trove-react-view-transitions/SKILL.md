@@ -1,6 +1,6 @@
 ---
 name: trove-react-view-transitions
-description: "Implement smooth, native-feeling animations with React's View Transition API (`<ViewTransition>`, `addTransitionType`, CSS view-transition pseudo-elements). Use for page transitions, shared element morphs, Suspense reveals, list identity, or animating between React UI states without a third-party animation library."
+description: "Implement smooth, native-feeling animations with React's View Transition API (the `ViewTransition` component, `addTransitionType`, CSS view-transition pseudo-elements). Use for page transitions, shared element morphs, Suspense reveals, list identity, or animating between React UI states without a third-party animation library."
 metadata:
   source: vercel-labs/agent-skills
   upstream-version: 1.0.0
