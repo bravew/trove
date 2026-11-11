@@ -3,6 +3,9 @@ name: trove-principle-migrate-then-delete
 description: "Migrate Callers Then Delete Legacy APIs — when introducing a new internal API while old callers exist, migrate every caller and delete the old API in the same refactor wave instead of leaving a compatibility layer. Use when replacing an internal API, function, or module that has no external dependents."
 when_to_use: "migrate callers; remove the legacy api; no compatibility shim"
 user-invocable: true
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

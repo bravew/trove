@@ -4,6 +4,8 @@ description: "Edit video and audio locally with the vendored ffmpeg engine: cut,
 metadata:
   source: kajisho5/ffmpeg-skill
   upstream-version: 3.2.3
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

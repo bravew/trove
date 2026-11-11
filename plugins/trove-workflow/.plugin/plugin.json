@@ -12,7 +12,7 @@
     "bootstrap",
     "planning"
   ],
-  "category": "workflow",
+  "category": "Engineering",
   "skills": [
     "./.copilot/skills/using-trove",
     "./.copilot/skills/trove-autoplan",

@@ -1,6 +1,9 @@
 ---
 name: trove-arena
 description: "Spawn N parallel candidate attempts at one hard, novel artifact, pick the strongest base, graft the best ideas from the losers into it, then verify. A heavyweight technique — most work routes to trove-architect instead. Use only for a genuinely novel, hard-to-reverse design decision with no precedent."
+metadata:
+  trove-category: ai-models-agents
+  trove-category-label: "AI models & agents"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -6,6 +6,8 @@ when_to_use: "edit this pre-cut video; add captions and overlays to this cut; on
 user-invocable: true
 metadata:
   inspired-by: "BuildLoop video skills"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

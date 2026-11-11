@@ -5,7 +5,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [security, owasp, secrets, vulnerability, audit]
-category: security
+category: it-security
 logo: assets/logo.svg
 brandColor: "#DC2626"
 
@@ -14,9 +14,11 @@ roles: [dev, devops]
 skills:
   - path: ./skills/trove-security-review
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: it-security
 
   - path: ./skills/trove-secret-scan
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: it-security
 
 agents:
   - path: ./agents/security-reviewer.md

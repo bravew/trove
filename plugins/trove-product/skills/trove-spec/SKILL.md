@@ -2,6 +2,9 @@
 name: trove-spec
 description: "Product spec writing skill. Generates structured feature specifications with user stories, acceptance criteria, and technical considerations."
 when_to_use: "product spec; feature spec; write a spec"
+metadata:
+  trove-category: product
+  trove-category-label: Product
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

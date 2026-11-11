@@ -5,6 +5,9 @@ paths:
   - "**/*.vue"
 when_to_use: "vue component; composition api; pinia store"
 user-invocable: false
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

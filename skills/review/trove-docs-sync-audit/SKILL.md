@@ -7,6 +7,8 @@ user-invocable: true
 metadata:
   source: github/awesome-copilot
   upstream-skill: docs-sync-audit
+  trove-category: reference-docs
+  trove-category-label: "Reference docs"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

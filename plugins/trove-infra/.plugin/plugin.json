@@ -15,7 +15,7 @@
     "docker",
     "devops"
   ],
-  "category": "infrastructure",
+  "category": "Servers & cloud",
   "skills": [
     "./.copilot/skills/trove-terraform",
     "./.copilot/skills/trove-cdk",

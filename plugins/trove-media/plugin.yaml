@@ -5,7 +5,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [media, video, audio, ffmpeg, transcoding, editing]
-category: media
+category: designs-media
 logo: assets/logo.svg
 brandColor: "#7C3AED"
 roles: [dev, design, pm]
@@ -13,20 +13,28 @@ roles: [dev, design, pm]
 skills:
   - path: ./skills/trove-ffmpeg
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-beat-sync
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-shot-recipes
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-video-review
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-product-video
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-take-cut
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-broll-ingest
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
   - path: ./skills/trove-video-edit
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: designs-media
 
 platforms:
   claude:

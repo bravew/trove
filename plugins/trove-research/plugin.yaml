@@ -14,9 +14,11 @@ roles: [pm, dev]
 skills:
   - path: ./skills/trove-pulse
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: research
 
   - path: ./skills/trove-pulse-cn
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+    category: research
 
 platforms:
   claude:

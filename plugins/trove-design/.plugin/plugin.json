@@ -13,7 +13,7 @@
     "accessibility",
     "design-system"
   ],
-  "category": "design",
+  "category": "Design",
   "skills": [
     "./.copilot/skills/trove-design-review",
     "./.copilot/skills/trove-a11y",

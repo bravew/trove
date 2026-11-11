@@ -8,6 +8,8 @@ metadata:
   source: kepano/obsidian-skills
   upstream-skill: obsidian-cli
   upstream-revision: 3ccff5338ea700537839b21900aa5358a0402c98
+  trove-category: notes-memory
+  trove-category-label: "Notes & memory"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

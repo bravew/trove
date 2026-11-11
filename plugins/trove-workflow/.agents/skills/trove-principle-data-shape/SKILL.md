@@ -1,6 +1,9 @@
 ---
 name: trove-principle-data-shape
 description: "Foundational Thinking — get the data shape right before writing logic. Choose core types and structures first; a late data-structure change is a rewrite, early it is a one-line diff. Use before writing logic, choosing core types, or sequencing scaffold-vs-feature work."
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -1,6 +1,9 @@
 ---
 name: trove-release-notes
 description: "Release notes generator. Creates user-facing release notes from git history, PR descriptions, and changelog entries."
+metadata:
+  trove-category: writing
+  trove-category-label: Writing
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

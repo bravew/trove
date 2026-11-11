@@ -16,6 +16,7 @@ import * as path from "path";
 import YAML from "yaml";
 import { ALL_HOSTS, getMarketplaceHosts } from "../hosts/index";
 import type { HostConfig, MarketplaceYaml, MarketplaceJson, PluginYaml } from "../hosts/types";
+import { legacyCategorySelector, loadTaxonomy, pluginCategoryLabel } from "./lib/categories";
 import { projectPluginLogo } from "./lib/plugin-logo";
 import {
   findTemplates,
@@ -64,16 +65,26 @@ function loadPluginYaml(pluginName: string): PluginYaml | null {
 // for the same reason — plugin.json is the canonical skill manifest.
 
 /**
- * Discovery metadata Trove already curates in `marketplace.yaml`.
+ * Discovery metadata.
  *
- * `category` and `keywords` are documented marketplace fields Claude Code uses
- * to organize and search plugins, and Trove has real values for both — they
- * were simply being dropped. `roles` stays out: it is a Trove concept the CLI
- * reads from catalog.json, and no host acts on it.
+ * The category comes from the plugin's own `plugin.yaml`, resolved to its
+ * display label, so marketplace.yaml is not a second place to author it.
+ * `keywords` still come from the marketplace entry's tags. `roles` stays out:
+ * it is a Trove concept the CLI reads from catalog.json, and no host acts on it.
+ *
+ * An external entry keeps its own category, since Trove does not author it.
  */
+function entryCategoryLabel(entry: MarketplaceYaml["plugins"][number]): string | undefined {
+  if (typeof entry.source === "string") {
+    return pluginCategoryLabel(loadPluginYaml(entry.source)?.category, ROOT);
+  }
+  return entry.category;
+}
+
 function discoveryMetadata(entry: MarketplaceYaml["plugins"][number]): Record<string, unknown> {
   const meta: Record<string, unknown> = {};
-  if (entry.category) meta.category = entry.category;
+  const category = entryCategoryLabel(entry);
+  if (category) meta.category = category;
   if (entry.tags && entry.tags.length > 0) meta.keywords = entry.tags;
   return meta;
 }
@@ -210,7 +221,7 @@ function generateCodexMarketplace(marketplace: MarketplaceYaml): Record<string, 
           installation: "AVAILABLE",
           authentication: "ON_INSTALL",
         },
-        category: entry.category ?? "Productivity",
+        category: entryCategoryLabel(entry) ?? "Productivity",
         description: entry.description,
       };
     });
@@ -273,7 +284,9 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
     return {
       name: entry.name,
       description: entry.description,
-      category: entry.category,
+      // The legacy selector, not the display label: `trove list --category`
+      // keeps matching the category a plugin had before the taxonomy.
+      category: typeof entry.source === "string" ? legacyCategorySelector(entry.name) : entry.category,
       tags: entry.tags,
       roles: entry.roles,
       version,
@@ -281,9 +294,149 @@ function generateCatalog(marketplace: MarketplaceYaml): CatalogEntry[] {
       ...(logo ? { logo } : {}),
       platforms,
       skills: skillNames,
+      categoryId: typeof entry.source === "string" ? loadPluginYaml(entry.source)?.category : undefined,
+      categoryLabel: entryCategoryLabel(entry),
       curated: entry.curated,
     };
   });
+}
+
+interface CatalogSkill {
+  name: string;
+  plugin: string;
+  categoryId: string;
+  categoryLabel: string;
+  description: string;
+  platforms: string[];
+}
+
+interface CatalogCategory {
+  id: string;
+  label: string;
+  plugins: string[];
+  skills: string[];
+}
+
+/**
+ * The skill index and the categories that actually have something in them.
+ * Descriptions come from the skill templates; a skill with no template gets
+ * an empty description rather than failing the build.
+ */
+function catalogDiscovery(marketplace: MarketplaceYaml): { categories: CatalogCategory[]; skills: CatalogSkill[] } {
+  const descriptions = new Map<string, string>();
+  for (const template of findTemplates(path.join(ROOT, "skills"))) {
+    const parsed = loadAndParseTemplate(template);
+    descriptions.set(template.skillName, parsed.authoring.description.replace(/\s+/g, " ").trim());
+  }
+
+  const skills: CatalogSkill[] = [];
+  const byCategory = new Map<string, CatalogCategory>();
+  for (const entry of marketplace.plugins) {
+    if (typeof entry.source !== "string") continue;
+    const pluginYaml = loadPluginYaml(entry.source);
+    if (!pluginYaml) continue;
+    const pluginLabel = pluginCategoryLabel(pluginYaml.category, ROOT);
+    if (pluginYaml.category && pluginLabel) {
+      const bucket = byCategory.get(pluginYaml.category) ?? { id: pluginYaml.category, label: pluginLabel, plugins: [], skills: [] };
+      bucket.plugins.push(entry.name);
+      byCategory.set(pluginYaml.category, bucket);
+    }
+    for (const skill of pluginYaml.skills ?? []) {
+      const name = path.basename(skill.path);
+      if (!skill.category) continue;
+      const label = pluginCategoryLabel(skill.category, ROOT);
+      if (!label) continue;
+      skills.push({
+        name,
+        plugin: entry.name,
+        categoryId: skill.category,
+        categoryLabel: label,
+        description: descriptions.get(name) ?? "",
+        platforms: skill.platforms ?? ["claude", "cursor", "codex", "agents", "copilot"],
+      });
+      const bucket = byCategory.get(skill.category) ?? { id: skill.category, label, plugins: [], skills: [] };
+      bucket.skills.push(name);
+      byCategory.set(skill.category, bucket);
+    }
+  }
+
+  const categories = [...byCategory.values()]
+    .map((category) => ({ ...category, plugins: category.plugins.sort(), skills: category.skills.sort() }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return { categories, skills };
+}
+
+/** Escape a value for a Markdown table cell. */
+function cell(value: string): string {
+  return value.replace(/\|/g, "\\|");
+}
+
+/**
+ * `docs/categories.md`: the assignment reference, generated from the same
+ * resolver the manifests use so it cannot disagree with them.
+ */
+function renderCategoriesDoc(
+  plugins: CatalogEntry[],
+  discovery: { categories: CatalogCategory[]; skills: CatalogSkill[] },
+): string {
+  const taxonomy = loadTaxonomy(ROOT);
+  const used = new Set(discovery.categories.map((category) => category.id));
+  const lines: string[] = [
+    "# Categories",
+    "",
+    "<!-- AUTO-GENERATED by `bun run build:marketplace` - do not edit directly -->",
+    "",
+    "Every Trove plugin and skill has one browsing category. Assignments are",
+    "authored in each `plugins/<name>/plugin.yaml`; the vocabulary is",
+    "`categories.yaml`. Browse them with `trove categories` and",
+    "`trove list --skills --category=<id>`.",
+    "",
+    `The labels are the vocabulary observed in Claude Desktop on ${taxonomy.observedAt}.`,
+    "They are Trove's own ids, not a vendor enum. The display label is projected to",
+    "hosts whose documented contract accepts a free-form category string: the",
+    "Claude, Cursor, and Copilot marketplace entries, both Codex category fields,",
+    "and the legacy Copilot plugin manifest. Skills carry it as",
+    "`metadata.trove-category` where their host keeps metadata. No host is claimed",
+    "to filter on these labels; that is verified separately in each client.",
+    "",
+    "## Plugins",
+    "",
+    "| Plugin | Category | Id | Legacy selector |",
+    "| --- | --- | --- | --- |",
+  ];
+  for (const plugin of plugins) {
+    if (!plugin.categoryId) continue;
+    lines.push(`| ${plugin.name} | ${cell(plugin.categoryLabel ?? "")} | \`${plugin.categoryId}\` | \`${plugin.category ?? ""}\` |`);
+  }
+  lines.push(
+    "",
+    "A legacy selector is the category a plugin had before this taxonomy.",
+    "`trove list --category=<selector>` still returns exactly that plugin, so",
+    "`workflow` and `development` stay distinct even though both are Engineering.",
+    "",
+    "## Skills by category",
+    "",
+  );
+  for (const category of discovery.categories) {
+    if (category.skills.length === 0) continue;
+    lines.push(`### ${category.label} (\`${category.id}\`)`, "");
+    lines.push("| Skill | Plugin |", "| --- | --- |");
+    for (const skill of discovery.skills.filter((entry) => entry.categoryId === category.id)) {
+      lines.push(`| ${skill.name} | ${skill.plugin} |`);
+    }
+    lines.push("");
+  }
+  const unused = taxonomy.categories.filter((category) => !used.has(category.id));
+  lines.push(
+    "## Unused categories",
+    "",
+    `${unused.length} categories in the vocabulary have no plugin or skill yet:`,
+    "",
+    unused.map((category) => `${category.label} (\`${category.id}\`)`).join(", ") + ".",
+    "",
+  );
+  return lines.join("\n");
 }
 
 // ─── Marketplace generators per host ────────────────────────
@@ -308,6 +461,7 @@ if (DRY_RUN) {
     ".agents/plugins/marketplace.json",
     ".github/plugin/marketplace.json",
     "catalog.json",
+    "docs/categories.md",
     "output/codex/.agents/AGENTS.md",
     "output/codex/.agents/plugins",
     "output/agents",
@@ -315,7 +469,7 @@ if (DRY_RUN) {
   const stale = checkGeneratedFreshness({
     root: ROOT,
     scriptPath: import.meta.path,
-    seedPaths: ["VERSION", "marketplace.yaml", "plugins", "skills", "output"],
+    seedPaths: ["VERSION", "marketplace.yaml", "categories.yaml", "plugins", "skills", "output"],
     managedPaths: managed,
     cleanPaths: managed,
   });
@@ -363,9 +517,18 @@ for (const host of getMarketplaceHosts()) {
 
 // Generate universal catalog.json
 const catalog = generateCatalog(marketplace);
+const discovery = catalogDiscovery(marketplace);
 const catalogPath = path.join(ROOT, "catalog.json");
-fs.writeFileSync(catalogPath, JSON.stringify({ plugins: catalog }, null, 2) + "\n");
+fs.writeFileSync(
+  catalogPath,
+  JSON.stringify({ plugins: catalog, categories: discovery.categories, skills: discovery.skills }, null, 2) + "\n",
+);
 console.log(`GENERATED: catalog.json`);
+
+const categoriesDocPath = path.join(ROOT, "docs", "categories.md");
+fs.mkdirSync(path.dirname(categoriesDocPath), { recursive: true });
+fs.writeFileSync(categoriesDocPath, renderCategoriesDoc(catalog, discovery));
+console.log(`GENERATED: docs/categories.md`);
 
 // ─── Scoped AGENTS assembly ─────────────────────────────────
 //

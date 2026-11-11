@@ -2,10 +2,16 @@
   "name": "trove-research",
   "description": "Research skills: last-30-days pulse across global and Chinese social platforms",
   "version": "2026.11.11",
+  "keywords": [
+    "research",
+    "social",
+    "trends",
+    "competitive-analysis"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-research",
-    "category": "research",
+    "category": "Research",
     "shortDescription": "Research skills: last-30-days pulse across global and Chinese social platforms",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

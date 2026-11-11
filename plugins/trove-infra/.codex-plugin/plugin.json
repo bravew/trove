@@ -2,10 +2,18 @@
   "name": "trove-infra",
   "description": "Infrastructure and DevOps automation",
   "version": "2026.11.11",
+  "keywords": [
+    "infrastructure",
+    "aws",
+    "terraform",
+    "cdk",
+    "docker",
+    "devops"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-infra",
-    "category": "infrastructure",
+    "category": "Servers & cloud",
     "shortDescription": "Infrastructure and DevOps automation",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

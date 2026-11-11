@@ -1,6 +1,9 @@
 ---
 name: trove-write-skill
 description: "Skill authoring workflow. Use when creating or updating a Codex or Trove skill, including rubrics, tasks, metadata, and validation."
+metadata:
+  trove-category: ai-models-agents
+  trove-category-label: "AI models & agents"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

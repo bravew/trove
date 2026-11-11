@@ -6,6 +6,9 @@ paths:
   - "**/*.tsx"
 when_to_use: "typescript best practices; type this correctly; make illegal states unrepresentable"
 user-invocable: false
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -1,6 +1,9 @@
 ---
 name: trove-worktree
 description: "Git worktree workflow for spikes, risky experiments, and broad refactors that should not disturb the user's current branch."
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

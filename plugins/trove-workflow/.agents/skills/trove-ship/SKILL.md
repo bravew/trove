@@ -1,6 +1,9 @@
 ---
 name: trove-ship
 description: "Front-door ship workflow. Prepare a change for landing by composing the review and commit skills, surfacing a final Decision Gate before any destructive action. Thin orchestrator — defers detail to leaf skills."
+metadata:
+  trove-category: pull-requests
+  trove-category-label: "Pull requests"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

@@ -8,6 +8,9 @@ allowed-tools:
   - Read
   - Glob
   - Grep
+metadata:
+  trove-category: pull-requests
+  trove-category-label: "Pull requests"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

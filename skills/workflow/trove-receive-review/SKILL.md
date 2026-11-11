@@ -3,6 +3,9 @@ name: trove-receive-review
 description: "Review-feedback handling workflow. Use when the user provides PR comments, code review feedback, or requested changes."
 when_to_use: "address review; pr comments; code review feedback; requested changes"
 user-invocable: true
+metadata:
+  trove-category: pull-requests
+  trove-category-label: "Pull requests"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

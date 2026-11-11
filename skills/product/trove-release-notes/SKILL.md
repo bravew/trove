@@ -7,6 +7,9 @@ allowed-tools:
   - Read
   - Edit
   - "Bash(git *)"
+metadata:
+  trove-category: writing
+  trove-category-label: Writing
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

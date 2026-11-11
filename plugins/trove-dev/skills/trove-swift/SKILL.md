@@ -5,6 +5,9 @@ paths:
   - "**/*.swift"
 when_to_use: "swift conventions; swiftui view; swift testing"
 user-invocable: false
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

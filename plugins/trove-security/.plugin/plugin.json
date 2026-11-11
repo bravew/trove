@@ -14,7 +14,7 @@
     "vulnerability",
     "audit"
   ],
-  "category": "security",
+  "category": "IT & security",
   "skills": [
     "./.copilot/skills/trove-security-review",
     "./.copilot/skills/trove-secret-scan"

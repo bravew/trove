@@ -1,6 +1,9 @@
 ---
 name: trove-design-review
 description: "Design review skill for evaluating UI/UX implementations against design specs. Checks visual fidelity, interaction patterns, and design system compliance."
+metadata:
+  trove-category: design
+  trove-category-label: Design
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

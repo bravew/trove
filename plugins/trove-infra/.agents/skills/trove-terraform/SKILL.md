@@ -4,6 +4,9 @@ description: "Terraform/OpenTofu conventions and best practices. Auto-activates 
 paths:
   - "**/*.tf"
   - "**/*.tfvars"
+metadata:
+  trove-category: servers-cloud
+  trove-category-label: "Servers & cloud"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

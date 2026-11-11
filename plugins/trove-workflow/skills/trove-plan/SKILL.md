@@ -3,6 +3,9 @@ name: trove-plan
 description: "Implementation planning workflow. Use after brainstorm approval or for multi-step work that needs verifiable checkpoints."
 when_to_use: "write a plan; implementation plan; break this down; multi-step change"
 user-invocable: true
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

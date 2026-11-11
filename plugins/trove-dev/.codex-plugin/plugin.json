@@ -2,10 +2,18 @@
   "name": "trove-dev",
   "description": "Developer skills: coding patterns, code review, git workflow, debugging",
   "version": "2026.11.11",
+  "keywords": [
+    "developer",
+    "coding",
+    "review",
+    "git",
+    "workflow",
+    "debugging"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-dev",
-    "category": "development",
+    "category": "Engineering",
     "shortDescription": "Developer skills: coding patterns, code review, git workflow, debugging",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

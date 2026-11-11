@@ -4,6 +4,8 @@ description: "Implement smooth, native-feeling animations with React's View Tran
 metadata:
   source: vercel-labs/agent-skills
   upstream-version: 1.0.0
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

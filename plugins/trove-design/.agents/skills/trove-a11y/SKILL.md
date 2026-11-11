@@ -6,6 +6,9 @@ paths:
   - "**/*.jsx"
   - "**/*.vue"
   - "**/*.html"
+metadata:
+  trove-category: design
+  trove-category-label: Design
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

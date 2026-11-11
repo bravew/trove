@@ -12,7 +12,7 @@
       "name": "trove-workflow",
       "source": "./plugins/trove-workflow",
       "description": "Workflow methodology skills and session bootstrap",
-      "category": "workflow",
+      "category": "Engineering",
       "keywords": [
         "workflow",
         "methodology",
@@ -24,7 +24,7 @@
       "name": "trove-dev",
       "source": "./plugins/trove-dev",
       "description": "Developer skills: coding patterns, code review, git workflow, debugging",
-      "category": "development",
+      "category": "Engineering",
       "keywords": [
         "python",
         "react",
@@ -39,7 +39,7 @@
       "name": "trove-design",
       "source": "./plugins/trove-design",
       "description": "Designer skills: Figma review, accessibility, design systems",
-      "category": "design",
+      "category": "Design",
       "keywords": [
         "figma",
         "a11y",
@@ -51,7 +51,7 @@
       "name": "trove-product",
       "source": "./plugins/trove-product",
       "description": "PM skills: specs, user stories, release notes, triage",
-      "category": "product",
+      "category": "Product",
       "keywords": [
         "spec",
         "user-story",
@@ -64,7 +64,7 @@
       "name": "trove-security",
       "source": "./plugins/trove-security",
       "description": "Security review and vulnerability scanning",
-      "category": "security",
+      "category": "IT & security",
       "keywords": [
         "owasp",
         "secrets",
@@ -76,7 +76,7 @@
       "name": "trove-infra",
       "source": "./plugins/trove-infra",
       "description": "Infrastructure and DevOps automation",
-      "category": "infrastructure",
+      "category": "Servers & cloud",
       "keywords": [
         "aws",
         "terraform",
@@ -90,7 +90,7 @@
       "name": "trove-research",
       "source": "./plugins/trove-research",
       "description": "Research skills: last-30-days pulse across global and Chinese social platforms",
-      "category": "research",
+      "category": "Research",
       "keywords": [
         "research",
         "reddit",
@@ -105,7 +105,7 @@
       "name": "trove-doc",
       "source": "./plugins/trove-doc",
       "description": "Obsidian notes, Bases, JSON Canvas, vault operations, and web clipping",
-      "category": "documentation",
+      "category": "Notes & memory",
       "keywords": [
         "documentation",
         "obsidian",
@@ -120,7 +120,7 @@
       "name": "trove-media",
       "source": "./plugins/trove-media",
       "description": "Media skills: video and audio editing, transcoding, delivery checks, and production workflows",
-      "category": "media",
+      "category": "Designs & media",
       "keywords": [
         "video",
         "audio",

@@ -45,8 +45,25 @@ export interface QualityReport {
   trend: { status: "compared" | "unavailable" | "incomparable"; reason: string; dimensionDeltas: Record<string, number> };
 }
 
+/**
+ * A finding's line number moves whenever unrelated lines are added above it,
+ * so it is not part of the defect's identity. Keeping it in the baseline key
+ * made every frontmatter edit report four accepted findings as stale.
+ */
+function stableMessage(message: string): string {
+  return message.replace(/\s+at line \d+\.?$/, ".");
+}
+
 export function vallyFindingKey(finding: Pick<QualityFinding, "skill" | "rule" | "message">): string {
-  return `${finding.skill ?? ""}|${finding.rule}|${finding.message}`;
+  return `${finding.skill ?? ""}|${finding.rule}|${stableMessage(finding.message)}`;
+}
+
+/** Normalize a stored `skill|rule|message` baseline key the same way. */
+export function normalizeVallyBaselineKey(key: string): string {
+  const first = key.indexOf("|");
+  const second = key.indexOf("|", first + 1);
+  if (first < 0 || second < 0) return key;
+  return `${key.slice(0, second)}|${stableMessage(key.slice(second + 1))}`;
 }
 
 export function parseVallyOutput(output: string): QualityFinding[] {

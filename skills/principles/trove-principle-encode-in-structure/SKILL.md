@@ -3,6 +3,9 @@ name: trove-principle-encode-in-structure
 description: "Encode Lessons in Structure — when you catch yourself writing the same instruction a second time, encode it as a lint, rubric, metadata flag, runtime check, or script instead of more prose. The repeated instruction is the symptom. Use when a correction recurs, or when tempted to add another \"remember to…\" line."
 when_to_use: "encode this as a check; stop repeating this instruction; make this structural"
 user-invocable: true
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

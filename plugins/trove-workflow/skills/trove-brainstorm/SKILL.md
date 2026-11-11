@@ -3,6 +3,9 @@ name: trove-brainstorm
 description: "Feature and design brainstorming gate. Use before implementing a new feature, UI, refactor, or product change when no approved design exists."
 when_to_use: "let's build; add a feature; design this; refactor this flow; brainstorm"
 user-invocable: true
+metadata:
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

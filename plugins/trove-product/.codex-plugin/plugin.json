@@ -2,10 +2,17 @@
   "name": "trove-product",
   "description": "PM skills: specs, user stories, release notes, triage",
   "version": "2026.11.11",
+  "keywords": [
+    "product",
+    "spec",
+    "user-story",
+    "release-notes",
+    "triage"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-product",
-    "category": "product",
+    "category": "Product",
     "shortDescription": "PM skills: specs, user stories, release notes, triage",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

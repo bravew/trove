@@ -15,6 +15,7 @@ import * as path from "path";
 import YAML from "yaml";
 import { getMarketplaceHosts } from "../hosts/index";
 import type { PluginYaml } from "../hosts/types";
+import { pluginCategoryLabel } from "./lib/categories";
 import { projectPluginLogo } from "./lib/plugin-logo";
 import { isUnownedSupportName } from "./lib/support-files";
 import { checkGeneratedFreshness } from "./lib/generated-freshness";
@@ -290,6 +291,11 @@ function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
     version: MARKETPLACE_VERSION,
   };
 
+  // Root `keywords: string[]` is a documented Codex manifest field (parsed by
+  // codex-rs core-plugins manifest.rs). It carries the curated plugin.yaml
+  // keywords, never the category vocabulary.
+  if (plugin.keywords?.length) json.keywords = plugin.keywords;
+
   // `skills`: directory path (single string), NOT array. Every Trove
   // plugin uses `skills/` for its bundle, so we always emit that path
   // when at least one skill targets codex.
@@ -302,7 +308,7 @@ function generateCodexPluginJson(plugin: PluginYaml): Record<string, unknown> {
   const logo = projectPluginLogo(path.join(PLUGINS_DIR, plugin.name), plugin);
   json.interface = {
     displayName: plugin.name,
-    category: plugin.category ?? "Productivity",
+    category: pluginCategoryLabel(plugin.category, ROOT) ?? "Productivity",
     shortDescription: plugin.description,
     ...(logo.codexLogo ? { logo: logo.codexLogo, composerIcon: logo.codexLogo } : {}),
     ...(logo.brandColor ? { brandColor: logo.brandColor } : {}),
@@ -321,7 +327,8 @@ function generateCopilotPluginJson(plugin: PluginYaml): Record<string, unknown> 
   if (plugin.homepage) json.homepage = plugin.homepage;
   if (plugin.license) json.license = plugin.license;
   if (plugin.keywords?.length) json.keywords = plugin.keywords;
-  if (plugin.category) json.category = plugin.category;
+  const categoryLabel = pluginCategoryLabel(plugin.category, ROOT);
+  if (categoryLabel) json.category = categoryLabel;
 
   const skills = (plugin.skills ?? [])
     .filter((skill) => (skill.platforms ?? DEFAULT_PLATFORMS).includes("copilot"))
@@ -837,7 +844,7 @@ if (DRY_RUN) {
   const stale = checkGeneratedFreshness({
     root: ROOT,
     scriptPath: import.meta.path,
-    seedPaths: ["VERSION", "plugins", "skills", "commands", "output"],
+    seedPaths: ["VERSION", "categories.yaml", "plugins", "skills", "commands", "output"],
     managedPaths: [...perPlugin, "output/opencode/plugins", "output/gemini/plugins"],
     cleanPaths: [...clean, "output/opencode/plugins", "output/gemini/plugins"],
   });

@@ -6,6 +6,8 @@ when_to_use: "find the usable moments in this clip; ingest this footage into my 
 user-invocable: true
 metadata:
   inspired-by: "BuildLoop video skills"
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

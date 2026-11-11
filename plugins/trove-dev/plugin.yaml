@@ -5,7 +5,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [developer, coding, review, git, workflow, debugging]
-category: development
+category: engineering
 logo: assets/logo.svg
 brandColor: "#2563EB"
 
@@ -16,64 +16,81 @@ skills:
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.py"]
+    category: code
 
   - path: ./skills/trove-react
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.tsx", "**/*.jsx"]
+    category: code
 
   - path: ./skills/trove-react-best-practices
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
   - path: ./skills/trove-react-view-transitions
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
   - path: ./skills/trove-react-native
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
   - path: ./skills/trove-vue
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.vue"]
+    category: code
 
   - path: ./skills/trove-swift
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.swift"]
+    category: code
 
   - path: ./skills/trove-lambda
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/lambda_handler.py", "**/lambda_function.py"]
+    category: servers-cloud
 
   - path: ./skills/trove-test-gap-audit
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: engineering
 
   - path: ./skills/trove-docs-sync-audit
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: reference-docs
 
   - path: ./skills/trove-review
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: pull-requests
 
   - path: ./skills/trove-commit
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: pull-requests
 
   - path: ./skills/trove-explain
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: engineering
 
   - path: ./skills/trove-typescript
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.ts", "**/*.tsx"]
+    category: code
 
   - path: ./skills/trove-tdd
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
   - path: ./skills/trove-architect
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
   - path: ./skills/trove-perf
     platforms: [claude, cursor, codex, agents, gemini, copilot]
+    category: code
 
 commands:
   # User-invocable workflow commands (namespaced as /trove-dev:<name> in Claude Code)

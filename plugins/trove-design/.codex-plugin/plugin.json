@@ -2,10 +2,16 @@
   "name": "trove-design",
   "description": "Designer skills: Figma review, accessibility, design systems",
   "version": "2026.11.11",
+  "keywords": [
+    "design",
+    "figma",
+    "accessibility",
+    "design-system"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-design",
-    "category": "design",
+    "category": "Design",
     "shortDescription": "Designer skills: Figma review, accessibility, design systems",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

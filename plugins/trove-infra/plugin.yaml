@@ -5,7 +5,7 @@ author:
 homepage: https://github.com/bravew/trove
 license: MIT
 keywords: [infrastructure, aws, terraform, cdk, docker, devops]
-category: infrastructure
+category: servers-cloud
 logo: assets/logo.svg
 brandColor: "#0F766E"
 
@@ -16,16 +16,19 @@ skills:
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/*.tf", "**/*.tfvars"]
+    category: servers-cloud
 
   - path: ./skills/trove-cdk
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/cdk.json", "**/cdk/**/*.ts"]
+    category: servers-cloud
 
   - path: ./skills/trove-docker
     platforms: [claude, cursor, codex, agents, gemini, copilot]
     auto_attach:
       globs: ["**/Dockerfile*", "**/docker-compose*.yml"]
+    category: servers-cloud
 
 
 platforms:

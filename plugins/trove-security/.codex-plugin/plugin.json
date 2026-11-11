@@ -2,10 +2,17 @@
   "name": "trove-security",
   "description": "Security review and vulnerability scanning",
   "version": "2026.11.11",
+  "keywords": [
+    "security",
+    "owasp",
+    "secrets",
+    "vulnerability",
+    "audit"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "trove-security",
-    "category": "security",
+    "category": "IT & security",
     "shortDescription": "Security review and vulnerability scanning",
     "logo": "./assets/logo.svg",
     "composerIcon": "./assets/logo.svg",

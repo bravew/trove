@@ -5,6 +5,8 @@ metadata:
   source: Vincentwei1021/video-shotcraft
   upstream-skill: video-shotcraft
   upstream-revision: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+  trove-category: designs-media
+  trove-category-label: "Designs & media"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

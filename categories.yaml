@@ -1,0 +1,68 @@
+# Trove discovery taxonomy.
+#
+# These are Trove's own category ids. The labels are the vocabulary observed in
+# Claude Desktop on 2026-11-11; they are not a vendor enum, and no host is
+# claimed to filter on them. Display labels are projected only to hosts whose
+# documented contract accepts a free-form category string.
+#
+schema_version: 1
+source: claude-desktop-observed
+observed_at: "2026-11-11"
+categories:
+  - { id: engineering, label: Engineering }
+  - { id: code, label: Code }
+  - { id: files-documents, label: "Files & documents" }
+  - { id: designs-media, label: "Designs & media" }
+  - { id: tickets-tasks, label: "Tickets & tasks" }
+  - { id: pipelines-jobs, label: "Pipelines & jobs" }
+  - { id: apis, label: APIs }
+  - { id: notes-memory, label: "Notes & memory" }
+  - { id: reference-docs, label: "Reference docs" }
+  - { id: ai-models-agents, label: "AI models & agents" }
+  - { id: websites, label: Websites }
+  - { id: claude-history, label: "Claude history" }
+  - { id: databases, label: Databases }
+  - { id: contacts-leads, label: "Contacts & leads" }
+  - { id: servers-cloud, label: "Servers & cloud" }
+  - { id: finance, label: Finance }
+  - { id: logs-errors, label: "Logs & errors" }
+  - { id: marketing, label: Marketing }
+  - { id: email-messages, label: "Email & messages" }
+  - { id: pull-requests, label: "Pull requests" }
+  - { id: sales, label: Sales }
+  - { id: operations, label: Operations }
+  - { id: product, label: Product }
+  - { id: claude-settings, label: "Claude settings" }
+  - { id: research, label: Research }
+  - { id: financial-services, label: "Financial services" }
+  - { id: dependencies-packages, label: "Dependencies & packages" }
+  - { id: learning, label: Learning }
+  - { id: data, label: Data }
+  - { id: design, label: Design }
+  - { id: legal, label: Legal }
+  - { id: jobs-career, label: "Jobs & career" }
+  - { id: it-security, label: "IT & security" }
+  - { id: retail-ecommerce, label: "Retail & e-commerce" }
+  - { id: hr, label: HR }
+  - { id: music, label: Music }
+  - { id: personal-finance, label: "Personal finance" }
+  - { id: customer-support, label: "Customer support" }
+  - { id: events, label: Events }
+  - { id: healthcare-life-sciences, label: "Healthcare & life sciences" }
+  - { id: travel, label: Travel }
+  - { id: puzzles, label: Puzzles }
+  - { id: writing, label: Writing }
+  - { id: health-fitness, label: "Health & fitness" }
+  - { id: games, label: Games }
+  - { id: shopping, label: Shopping }
+  - { id: government, label: Government }
+  - { id: media-entertainment, label: "Media & entertainment" }
+  - { id: family-relationships, label: "Family & relationships" }
+  - { id: education, label: Education }
+  - { id: food, label: Food }
+  - { id: sports, label: Sports }
+  - { id: faith, label: Faith }
+  - { id: home, label: Home }
+  - { id: travel-hospitality, label: "Travel & hospitality" }
+  - { id: books, label: Books }
+  - { id: nonprofit, label: Nonprofit }

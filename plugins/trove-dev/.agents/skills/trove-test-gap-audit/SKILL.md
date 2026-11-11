@@ -4,6 +4,8 @@ description: "Read-only audit for missing, weak, stale, or mis-scoped test cover
 metadata:
   source: github/awesome-copilot
   upstream-skill: test-gap-audit
+  trove-category: engineering
+  trove-category-label: Engineering
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

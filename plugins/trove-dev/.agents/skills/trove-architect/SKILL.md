@@ -1,6 +1,9 @@
 ---
 name: trove-architect
 description: "Design the shape before the code: sketch types, signatures, and module structure with not-implemented bodies, agree, then fill in. Scrap the sketch when implementation proves it wrong. Use for non-trivial work where jumping straight to code would lock in the wrong shape."
+metadata:
+  trove-category: code
+  trove-category-label: Code
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

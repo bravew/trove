@@ -15,7 +15,7 @@
     "transcoding",
     "editing"
   ],
-  "category": "media",
+  "category": "Designs & media",
   "skills": [
     "./.copilot/skills/trove-ffmpeg",
     "./.copilot/skills/trove-beat-sync",

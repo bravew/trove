@@ -5,6 +5,7 @@ import {
   applyVallyBaseline,
   calculateScore,
   compareTrend,
+  normalizeVallyBaselineKey,
   parseVallyOutput,
   QUALITY_REPORT_VERSION,
   renderQualityMarkdown,
@@ -53,8 +54,21 @@ describe("quality report", () => {
     ].join("\n");
     expect(parseVallyOutput(output).map(vallyFindingKey)).toEqual([
       "trove-review|spec-compliance|Allowed-tools field must be a space-delimited string, got object.",
-      "trove-review|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line 87.",
+      "trove-review|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir).",
     ]);
+  });
+
+  test("a finding's line number does not change its baseline identity", () => {
+    const at = (line: number) => ({
+      skill: "trove-review",
+      rule: "valid-refs",
+      message: `Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir) at line ${line}.`,
+    });
+    expect(vallyFindingKey(at(20))).toBe(vallyFindingKey(at(85)));
+    expect(normalizeVallyBaselineKey(vallyFindingKey(at(20))))
+      .toBe("trove-review|valid-refs|Found 1 invalid file reference(s): ../../docs/orchestration.md (outside-skill-dir).");
+    expect(normalizeVallyBaselineKey("trove-review|spec-compliance|no line here."))
+      .toBe("trove-review|spec-compliance|no line here.");
   });
 
   test("accepted Vally findings become visible warnings while new rules still block", () => {
