@@ -79,8 +79,8 @@ sources:
         local_path: skills/coding/trove-react-view-transitions
         base_sha: 1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62
         base_tree_digest: sha256:8fbfaa8d8ebd6d1f81838907489ac832633b98caab790f50ae245eb78681e337
-        local_tree_digest: sha256:cc4ee7d48a63c8645f482eb426010f5cf3296e70fc887a3fa52ff2eea4006cbf
-        patch_digest: sha256:e9673e95f79c91d564c261c6d64f90a472da6e1c2a3efc0222487ef6bf12a5fc
+        local_tree_digest: sha256:b7c615829aefeb35abea86b10c39dbf97f7ec3424806a69e5e7f36318e61128a
+        patch_digest: sha256:5ad2cd2c158dc1581d883ebd1a09aba3d63a23befeb463ec0d94b10ae73eebec
         checked_sha: 1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62
         checked_at: "2026-10-27T21:40:02Z"
         candidate_sha: null
