@@ -214,6 +214,14 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.11.11] - 2026-11-11
+
+### What's Changed
+* November sync: upstream refresh, Claude 5.5 judge, and BuildLoop media skills by @bravew in https://github.com/bravew/trove/pull/67
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.11.10...v2026.11.11
+
 ## [2026.11.10] - 2026-11-10
 
 ### What's Changed
