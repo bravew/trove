@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trove-take-cut/takes",
+  "title": "Take decision record",
+  "description": "One entry per script line, naming the take that was kept and the rough window the waveform scan refines. Times are seconds in the source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "lines"],
+  "properties": {
+    "source": { "type": "string", "minLength": 1 },
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["line", "text", "kept", "window", "reason"],
+        "properties": {
+          "line": { "type": "integer", "minimum": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "kept": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["take", "of"],
+            "properties": {
+              "take": { "type": "integer", "minimum": 1 },
+              "of": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "window": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "type": "number", "minimum": 0 },
+              "end": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "pause_after": { "type": "number", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

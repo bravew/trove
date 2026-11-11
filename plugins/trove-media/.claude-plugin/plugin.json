@@ -10,6 +10,9 @@
     "./skills/trove-beat-sync",
     "./skills/trove-shot-recipes",
     "./skills/trove-video-review",
-    "./skills/trove-product-video"
+    "./skills/trove-product-video",
+    "./skills/trove-take-cut",
+    "./skills/trove-broll-ingest",
+    "./skills/trove-video-edit"
   ]
 }

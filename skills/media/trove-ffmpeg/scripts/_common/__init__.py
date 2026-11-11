@@ -52,24 +52,26 @@ for _stream in (sys.stdout, sys.stderr):
 # demos/ or evals/ has ever reached for through `_common`.
 
 from _common.runner import (
-    add_common, apply_common, _check_existing_output, refuse_existing_outputs, _check_no_overwrite_input, _check_output_path, child_args,
+    add_common, apply_common, _check_existing_output, refuse_existing_outputs, guard_sidecar, _check_no_overwrite_input, _check_output_path, child_args,
     child_limit, _CHILDREN, _cleanup_partial_output, _cmdline, CODECS, Context, DEFAULT_TIMEOUT,
     _DRAWTEXT_PENDING, _DRAWTEXT_TMPDIR, _drawtext_tmpdir, dry_run_input_pending, _ENCODERS, _env_timeout,
-    ERROR_CODE, ERROR_RETRYABLE, EVEN_SCALE, _execute, _fail, ffmpeg_base, ffmpeg_encoders, _FFMPEG_VERSION,
-    ffmpeg_version, flush_drawtext_textfiles, INSTALL_HINTS, install_signal_handlers, _is_ffmpeg, _limit_for,
+    ERROR_CODE, ERROR_RETRYABLE, EVEN_SCALE, _execute, _fail, ffmpeg_base, ffmpeg_encoders, ffmpeg_exe, _FFMPEG_RELEASE, _FFMPEG_VERSION,
+    ffmpeg_bsfs, ffmpeg_filters, ffmpeg_list_error, require_filter, filter_missing_hint, ffmpeg_release, ffmpeg_version, flush_drawtext_textfiles, INSTALL_HINTS, install_signal_handlers, _is_ffmpeg, _limit_for,
     _odd_dimension_retry, _on_signal, _OutputLock, _pid_dead, place_output, PROBE_TIMEOUT, _progress_line,
     read_text_or_die, refuse_output_is_input, _remember_output, require_tool, run, run_analysis, _run_captured,
-    run_keeping_subtitles, run_tool, _run_with_progress, shell_quote, _SIGNALS_INSTALLED, _stage_existing_output,
+    run_keeping_subtitles, run_tool, _run_with_progress, shell_quote, sibling_temp, still_input_args, _SIGNALS_INSTALLED, _stage_existing_output,
     STATE, _timed_out, _unwatch, _watch, X264_PRESETS
 )
 from _common.emit import (
-    _brief, _BRIEF_DROP, _brief_summary, _CURRENT_CTX, die, emit, info, _plan_at_exit, _plan_inputs, _PLAN_STRIP,
-    PLAN_VERSION, print_json, _set_current_ctx, write_plan
+    absorb_stage, audit, _brief, _BRIEF_DROP, _brief_summary, _CURRENT_CTX, die, emit, info, note, _plan_at_exit, _plan_inputs,
+    _plan_unbound_inputs, _PLAN_STRIP, PLAN_VERSION, print_json, record_fallback, record_skip, refuse, _set_current_ctx, warn,
+    write_plan
 )
 from _common.probe import (
-    analyze_levels, _aspect_string, _bit_depth, decode_pcm_mono, detect_scenes, detect_silences, fingerprint,
-    _fraction, keyframes_near, SCORE_RE, SIL_RE, decode_gray_frames,
-    measured_level_dbfs, AUDIO_MEDIA_EXT, MEDIA_EXT, _output_failed, probe, rms_envelope, _to_float, _to_int, verify_output
+    analyze_levels, LEGAL_RANGE_CHOICES, LEGAL_RANGES, legal_limits, measure_signal_range, _aspect_string, _bit_depth, decode_pcm_mono, detect_scenes, detect_silences, fingerprint,
+    _fraction, keyframe_times, keyframes_near, classify_frame_timing, measure_frame_timing, SCORE_RE, SIL_RE, decode_gray_frames,
+    measured_level_dbfs, AUDIO_MEDIA_EXT, MEDIA_EXT, _output_failed, probe, rms_envelope, _to_float, _to_int, verify_output,
+    display_size, pixel_aspect, square_pixels, square_pixels_note
 )
 from _common.decision import (
     aac_args, add_pad_fill_args, aspect_ratio, audio_codec_for, AUDIO_CODECS, brand_caption_style, BRAND_DEFAULTS,
@@ -83,7 +85,7 @@ from _common.decision import (
     _onset_strength, _pick_onsets, _autocorrelation_peak, _grid_score,
     brand_states_font, cfr_args, concat_list_line, db_to_linear, default_output, encoder_args, escape_filter_path,
     fmt_secs, fmt_smpte_time, fmt_srt_time, frame_size, is_audio_output, load_brand, MissingFpsError, pad_filters, parse_time,
-    signed_time_arg, SVT_PRESET, time_arg, video_args, x264_args, _x264_raw
+    signed_time_arg, source_codec_video_args, drawn_chain, draws_chroma, label_chain, layer_base_chain, matrix_chain, range_chain, rgb_chain_to_bt709, SVT_PRESET, time_arg, video_args, x264_args, _x264_raw
 )
 from _common.asr import (
     ASR_ENGINES, ASR_INSTALL_HINT, _asr_run, die_no_engine, parse_srt, transcribe, _transcribe_in,
@@ -91,10 +93,12 @@ from _common.asr import (
     whisper_word_timings, write_srt
 )
 from _common.color import (
-    bt709_tag_args, color_hex, _COLOR_TOKEN_RE, _sdr_bt709, validate_color
+    bt709_label_filter, bt709_matrix_args, bt709_matrix_filter, bt709_tag_args, color_hex, _COLOR_TOKEN_RE, drawn_stream_format, fold_bt709_matrix,
+    as_limited, is_full_range, is_neutral_color, is_rgb, limited_range_filter, NON_BT709_MATRICES, rgb_island, rgb_to_bt709_filter, _sdr_bt709, validate_color
 )
 from _common.text import (
-    ADVANCE_EM, BIDI_SCRIPTS, _char_em, char_script, default_font_file, detect_script, drawtext_boxborderw, drawtext_center_align,
+    ADVANCE_EM, BIDI_SCRIPTS, _char_em, char_script, default_font_file, detect_script, drawtext_boxborderw, drawtext_center_align, drawtext_fontfile,
+    drawtext_draws_newline_glyph, is_multiline, drawtext_clean, drawtext_line_metrics, NEWLINE_GLYPH_RELEASES,
     drawtext_shaping, drawtext_text_opts, emoji_asset_for, EMOJI_ASSET_HINT, emoji_clusters, emoji_codepoint_name,
     _EMOJI_COLOR_FAMILIES, _emoji_color_font, emoji_filter_chain, _emoji_name_candidates, EMOJI_RANGES,
     _EMOJI_REGIONAL, emoji_support, _EMOJI_SUPPORT_CACHE, _EMOJI_TAIL, escape_drawtext, _family_rank, FC_LANG,
@@ -144,8 +148,8 @@ class _Facade(_types.ModuleType):
     # own copy is the import-time binding and would read stale. Reads of these names go to the
     # defining module (audit 14, P1-1); every other name is a plain re-export of the same object.
     _LIVE = {
-        "_FFMPEG_VERSION": "runner", "_SIGNALS_INSTALLED": "runner",
-        "_DRAWTEXT_TMPDIR": "runner", "_ENCODERS": "runner", "_CURRENT_CTX": "emit",
+        "_FFMPEG_VERSION": "runner", "_FFMPEG_RELEASE": "runner", "_FFMPEG_RELEASE_READ": "runner", "_SIGNALS_INSTALLED": "runner",
+        "_DRAWTEXT_TMPDIR": "runner", "_ENCODERS": "runner", "_BSFS": "runner", "_CURRENT_CTX": "emit",
     }
 
     def __getattribute__(self, name):
@@ -176,10 +180,10 @@ sys.modules[__name__].__class__ = _Facade
 __all__ = [
     "Any", "Dict", "Fraction", "List", "Optional", "Path", "Sequence", "Tuple", "argparse", "json", "math", "os",
     "platform", "re", "shutil", "subprocess", "sys", "unicodedata",
-    "aac_args", "add_common", "add_pad_fill_args", "ADVANCE_EM", "analyze_levels", "apply_common", "detect_scenes", "detect_silences", "SCORE_RE", "SIL_RE", "_aspect_string",
+    "aac_args", "add_common", "add_pad_fill_args", "ADVANCE_EM", "analyze_levels", "LEGAL_RANGE_CHOICES", "LEGAL_RANGES", "legal_limits", "measure_signal_range", "apply_common", "detect_scenes", "detect_silences", "SCORE_RE", "SIL_RE", "_aspect_string",
     "audio_codec_for", "AUDIO_CODECS", "BIDI_SCRIPTS", "_bit_depth", "brand_caption_style", "BRAND_DEFAULTS",
-    "brand_states_font", "_brief", "_BRIEF_DROP", "_brief_summary", "bt709_tag_args", "cfr_args", "_char_em",
-    "char_script", "_check_existing_output", "refuse_existing_outputs", "_check_no_overwrite_input", "_check_output_path", "child_args",
+    "brand_states_font", "_brief", "_BRIEF_DROP", "_brief_summary", "bt709_matrix_args", "bt709_matrix_filter", "bt709_tag_args", "cfr_args", "_char_em",
+    "char_script", "_check_existing_output", "refuse_existing_outputs", "guard_sidecar", "_check_no_overwrite_input", "_check_output_path", "child_args",
     "child_limit", "_CHILDREN", "_cleanup_partial_output", "_cmdline", "CODECS", "color_hex", "_COLOR_TOKEN_RE",
     "concat_list_line", "Context", "_CURRENT_CTX", "db_to_linear", "decode_pcm_mono", "description_block", "_evidence_rank", "fmt_chapter_time", "propose_chapters",
     "filler_spans", "FILLER_WORDS", "FILLER_AMBIGUOUS", "FILLER_DISCOURSE_MARKERS",
@@ -188,20 +192,20 @@ __all__ = [
     "BEAT_REFRACTORY_S", "BEAT_WINDOW_S", "BEAT_SUPPORT_DIVISOR", "BEAT_ALIGN_DIVISOR",
     "BEAT_Z_FLOOR", "BEAT_Z_SPAN",
     "_onset_strength", "_pick_onsets", "_autocorrelation_peak", "_grid_score",
-    "default_font_file", "default_output", "DEFAULT_TIMEOUT", "detect_script", "die", "drawtext_boxborderw", "drawtext_center_align",
+    "default_font_file", "default_output", "DEFAULT_TIMEOUT", "detect_script", "die", "drawtext_boxborderw", "drawtext_center_align", "drawtext_fontfile", "drawtext_draws_newline_glyph", "is_multiline", "drawtext_clean", "drawtext_line_metrics", "NEWLINE_GLYPH_RELEASES",
     "_DRAWTEXT_PENDING", "drawtext_shaping", "drawtext_text_opts", "_DRAWTEXT_TMPDIR", "_drawtext_tmpdir",
     "dry_run_input_pending", "emit", "emoji_asset_for", "EMOJI_ASSET_HINT", "emoji_clusters",
     "emoji_codepoint_name", "_EMOJI_COLOR_FAMILIES", "_emoji_color_font", "emoji_filter_chain",
     "_emoji_name_candidates", "EMOJI_RANGES", "_EMOJI_REGIONAL", "emoji_support", "_EMOJI_SUPPORT_CACHE",
     "_EMOJI_TAIL", "encoder_args", "_ENCODERS", "_env_timeout", "ERROR_CODE", "ERROR_RETRYABLE", "escape_drawtext",
     "escape_filter_path", "EVEN_SCALE", "_execute", "_fail", "_family_rank", "FC_LANG", "_fc_list_fonts",
-    "FC_UNKNOWN", "ffmpeg_base", "ffmpeg_encoders", "_FFMPEG_VERSION", "ffmpeg_version", "fingerprint",
-    "flush_drawtext_textfiles", "fmt_secs", "fmt_smpte_time", "fmt_srt_time", "font_covers_script",
+    "FC_UNKNOWN", "ffmpeg_base", "ffmpeg_bsfs", "ffmpeg_filters", "require_filter", "filter_missing_hint", "ffmpeg_encoders", "ffmpeg_list_error", "ffmpeg_exe", "_FFMPEG_RELEASE", "_FFMPEG_VERSION", "ffmpeg_release", "ffmpeg_version", "fingerprint",
+    "flush_drawtext_textfiles", "fold_bt709_matrix", "fmt_secs", "fmt_smpte_time", "fmt_srt_time", "font_covers_script",
     "font_family_for_script", "font_family_of_file", "FONT_FLAG_HINT", "font_for_script", "FONT_INSTALL_HINT",
     "fonts_dir_covers_script", "_fraction", "has_emoji", "info", "INSTALL_HINTS", "install_signal_handlers",
     "is_audio_output", "_is_emoji_base", "_is_emoji_char", "_is_ffmpeg", "_is_mark", "_KEYCAP", "_KEYCAP_BASES",
-    "keyframes_near", "LANGUAGE_NAMES", "LATIN_EM", "LEADING_VOWELS", "_libass_color_probe", "_limit_for",
-    "load_brand", "measured_level_dbfs", "AUDIO_MEDIA_EXT", "MEDIA_EXT", "MissingFpsError", "needs_shaping", "NO_SPACE_SCRIPTS",
+    "keyframe_times", "keyframes_near", "classify_frame_timing", "measure_frame_timing", "LANGUAGE_NAMES", "LATIN_EM", "LEADING_VOWELS", "_libass_color_probe", "_limit_for",
+    "load_brand", "measured_level_dbfs", "AUDIO_MEDIA_EXT", "MEDIA_EXT", "MissingFpsError", "needs_shaping", "NO_SPACE_SCRIPTS", "NON_BT709_MATRICES",
     "_odd_dimension_retry", "_on_signal", "_output_failed", "_OutputLock", "pad_filters", "parse_time", "_pid_dead",
     "place_output", "_plan_at_exit", "_plan_inputs", "_PLAN_STRIP", "PLAN_VERSION", "PREFERRED_FAMILIES",
     "print_json", "probe", "PROBE_TIMEOUT", "_progress_line", "read_text_or_die", "refuse_output_is_input",
@@ -209,11 +213,12 @@ __all__ = [
     "decode_gray_frames", "frame_flow", "label_shot_flow", "MOTION_GRID", "MOTION_SEARCH", "MOTION_STATIC_PX", "MOTION_PAN_SPREAD",
     "_run_captured", "run_keeping_subtitles", "run_tool", "_run_with_progress", "_SCRIPT_FONT_CACHE",
     "_script_font_entry", "script_font_for_text", "script_font_status", "_script_font_uncached", "_SCRIPT_RANGES",
-    "SCRIPTS", "_sdr_bt709", "_set_current_ctx", "_SHAPING_BUILD_CACHE", "SHAPING_SCRIPTS", "shell_quote",
+    "SCRIPTS", "_sdr_bt709", "_set_current_ctx", "_SHAPING_BUILD_CACHE", "SHAPING_SCRIPTS", "shell_quote", "sibling_temp", "still_input_args",
     "_SIGNALS_INSTALLED", "signed_time_arg", "_stage_existing_output", "STATE", "SVT_PRESET", "text_width_em",
     "time_arg", "_timed_out", "_to_float", "_to_int", "_unwatch", "validate_color", "verify_output",
-    "video_args", "_VS15", "_VS16", "_watch", "WINDOWS_FONTS", "write_plan", "x264_args", "X264_PRESETS",
+    "source_codec_video_args", "drawn_chain", "draws_chroma", "drawn_stream_format", "is_neutral_color", "rgb_island", "label_chain", "layer_base_chain", "matrix_chain", "range_chain", "as_limited", "is_full_range", "limited_range_filter", "rgb_chain_to_bt709", "bt709_label_filter", "rgb_to_bt709_filter", "is_rgb", "video_args", "_VS15", "_VS16", "_watch", "WINDOWS_FONTS", "write_plan", "x264_args", "X264_PRESETS",
     "_x264_raw", "_ZWJ",
+    "absorb_stage", "audit", "note", "_plan_unbound_inputs", "record_fallback", "record_skip", "refuse", "warn",
     "ASR_ENGINES", "ASR_INSTALL_HINT", "_asr_run", "die_no_engine", "parse_srt", "transcribe",
     "_transcribe_in", "transcribe_words", "_words_from_openai_whisper_json",
     "_words_from_whisper_cpp_json", "whisper_word_timings", "write_srt",
@@ -225,5 +230,6 @@ __all__ = [
     "PENALTY_IDEOGRAPHS", "PENALTY_NEUTRAL", "PENALTY_OKURIGANA", "PENALTY_PARTICLE", "PENALTY_SENTENCE_END",
     "_rebalance", "_rebalance_phrase", "SAFE_WIDTH_FRACTION", "_split_hyphens", "_slice_atom", "_particle_ends",
     "_particle_starts", "wrap_text", "wrap_variants", "WRAP_MODES",
-    "fit_size", "line_em_for_size", "MIN_CAPTION_FRACTION", "ass_units_local"
+    "fit_size", "line_em_for_size", "MIN_CAPTION_FRACTION", "ass_units_local",
+    "display_size", "pixel_aspect", "square_pixels", "square_pixels_note"
 ]

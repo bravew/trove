@@ -102,7 +102,7 @@ To run locally:
 
 ```bash
 export ANTHROPIC_API_KEY=...
-bun run eval:changed       # only skills changed since HEAD~1
+bun run eval:changed       # only skills changed in commits since origin/main
 bun run eval:gate          # full sweep
 ```
 

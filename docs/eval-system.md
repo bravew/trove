@@ -89,10 +89,28 @@ bun run eval:gate
 ```
 
 `--changed` detects skills whose `SKILL.md.tmpl` (or anything under
-`skills/<…>/<skill>/`) was modified relative to `HEAD~1`. Without an
-`ANTHROPIC_API_KEY`, the runner falls back to a structure check (rubric +
-tasks + skill body present); with an API key, it scores tasks against
-the rubric.
+`skills/<…>/<skill>/`, its eval suite, or its bundled copies) differs between
+the merge base with `origin/main` and `HEAD` (`--base=` and `--head=`, or
+`EVAL_BASE_REF` and `EVAL_HEAD_REF`). It compares commits, so uncommitted work
+is invisible to it and the run prints "No changed skills detected". A change to
+a host config, a template, a generator, or the runner itself selects every
+maintained skill. Without an
+`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, the runner falls back to a structure check (rubric +
+tasks + skill body present); with credentials, it scores tasks against
+the rubric. The default judge is `claude-sonnet-5-5` at explicit effort `high`
+(`EVAL_MODEL` and `EVAL_EFFORT`). It sends the server-side default refusal
+fallback, records the served model and fallback evidence, and treats refusal or
+truncation as a named failure with no quality score. A rate limit or an
+unreachable judge stops the run on the first response. The scores gathered
+before the stop are still written, under an `aborted` field that names the
+cause and the task it stopped on, so a partial file is never read as a gate
+result. `EVAL_RESULTS_PATH` moves the output away from `evals/results.json`.
+`EVAL_SKIP_SKILLS` names suites to leave out when collecting the remaining
+scores from an interrupted run. All required skills still receive structural
+validation. The results file holds only the selected tasks and records the
+omitted suites in `skippedSkills`. The runner does not load or verify earlier
+scores, so `--gate` exits 1 for this partial run even if every selected task
+passes. A name with no suite stops the run before any judge call.
 
 ## CI
 

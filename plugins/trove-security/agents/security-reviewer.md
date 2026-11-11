@@ -4,7 +4,7 @@ description: |
   Automated security review agent that scans code changes for OWASP Top 10
   vulnerabilities, secret leaks, and insecure patterns. Use for pre-merge
   security checks on pull requests.
-model: sonnet
+model: opus
 ---
 
 # Security Reviewer Agent

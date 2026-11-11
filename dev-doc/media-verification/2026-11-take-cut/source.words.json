@@ -1,0 +1,66 @@
+{
+ "source": "filler_en.mp4",
+ "language": "en",
+ "words": [
+  {
+   "text": "Hey,",
+   "start": 0.0,
+   "end": 0.78
+  },
+  {
+   "text": "hello",
+   "start": 1.18,
+   "end": 1.96
+  },
+  {
+   "text": "there.",
+   "start": 1.96,
+   "end": 2.34
+  },
+  {
+   "text": "Well,",
+   "start": 3.8,
+   "end": 4.22
+  },
+  {
+   "text": "good",
+   "start": 4.96,
+   "end": 5.28
+  },
+  {
+   "text": "morning.",
+   "start": 5.28,
+   "end": 5.62
+  },
+  {
+   "text": "Hey,",
+   "start": 6.44,
+   "end": 6.78
+  },
+  {
+   "text": "hello",
+   "start": 7.42,
+   "end": 7.74
+  },
+  {
+   "text": "there.",
+   "start": 7.74,
+   "end": 8.1
+  },
+  {
+   "text": "Well,",
+   "start": 9.5,
+   "end": 10.0
+  },
+  {
+   "text": "good",
+   "start": 10.36,
+   "end": 10.68
+  },
+  {
+   "text": "morning.",
+   "start": 10.68,
+   "end": 11.02
+  }
+ ]
+}

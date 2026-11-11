@@ -30,10 +30,11 @@ classes from `references/css-recipes.md`. Unsupported browsers skip animations.
 
 ## Stack Notes
 
-This skill assumes a Vite-based React 19 app (React Router, not Next.js
-App Router). The React `<ViewTransition>` component is canary-only for Vite; use
-`react@canary react-dom@canary` and verify with `npm ls react`. The
-`references/nextjs.md` file is only for future Next.js work.
+This skill assumes a Vite-based React app (React Router, not Next.js
+App Router). `<ViewTransition>` and `addTransitionType` are stable in React 19.3,
+so use `react` and `react-dom` 19.3 or newer and verify with `npm ls react`.
+Earlier stable versions do not include these APIs. The `references/nextjs.md`
+file is only for future Next.js work.
 
 ## Load On Demand
 

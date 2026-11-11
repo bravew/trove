@@ -99,20 +99,32 @@ describe("upstream manifest boundary", () => {
       .find((artifact) => artifact.id === "trove-pulse");
     expect(pulse).toBeDefined();
     expect(pulse!.localOnly).toEqual(["SKILL.md.tmpl"]);
-    expect(pulse!.patches).toEqual([]);
-    expect(pulse!.transforms.filter((transform) => transform.kind === "replace-literal")).toEqual([{
-      kind: "replace-literal",
-      path: "references/runtime-spec.md",
-      from: "`/last30days",
-      to: "`/trove-research:trove-pulse",
-      minimumOccurrences: 1,
-    }]);
+    // The patch carries Trove's own edits beyond the transforms: the setup
+    // wizard no longer describes the excluded browser-cookie lanes, and
+    // BROWSER_CDP_URL is dropped from the research keys.
+    expect(pulse!.patches).toEqual(["upstream-patches/trove-pulse/local.patch"]);
+    // The rewrite moved from the spec to every reference that still quotes the
+    // slash command. Assert the scope, not the file list, so a new reference
+    // does not silently widen it.
+    const rewrites = pulse!.transforms.filter((transform) => transform.kind === "replace-literal");
+    expect(rewrites.length).toBeGreaterThan(0);
+    expect(new Set(rewrites.map((transform) => `${transform.from} -> ${transform.to}`))).toEqual(
+      new Set([
+        "`/last30days -> `/trove-research:trove-pulse",
+        "/last30days -  -> /trove-research:trove-pulse - ",
+        "with /last30days  -> with /trove-research:trove-pulse ",
+      ]),
+    );
+    expect(rewrites.every((transform) => transform.path.startsWith("references/") || transform.path.startsWith("scripts/"))).toBe(true);
   });
 
   test("records matching metadata.upstream-version for pulse artifacts", () => {
     const pulse = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/SKILL.md.tmpl"));
     const spec = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/references/runtime-spec.md"));
-    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe(spec.version);
+    // The wrapper records the release it was written against. The vendored
+    // spec moves with the upstream pin, so the two versions diverge by design.
+    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe("3.21.1");
+    expect(spec.version).toBe("3.33.0");
 
     const cn = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse-cn/SKILL.md.tmpl"));
     expect((cn.metadata as Record<string, string>)["upstream-version"]).toBe(cn.version);
@@ -294,6 +306,193 @@ describe("offline lock verification", () => {
     } finally {
       fs.rmSync(output, { force: true });
     }
+  });
+
+  test("pulse-cn project config cannot grant its own trust", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trove-pulse-cn-trust-"));
+    const config = fs.mkdtempSync(path.join(os.tmpdir(), "trove-pulse-cn-home-"));
+    const project = path.join(temporary, ".claude");
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(project, "last30days-cn.env"), [
+      "LAST30DAYS_TRUST_PROJECT_CONFIG=true",
+      "GITHUB_TOKEN=fixture",
+      "LAST30DAYS_UPSTREAM=/tmp/not-an-upstream",
+    ].join("\n"));
+    const script = `
+import os, sys
+sys.path.insert(0, sys.argv[1])
+os.chdir(sys.argv[2])
+import io
+from lib import crawler_bridge, env, hot_board, http, upstream_bridge
+crawler_bridge.COOKIE_DIR = __import__("pathlib").Path(sys.argv[3])
+config = env.get_config()
+print("TOKEN_PRESENT=" + str(bool(config.get("GITHUB_TOKEN"))))
+print("SOURCE=" + str(config.get("_CONFIG_SOURCE")))
+print("UPSTREAM=" + str(upstream_bridge.find_upstream()))
+print("PYTHON=" + str(upstream_bridge.upstream_python()[0]))
+kept = crawler_bridge.import_cookie_header("zhihu", "z_c0=login; session=other")
+print("COOKIE_NAMES=" + str(kept))
+page = hot_board.render_page({"boards": {}, "generated_at": "2026-11-10"}, 1, 1, "test", str, lambda url: url)
+print("SPRITE_EMBEDDED=" + str("data:image/png;base64" in page))
+first = http.urllib.request.Request("http://one.test/start", headers={"Authorization": "secret", "Cookie": "a=b"})
+error = http.urllib.error.HTTPError("http://one.test/start", 302, "Found", {"Location": "http://two.test/next"}, None)
+redirected = http._StripAuthOnCrossOriginRedirect().redirect_request(first, None, error.code, error.msg, error.headers, "http://two.test/next")
+names = {name.lower() for name in redirected.header_items()}
+print("AUTH=" + str("authorization" in names))
+print("COOKIE=" + str("cookie" in names))
+`;
+    const cookies = fs.mkdtempSync(path.join(os.tmpdir(), "trove-pulse-cn-cookies-"));
+    const run = (extra: Record<string, string>) => spawnSync("python3", ["-I", "-c", script,
+      path.join(ROOT, "skills/research/trove-pulse-cn/scripts"), temporary, cookies], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH ?? "",
+        LAST30DAYS_CN_CONFIG_DIR: config,
+        ...extra,
+      },
+    });
+    try {
+      const untrusted = run({});
+      expect(untrusted.status).toBe(0);
+      expect(untrusted.stdout).toContain("TOKEN_PRESENT=False");
+      expect(untrusted.stdout).toContain("UPSTREAM=None");
+
+      const trusted = run({ LAST30DAYS_TRUST_PROJECT_CONFIG: "true" });
+      expect(trusted.status).toBe(0);
+      expect(trusted.stdout).toContain("TOKEN_PRESENT=True");
+      expect(trusted.stdout).toContain("SOURCE=project:");
+
+      const relative = run({
+        LAST30DAYS_TRUST_PROJECT_CONFIG: "true",
+        LAST30DAYS_UPSTREAM_PYTHON: "python3",
+      });
+      expect(relative.status).toBe(0);
+      expect(relative.stdout).toContain("PYTHON=None");
+      expect(relative.stdout).toContain("COOKIE_NAMES=1");
+      expect(relative.stdout).toContain("SPRITE_EMBEDDED=False");
+      expect(relative.stdout).toContain("AUTH=False");
+      expect(relative.stdout).toContain("COOKIE=False");
+      const saved = JSON.parse(fs.readFileSync(path.join(cookies, "zhihu_cookies.json"), "utf8")) as { name: string }[];
+      expect(saved.map((cookie) => cookie.name)).toEqual(["z_c0"]);
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+      fs.rmSync(config, { recursive: true, force: true });
+      fs.rmSync(cookies, { recursive: true, force: true });
+    }
+  });
+
+  test("pulse report files are owner-only and a failed grok audit does not launch", () => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), "trove-pulse-runtime-"));
+    const script = `
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lib import render, schema
+os.environ["LAST30DAYS_OUTPUT_DIR"] = sys.argv[3]
+report = schema.Report(
+    topic="fixture",
+    range_from="2026-10-11",
+    range_to="2026-11-10",
+    generated_at="2026-11-10T00:00:00Z",
+    mode="research",
+)
+render.write_outputs(report)
+private = 0
+for name in ("report.json", "report.md", "report.html", "last30days.context.md"):
+    if Path(sys.argv[3], name).stat().st_mode & 0o077:
+        print("LEAK=" + name)
+    else:
+        private += 1
+print("REPORT_PRIVATE=" + str(private))
+sys.path.insert(0, sys.argv[2])
+for name in list(sys.modules):
+    if name == "lib" or name.startswith("lib."):
+        del sys.modules[name]
+from lib import grok_audit, grok_x
+launched = []
+class Done:
+    returncode = 0
+    stdout = "{}"
+    stderr = ""
+def fake_run(argv, **kwargs):
+    launched.append(list(argv))
+    return Done()
+grok_x.binary_path = lambda: "/tmp/fake-grok"
+grok_x._check_cli_version = lambda binary, workdir, timeout: (None, "grok 1.0.99")
+grok_x._stage_child_home = lambda workdir: workdir
+grok_x.subprocess.run = fake_run
+grok_audit.resolve_native = lambda binary, timeout: "/tmp/fake-grok"
+for status in (grok_audit.FAIL, grok_audit.INCONCLUSIVE, grok_audit.PASS):
+    launched.clear()
+    grok_audit.verdict_for = lambda binary, version, deadline, status=status: grok_audit.Verdict(status, "fixture")
+    result = grok_x._invoke("topic", 5)
+    print("GROK_" + status.upper() + "=" + ("LAUNCHED" if launched else "STOPPED"))
+    if status == grok_audit.PASS:
+        print("GROK_PASS_BYPASS=" + str(any("bypassPermissions" in str(arg) for arg in launched)))
+    else:
+        print("GROK_" + status.upper() + "_GATE=" + str("tool-boundary audit" in str(result.get("error", ""))))
+`;
+    const run = spawnSync("python3", ["-I", "-c", script,
+      path.join(ROOT, "skills/research/trove-pulse-cn/scripts"),
+      path.join(ROOT, "skills/research/trove-pulse/scripts"),
+      output,
+    ], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    try {
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain("REPORT_PRIVATE=4");
+      expect(run.stdout).not.toContain("LEAK=");
+      expect(run.stdout).toContain("GROK_FAIL=STOPPED");
+      expect(run.stdout).toContain("GROK_FAIL_GATE=True");
+      expect(run.stdout).toContain("GROK_INCONCLUSIVE=STOPPED");
+      expect(run.stdout).toContain("GROK_INCONCLUSIVE_GATE=True");
+      expect(run.stdout).toContain("GROK_PASS=LAUNCHED");
+      expect(run.stdout).toContain("GROK_PASS_BYPASS=True");
+    } finally {
+      fs.rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  test("pulse hacker news filter reads the submission body and requires the topic's longest word", () => {
+    const script = String.raw`
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from lib import hackernews
+
+def hit(object_id, title, body=None):
+    return {"objectID": object_id, "title": title, "story_text": body, "points": 40,
+            "num_comments": 3, "created_at_i": 1793000000, "author": "someone"}
+
+response = {"hits": [
+    hit("1", "Remotion 5 released"),
+    hit("2", "Ask HN: How do you render product demos?", "We script ours with Remotion and it works."),
+    hit("3", "Show HN: A video editor written in React"),
+    hit("4", "Removing relationship reactions from our app"),
+]}
+multi = hackernews.parse_hackernews_response(response, query="remotion video react")
+single = hackernews.parse_hackernews_response(response, query="video")
+print(json.dumps({
+    "multi": [item["id"] for item in multi],
+    "body": next(item["text"] for item in multi if item["id"] == "2"),
+    "single": [item["id"] for item in single],
+    "unfiltered": len(hackernews.parse_hackernews_response(response)),
+}))
+`;
+    const run = spawnSync("python3", ["-I", "-c", script, path.join(ROOT, "skills/research/trove-pulse/scripts")], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    expect(run.status).toBe(0);
+    const seen = JSON.parse(run.stdout.trim().split("\n").at(-1) ?? "{}");
+    // Story 2 names the topic only in its body. Stories 3 and 4 match the
+    // optional words or a typo-tolerant neighbour, which Algolia returns.
+    expect(seen.multi).toEqual(["1", "2"]);
+    expect(seen.body).toContain("Remotion");
+    // A one-word topic keeps the any-word behavior.
+    expect(seen.single).toEqual(["3"]);
+    expect(seen.unfiltered).toBe(4);
   });
 });
 

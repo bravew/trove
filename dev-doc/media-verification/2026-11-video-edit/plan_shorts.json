@@ -1,0 +1,30 @@
+{
+ "source": "talk_shorts.mp4",
+ "mode": "shorts",
+ "beats": [
+  {
+   "kind": "caption",
+   "start": 0.0,
+   "end": 2.6,
+   "anchor": "Hey! Uh, hello there!",
+   "reason": "The greeting should read with the sound off, and nothing else is on screen.",
+   "text": "Hey, hello there."
+  },
+  {
+   "kind": "caption",
+   "start": 3.78,
+   "end": 5.9,
+   "anchor": "Well, um, good morning!",
+   "reason": "The greeting should read with the sound off, and nothing else is on screen.",
+   "text": "Well, good morning."
+  },
+  {
+   "kind": "caption",
+   "start": 7.06,
+   "end": 9.5,
+   "anchor": "Hope you're having a good day!",
+   "reason": "The greeting should read with the sound off, and nothing else is on screen.",
+   "text": "Hope you're having a good day."
+  }
+ ]
+}

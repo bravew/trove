@@ -19,7 +19,9 @@ artifact entry in `upstream.yaml` for the selected files and exact revision.
 
 `trove-ffmpeg` in `trove-media` is vendored from
 [kajisho5/ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) at
-`008333aaf6722083392eb6bd8bd67b59884a2a26` (2.5.1), under the MIT license.
+`6e42a79247909659b3d80833120b272fb5e46aba` (3.2.3), under the MIT license.
+The 3.0 release requires FFmpeg 6.1 or newer and Python 3.10 or newer, and it
+changed the cut defaults; the Trove front states both requirements.
 
 **Trove redistributes upstream code, not only adapted prose.** The selection
 carries upstream's `scripts/` Python engine (42 tools plus shared modules),
@@ -67,6 +69,8 @@ installs.
 
 ## pstack principles
 
+`trove-why` is original Trove work and is not byte-pinned. It was inspired by Lauren Tan's pstack why skill, and Trove deliberately narrowed its scope.
+
 Six Trove principle skills are adapted from Lauren Tan's pstack principle set,
 distributed in the [Cursor plugins repository](https://github.com/cursor/plugins/tree/main/pstack)
 under the MIT license. Exact source paths and the reviewed revision are recorded
@@ -81,9 +85,15 @@ in `upstream.yaml`.
 ### trove-pulse
 
 Adapted from [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill)
-at `a218edadbc3361672f5e5e2cd72a8212b0b3fbb8` (`v3.21.1`). Trove vendors
-`references/` and `scripts/` and authors a wrapper `SKILL.md.tmpl` that is
-local-only (outside the sync lock).
+at `7869eb17144789b843e6655c41bd3d570aa2288a` (nine commits after `v3.32.0`).
+Trove vendors `references/` and `scripts/` and authors a wrapper
+`SKILL.md.tmpl` that is local-only (outside the sync lock).
+
+The browser-cookie and Chrome DevTools lanes are excluded:
+`scripts/lib/agentcookie.py`, `scripts/lib/chrome_cdp.py`, and
+`scripts/box_chrome_login.py`. A local patch removes the setup wizard's
+description of them and drops `BROWSER_CDP_URL` from the research keys. The
+cookie modules Trove already shipped are kept.
 
 The vendored tree includes `scripts/lib/vendor/bird-search`, an MIT-licensed
 Node client (`engines.node >= 22`, ~116 KB) used for X/Twitter search. A sync
@@ -95,19 +105,20 @@ translated READMEs.
 ### trove-pulse-cn
 
 Adapted from [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn)
-at `1a8a04c3c347defbcdbb8da26d7cf1a531426b1f` (`v3.2.0`). That repository is
+at `e0e41410de18466aceb505faee5ef998cacee1e8` (24 commits after `v4.0.0`). That repository is
 itself an MIT fork of `mvanhorn/last30days-skill`. The upstream `LICENSE`
 naming both copyright holders is preserved in the vendored tree.
 
 Not vendored: `assets/`, `tests/`, `fixtures/`, `hooks/`, `agents/`, and the
 root development copies (the installable payload under `skills/last30days/` is
-what Trove vendors).
+what Trove vendors). The hot-board image `scripts/lib/hot_board_cat.png` is
+excluded.
 
 ## Obsidian skills
 
 The five skills in `trove-doc` are adapted from
-[kepano/obsidian-skills](https://github.com/kepano/obsidian-skills/tree/a1dc48e68138490d522c04cbf5822214c6eb1202)
-at `a1dc48e68138490d522c04cbf5822214c6eb1202`, under the MIT license.
+[kepano/obsidian-skills](https://github.com/kepano/obsidian-skills/tree/3ccff5338ea700537839b21900aa5358a0402c98)
+at `3ccff5338ea700537839b21900aa5358a0402c98`, under the MIT license.
 Copyright (c) 2026 Steph Ango (@kepano). Every adapted skill carries the full
 upstream notice in `references/LICENSE.md`, which is copied into host bundles.
 
@@ -125,7 +136,7 @@ The upstream marketplace manifests and installation instructions are not shipped
 
 Four skills in `trove-media` are adapted from
 [Vincentwei1021/video-shotcraft](https://github.com/Vincentwei1021/video-shotcraft)
-at `5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab`, under the Apache-2.0 license,
+at `3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d`, under the Apache-2.0 license,
 Copyright 2026 Wei Yihao. Each adapted skill carries the full Apache-2.0 notice
 plus a "changes made" statement in `references/LICENSE.md`, which is copied into
 host bundles. Nothing is relicensed: Trove's MIT license covers Trove's own
@@ -149,6 +160,17 @@ studied from published promos and reimplemented from scratch. Trove does not
 restate that table and implies no endorsement by any rightsholder. The
 [mapping plan](dev-doc/2026-09-video-shotcraft-media-plan.md) records the
 selection, the per-document adaptation, and the corrections.
+
+## BuildLoop video skills
+
+`trove-take-cut`, `trove-broll-ingest`, and `trove-video-edit` are original skills. The BuildLoop video skills were the reference for the techniques, and
+each skill records that with `metadata.inspired-by`. No prose is taken from the
+source.
+
+The four LUTs under `skills/media/trove-broll-ingest/assets/luts/` are the
+exception. They are BuildLoop's cinematic grade, shipped byte for byte under
+neutral filenames by maintainer decision on 2026-11-09. The filenames are the
+only change.
 
 ## Curated plugin records
 

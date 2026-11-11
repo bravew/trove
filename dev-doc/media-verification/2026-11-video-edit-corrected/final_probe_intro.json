@@ -1,0 +1,75 @@
+{
+  "file": "final_intro.mp4",
+  "format": "mov,mp4,m4a,3gp,3g2,mj2",
+  "duration": 10.005,
+  "start_time": 0.0,
+  "size_bytes": 5746445,
+  "bitrate": 4594858,
+  "video": {
+    "codec": "h264",
+    "profile": "High",
+    "width": 1920,
+    "height": 1080,
+    "display_aspect": "16:9",
+    "sample_aspect_ratio": "1:1",
+    "fps": 24.0,
+    "r_frame_rate": "24/1",
+    "avg_frame_rate": "24/1",
+    "variable_frame_rate_suspected": false,
+    "pix_fmt": "yuv420p",
+    "bit_depth": 8,
+    "hdr": false,
+    "hdr_signal": false,
+    "bt2020_or_hdr": false,
+    "hdr_format": null,
+    "dolby_vision": null,
+    "hdr10_static": null,
+    "color_space": "bt709",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_range": "tv",
+    "rotation": 0,
+    "nb_frames": 240,
+    "duration": 10.0,
+    "tagged_duration": null,
+    "start_time": 0.0,
+    "bitrate": 4271481
+  },
+  "audio": {
+    "codec": "aac",
+    "channels": 2,
+    "channel_layout": "stereo",
+    "sample_rate": 48000,
+    "bitrate": 317385,
+    "duration": 10.005,
+    "start_time": 0.0,
+    "tagged_duration": null
+  },
+  "subtitle_streams": 0,
+  "data_streams": 0,
+  "stream_counts": {
+    "video": 1,
+    "audio": 1
+  },
+  "chapters": [],
+  "tags": {
+    "comment": "Made with Remotion 4.0.542"
+  },
+  "timecode": {
+    "value": null,
+    "drop_frame": null,
+    "source": null
+  },
+  "subtitle_stream_details": [],
+  "audio_streams": [
+    {
+      "index": 0,
+      "codec": "aac",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "sample_rate": 48000,
+      "language": "und",
+      "title": null
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+2026-11-10 synthetic retake fixture
+
+Source: macOS say, Samantha at 155 words/minute, five separately generated readings.
+Carrier: ffmpeg testsrc2, 1280x720 at 24 fps.
+No human multi-take recording or listening review was performed.
+
+python3 skills/media/trove-take-cut/scripts/cut_points.py --audio /tmp/trove-sync/cp6-synthetic/extracted.wav --takes /tmp/trove-sync/cp6-synthetic/takes.json
+[
+  {"line": 1, "start": 9.617, "end": 11.513},
+  {"line": 2, "start": 12.729, "end": 14.820}
+]
+
+python3 skills/media/trove-ffmpeg/scripts/cut.py /tmp/trove-sync/cp6-synthetic/source.mp4 --segments 9.617-11.513,12.729-14.82 --accurate -o /tmp/trove-sync/cp6-synthetic/cut.mp4
+Output duration: 4.000 seconds, frame precision, default 20 ms declick.
+
+Fresh faster-whisper small transcript with word timestamps and a filler-bearing initial prompt:
+Keep the original recording safe. Choose the cleanest reading for each line.
+
+python3 skills/media/trove-take-cut/scripts/verify_cut.py --words /tmp/trove-sync/cp6-synthetic/cut.words.json
+CONTENT: clean (12 words)
+Exit: 0
+
+Source SHA-256 matched before and after the cut.
+Delivery check: see cut.check.txt. It has one loudness failure and two warnings.

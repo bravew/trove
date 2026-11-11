@@ -1,0 +1,252 @@
+{
+ "language": "en",
+ "model": "small",
+ "words": [
+  {
+   "text": "All",
+   "start": 5.2,
+   "end": 5.92,
+   "probability": 0.256
+  },
+  {
+   "text": "10",
+   "start": 5.92,
+   "end": 6.26,
+   "probability": 0.855
+  },
+  {
+   "text": "corrected",
+   "start": 6.26,
+   "end": 6.76,
+   "probability": 0.793
+  },
+  {
+   "text": "evals",
+   "start": 6.76,
+   "end": 7.68,
+   "probability": 0.711
+  },
+  {
+   "text": "testing",
+   "start": 7.68,
+   "end": 8.12,
+   "probability": 0.432
+  },
+  {
+   "text": "now",
+   "start": 8.12,
+   "end": 8.96,
+   "probability": 0.25
+  },
+  {
+   "text": "pass,",
+   "start": 8.96,
+   "end": 9.22,
+   "probability": 0.419
+  },
+  {
+   "text": "so",
+   "start": 9.6,
+   "end": 9.76,
+   "probability": 0.956
+  },
+  {
+   "text": "the",
+   "start": 9.76,
+   "end": 9.94,
+   "probability": 0.939
+  },
+  {
+   "text": "CP2",
+   "start": 9.94,
+   "end": 10.42,
+   "probability": 0.696
+  },
+  {
+   "text": "failure",
+   "start": 10.42,
+   "end": 10.66,
+   "probability": 0.628
+  },
+  {
+   "text": "are",
+   "start": 10.66,
+   "end": 11.02,
+   "probability": 0.889
+  },
+  {
+   "text": "resolving",
+   "start": 11.02,
+   "end": 11.66,
+   "probability": 0.827
+  },
+  {
+   "text": "the",
+   "start": 11.66,
+   "end": 11.9,
+   "probability": 0.986
+  },
+  {
+   "text": "follow",
+   "start": 11.9,
+   "end": 12.12,
+   "probability": 0.68
+  },
+  {
+   "text": "-up",
+   "start": 12.12,
+   "end": 12.32,
+   "probability": 0.723
+  },
+  {
+   "text": "runs.",
+   "start": 12.32,
+   "end": 12.66,
+   "probability": 0.56
+  },
+  {
+   "text": "The",
+   "start": 13.28,
+   "end": 13.38,
+   "probability": 0.916
+  },
+  {
+   "text": "plan",
+   "start": 13.38,
+   "end": 13.58,
+   "probability": 0.648
+  },
+  {
+   "text": "is",
+   "start": 13.58,
+   "end": 13.82,
+   "probability": 0.986
+  },
+  {
+   "text": "still",
+   "start": 13.82,
+   "end": 14.08,
+   "probability": 0.989
+  },
+  {
+   "text": "not",
+   "start": 14.08,
+   "end": 14.3,
+   "probability": 0.997
+  },
+  {
+   "text": "complete,",
+   "start": 14.3,
+   "end": 14.84,
+   "probability": 0.984
+  },
+  {
+   "text": "CP2,",
+   "start": 15.58,
+   "end": 16.04,
+   "probability": 0.609
+  },
+  {
+   "text": "that",
+   "start": 16.26,
+   "end": 16.64,
+   "probability": 0.748
+  },
+  {
+   "text": "plan",
+   "start": 16.64,
+   "end": 17.04,
+   "probability": 0.977
+  },
+  {
+   "text": "is",
+   "start": 17.04,
+   "end": 17.5,
+   "probability": 0.983
+  },
+  {
+   "text": "still",
+   "start": 17.5,
+   "end": 18.38,
+   "probability": 0.993
+  },
+  {
+   "text": "not",
+   "start": 18.38,
+   "end": 18.66,
+   "probability": 0.998
+  },
+  {
+   "text": "complete,",
+   "start": 18.66,
+   "end": 19.12,
+   "probability": 0.983
+  },
+  {
+   "text": "CP6",
+   "start": 19.46,
+   "end": 20.16,
+   "probability": 0.986
+  },
+  {
+   "text": "and",
+   "start": 20.16,
+   "end": 20.38,
+   "probability": 0.879
+  },
+  {
+   "text": "CP7",
+   "start": 20.38,
+   "end": 20.64,
+   "probability": 0.938
+  },
+  {
+   "text": "need",
+   "start": 20.64,
+   "end": 21.06,
+   "probability": 0.842
+  },
+  {
+   "text": "to",
+   "start": 21.06,
+   "end": 21.06,
+   "probability": 0.001
+  },
+  {
+   "text": "be",
+   "start": 21.06,
+   "end": 21.12,
+   "probability": 0.208
+  },
+  {
+   "text": "there,",
+   "start": 21.12,
+   "end": 21.28,
+   "probability": 0.732
+  },
+  {
+   "text": "something",
+   "start": 21.4,
+   "end": 21.62,
+   "probability": 0.952
+  },
+  {
+   "text": "I",
+   "start": 21.62,
+   "end": 22.02,
+   "probability": 0.977
+  },
+  {
+   "text": "cannot",
+   "start": 22.02,
+   "end": 22.38,
+   "probability": 0.968
+  },
+  {
+   "text": "produce.",
+   "start": 22.38,
+   "end": 22.8,
+   "probability": 0.932
+  }
+ ]
+}

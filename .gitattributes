@@ -1,3 +1,5 @@
 upstream-patches/** whitespace=-blank-at-eol,-blank-at-eof
+# LUT tables are data. A diff of one is thousands of lines of floats.
+*.cube -diff
 # Generated Copilot bundles preserve upstream Markdown hard breaks and source bytes.
 plugins/**/.copilot/skills/** whitespace=-blank-at-eol,-blank-at-eof

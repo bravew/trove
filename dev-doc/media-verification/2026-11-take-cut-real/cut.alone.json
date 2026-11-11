@@ -1,0 +1,200 @@
+{
+ "cut_line1": [
+  {
+   "text": "All",
+   "start": 0.0,
+   "end": 0.24,
+   "p": 0.31
+  },
+  {
+   "text": "10",
+   "start": 0.24,
+   "end": 0.6,
+   "p": 0.82
+  },
+  {
+   "text": "corrected",
+   "start": 0.6,
+   "end": 1.26,
+   "p": 0.92
+  },
+  {
+   "text": "eval's",
+   "start": 1.26,
+   "end": 2.12,
+   "p": 0.45
+  },
+  {
+   "text": "testing.",
+   "start": 2.12,
+   "end": 2.46,
+   "p": 0.59
+  },
+  {
+   "text": "Now",
+   "start": 3.2,
+   "end": 3.26,
+   "p": 0.57
+  },
+  {
+   "text": "pass.",
+   "start": 3.26,
+   "end": 3.56,
+   "p": 0.58
+  },
+  {
+   "text": "So",
+   "start": 3.92,
+   "end": 4.06,
+   "p": 0.93
+  },
+  {
+   "text": "the",
+   "start": 4.06,
+   "end": 4.22,
+   "p": 0.9
+  },
+  {
+   "text": "CP2",
+   "start": 4.22,
+   "end": 4.72,
+   "p": 0.82
+  },
+  {
+   "text": "failure",
+   "start": 4.72,
+   "end": 4.98,
+   "p": 0.56
+  },
+  {
+   "text": "are",
+   "start": 4.98,
+   "end": 5.34,
+   "p": 0.54
+  },
+  {
+   "text": "resolving",
+   "start": 5.34,
+   "end": 5.96,
+   "p": 0.72
+  },
+  {
+   "text": "the",
+   "start": 5.96,
+   "end": 6.22,
+   "p": 0.99
+  },
+  {
+   "text": "follow",
+   "start": 6.22,
+   "end": 6.44,
+   "p": 0.52
+  },
+  {
+   "text": "-up",
+   "start": 6.44,
+   "end": 6.64,
+   "p": 0.73
+  },
+  {
+   "text": "run.",
+   "start": 6.64,
+   "end": 6.82,
+   "p": 0.31
+  }
+ ],
+ "cut_line2": [
+  {
+   "text": "The",
+   "start": 6.9,
+   "end": 7.12,
+   "p": 0.23
+  },
+  {
+   "text": "planning",
+   "start": 7.12,
+   "end": 7.36,
+   "p": 0.21
+  },
+  {
+   "text": "is",
+   "start": 7.36,
+   "end": 7.6,
+   "p": 0.99
+  },
+  {
+   "text": "still",
+   "start": 7.6,
+   "end": 7.82,
+   "p": 0.93
+  },
+  {
+   "text": "not",
+   "start": 7.82,
+   "end": 8.04,
+   "p": 0.99
+  },
+  {
+   "text": "complete.",
+   "start": 8.04,
+   "end": 8.54,
+   "p": 0.99
+  }
+ ],
+ "cut_line3": [
+  {
+   "text": "CP6",
+   "start": 8.85,
+   "end": 9.59,
+   "p": 0.65
+  },
+  {
+   "text": "and",
+   "start": 9.59,
+   "end": 9.77,
+   "p": 0.85
+  },
+  {
+   "text": "CP7",
+   "start": 9.77,
+   "end": 10.19,
+   "p": 0.7
+  },
+  {
+   "text": "need",
+   "start": 10.19,
+   "end": 10.45,
+   "p": 0.84
+  },
+  {
+   "text": "their",
+   "start": 10.45,
+   "end": 10.67,
+   "p": 0.21
+  },
+  {
+   "text": "something",
+   "start": 10.67,
+   "end": 11.01,
+   "p": 0.95
+  },
+  {
+   "text": "I",
+   "start": 11.01,
+   "end": 11.43,
+   "p": 0.84
+  },
+  {
+   "text": "cannot",
+   "start": 11.43,
+   "end": 11.77,
+   "p": 0.94
+  },
+  {
+   "text": "predict.",
+   "start": 11.77,
+   "end": 12.07,
+   "p": 0.38
+  }
+ ]
+}

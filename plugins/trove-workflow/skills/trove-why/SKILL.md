@@ -3,6 +3,8 @@ name: trove-why
 description: "Reconstruct design rationale and decision history from evidence — source control, issue tracker (Linear), docs (Notion), chat (Slack), error tracking (Sentry) — with calibrated confidence. Use for \"why does X work this way\", \"why did we pick Y\", regressions, and postmortems. Use trove-explain for how it works now."
 when_to_use: "why does this work this way; why did we choose; design rationale; what's the history of"
 user-invocable: true
+metadata:
+  inspired-by: "Lauren Tan pstack why skill"
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
@@ -19,7 +21,7 @@ Reconstruct *intent* from fragmentary historical evidence. Never infer intent fr
 
 ## Evidence sources
 
-Query the evidence sources that are actually available, one bounded read-only pass each (delegate in parallel when several apply — see [docs/orchestration.md](../../docs/orchestration.md)):
+Query the evidence sources that are actually available, one bounded read-only pass each (delegate in parallel through `trove-dispatch` when several apply):
 
 | Category | Where | Tools (fully-qualified) |
 |---|---|---|

@@ -1,0 +1,19 @@
+{
+  "name": "trove-video-edit",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "upgrade": "remotion upgrade"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.542",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.542",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "typescript": "5.9.3"
+  }
+}

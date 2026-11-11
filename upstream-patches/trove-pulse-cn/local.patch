@@ -1,13 +1,8 @@
 diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
-index 3f49cec..9c6a15d 100644
+index 6955990..0ee2a21 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
-@@ -2,42 +2,22 @@
- name: trove-pulse-cn
- version: "3.2.0-cn"
- description: "Chinese-platform last-30-days research skill covering Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat, Baidu, and Toutiao. Includes Markdown, JSON, compact context, and Guizang-inspired Swiss/IKB HTML report output."
--argument-hint: 'last30 AI 编程助手, last30 最近 30 天中文平台舆情, last30 具身智能 --html'
- allowed-tools: [Bash, Read, Write, WebSearch]
+@@ -7,7 +7,18 @@ allowed-tools: [Bash, Read, Write, WebSearch]
  author: Jesse
  license: MIT
  user-invocable: true
@@ -19,60 +14,42 @@ index 3f49cec..9c6a15d 100644
 +  - china market sentiment
 +host-overrides:
 +  claude:
-+    argument-hint: 'last30 AI 编程助手, last30 最近 30 天中文平台舆情, last30 具身智能 --html'
++    argument-hint: 'last30 AI 编程助手 | last30 今天全网热点 | last30 具身智能 --deep | last30 Claude Code 评测 --global'
  metadata:
--  openclaw:
--    emoji: "CN"
--    requires:
--      optionalEnv:
--        - WEIBO_ACCESS_TOKEN
--        - SCRAPECREATORS_API_KEY
--        - ZHIHU_COOKIE
--        - TIKHUB_API_KEY
--        - DOUYIN_API_KEY
--        - WECHAT_API_KEY
--        - BAIDU_API_KEY
--        - BAIDU_SECRET_KEY
--      bins:
--        - python3
--    files:
--      - "scripts/*"
--    tags:
--      - research
--      - deep-research
--      - chinese-platforms
--      - weibo
--      - xiaohongshu
--      - bilibili
--      - zhihu
--      - douyin
--      - wechat
--      - baidu
--      - toutiao
--      - trends
--      - html-report
 +  source: Jesseovo/last30days-skill-cn
-+  upstream-version: "3.2.0-cn"
- ---
++  upstream-version: "4.0.0-cn"
+   openclaw:
+     emoji: "📰"
+     requires:
+@@ -48,6 +59,8 @@ metadata:
  
- {{PREAMBLE}}
-@@ -46,6 +26,8 @@ metadata:
- 
- You are a Chinese-platform research assistant. Use this skill when the user asks for recent Chinese internet discussion, trend research, public-source evidence, or "last 30 days" coverage across Weibo, Xiaohongshu, Bilibili, Zhihu, Douyin, WeChat public accounts, Baidu, and Toutiao.
+ You are a Chinese-internet research assistant. Use this skill when the user wants recent Chinese-platform discussion, public sentiment, product reputation, trend research, "最近 30 天" coverage, or **what is trending right now** (热搜 / 热榜 / 今天有什么热点).
  
 +For Reddit, X, YouTube, Hacker News, GitHub, and other global/English-language platforms, use `/trove-research:trove-pulse` instead.
 +
- ## Core Rule
+ ## Core rule
  
- Always ground claims in returned results. Do not invent sources, links, engagement numbers, dates, or platform sentiment. If coverage is sparse, say so clearly.
-@@ -122,6 +104,10 @@ Config file:
- ~/.config/last30days-cn/.env
- ```
+ Ground every claim in the returned evidence. Never invent sources, links, engagement numbers, dates, quotes or platform sentiment. When coverage is thin or a platform failed, say so plainly.
+@@ -62,7 +75,7 @@ Ground every claim in the returned evidence. Never invent sources, links, engage
+ | Overseas opinion too (Reddit / HN / GitHub / X / YouTube) | Add `--global --global-query "<English keywords>"` (section 4) |
+ | Something is broken / which platforms work | `--diagnose` (section 6) |
  
-+The engine also loads `.claude/last30days-cn.env` by walking up from the
-+process working directory, with no extra trust flag. Prefer the home
-+config file. Do not keep secrets in a cloned repo's project env file.
+-`{{SKILL_DIR}}` is this skill's directory. Use `python3` (or `python` on Windows).
++The commands below use this skill's directory. Use `python3` (or `python` on Windows).
+ 
+ ## 2. Topic research
+ 
+@@ -155,7 +168,13 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/last30days.py setup                 # first-
+ 
+ Everything is optional. Settings go in `~/.config/last30days-cn/.env` (or `.claude/last30days-cn.env` in a project):
+ 
++The engine loads `.claude/last30days-cn.env` only when
++`LAST30DAYS_TRUST_PROJECT_CONFIG` is true in the process environment or the
++home config. A value inside the project file does not grant that trust.
++Prefer the home config file. Do not keep secrets in a cloned repo's project
++env file.
 +
- Optional crawler mode:
- 
- ```bash
+ ```ini
+ WEIBO_COOKIE=          # or: login weibo
+ ZHIHU_COOKIE=          # or: login zhihu
+ BILIBILI_COOKIE=       # reduces Bilibili 412 risk control

@@ -3,9 +3,9 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const [rootArg, copilotHomeArg] = process.argv.slice(2);
+const [rootArg, copilotHomeArg, listingArg] = process.argv.slice(2);
 if (!rootArg || !copilotHomeArg) {
-  console.error("usage: verify-copilot-install.ts <repository-root> <copilot-home>");
+  console.error("usage: verify-copilot-install.ts <repository-root> <copilot-home> [plugin-list.json]");
   process.exit(2);
 }
 
@@ -15,11 +15,25 @@ const version = fs.readFileSync(path.join(root, "VERSION"), "utf-8").trim();
 const marketplace = JSON.parse(fs.readFileSync(path.join(root, ".github", "plugin", "marketplace.json"), "utf-8")) as {
   plugins: Array<{ name: string; source: string }>;
 };
-const configText = fs.readFileSync(path.join(copilotHome, "config.json"), "utf-8")
-  .replace(/^\s*\/\/.*$/gm, "");
-const config = JSON.parse(configText) as {
-  installedPlugins: Array<{ name: string; marketplace: string; version: string; cache_path: string }>;
-};
+interface InstalledPlugin {
+  name: string;
+  marketplace: string;
+  version: string;
+  /** Set when the CLI copied the plugin into its cache. Absent when it loads live. */
+  cache_path?: string;
+}
+
+// Copilot 1.0.95 stopped writing config.json. `plugin list --json` is the
+// inventory, and a live install is loaded from the marketplace directory, so
+// there are no copied bytes to compare.
+const listing = listingArg
+  ? (JSON.parse(fs.readFileSync(listingArg, "utf-8")) as InstalledPlugin[])
+  : null;
+const config = listing
+  ? { installedPlugins: listing }
+  : (JSON.parse(
+      fs.readFileSync(path.join(copilotHome, "config.json"), "utf-8").replace(/^\s*\/\/.*$/gm, ""),
+    ) as { installedPlugins: InstalledPlugin[] });
 
 const expectedNames = marketplace.plugins.map((plugin) => plugin.name).sort();
 const installedNames = config.installedPlugins.map((plugin) => plugin.name).sort();
@@ -58,6 +72,7 @@ for (const installed of config.installedPlugins) {
   if (installed.marketplace !== "trove" || installed.version !== version) {
     throw new Error(`${installed.name}: expected trove v${version}, got ${installed.marketplace} v${installed.version}`);
   }
+  if (!installed.cache_path) continue;
   const cachePath = fs.realpathSync(installed.cache_path);
   const relativeCache = path.relative(copilotHome, cachePath);
   if (relativeCache.startsWith("..") || path.isAbsolute(relativeCache)) {

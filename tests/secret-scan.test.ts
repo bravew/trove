@@ -22,6 +22,7 @@ describe("secret scan", () => {
     expect(isUnownedSupportName("__pycache__")).toBe(true);
     expect(isUnownedSupportName(".DS_Store")).toBe(true);
     expect(isUnownedSupportName("x.cpython-314.pyc")).toBe(true);
+    expect(isUnownedSupportName("node_modules")).toBe(true);
     expect(isUnownedSupportName("last30days.py")).toBe(false);
   });
 

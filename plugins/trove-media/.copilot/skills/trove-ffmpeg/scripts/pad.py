@@ -16,7 +16,7 @@ Examples:
 import argparse
 import sys
 
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, validate_color, video_args, X264_PRESETS, time_arg, fmt_secs, run
+from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, drawn_chain, emit, EVEN_SCALE, ffmpeg_base, info, probe, run_keeping_subtitles, validate_color, video_args, X264_PRESETS, time_arg, fmt_secs, run
 
 
 def main() -> int:
@@ -46,11 +46,22 @@ def main() -> int:
     has_audio = bool(meta.get("audio"))
     output = args.output or default_output(args.input, "pad")
 
-    vf = f"tpad=start_duration={args.start:.3f}:stop_duration={args.end:.3f}:color={args.color}"
-    cmd = ffmpeg_base() + ["-i", args.input, "-vf", vf, "-map", "0:v:0"]
+    tpad = f"tpad=start_duration={args.start:.3f}:stop_duration={args.end:.3f}:color="
+    # a --color with chroma lands in the BT.709 the output is tagged with (tpad's own YUV is BT.601
+    # before FFmpeg 7.1, and for an untagged picture after it); black is the same under every matrix
+    vf = drawn_chain(tpad + args.color, meta, [args.color], tpad + "black")
+    cmd = ffmpeg_base() + ["-i", args.input]
     if has_audio:
+        # One -filter_complex, not a -vf and an -af: the ffmpeg scheduler of Ubuntu 26.04's 8.0.1 and
+        # conda-forge's 7.1.1 (not Debian's 7.1.5 or 8.1) deadlocks with no CPU use when one demuxer feeds two simple
+        # graphs and the audio one both delays its input and pads the tail. One graph reading both
+        # streams runs on 5.1-8.1 alike. run() only adds an even scale to a -vf, so add it here.
+        v = meta["video"]
+        even = EVEN_SCALE + "," if (v.get("width") or 0) % 2 or (v.get("height") or 0) % 2 else ""
         af = f"adelay={int(args.start * 1000)}:all=1,apad=pad_dur={args.end:.3f}"
-        cmd += ["-map", "0:a:0?", "-af", af]
+        cmd += ["-filter_complex", f"[0:v:0]{even}{vf}[v];[0:a:0]{af}[a]", "-map", "[v]", "-map", "[a]"]
+    else:
+        cmd += ["-vf", vf, "-map", "0:v:0"]
     cmd += video_args(meta, args.crf, args.preset)
     cmd += cfr_args(meta)
     if has_audio:

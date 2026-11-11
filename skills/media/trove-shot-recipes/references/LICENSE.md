@@ -7,7 +7,7 @@ Copyright 2026 Wei Yihao
 
 ## Changes made
 
-This adapted skill reorganizes and rewrites the upstream shot-card lookup and asset-independent aesthetic guidance in English. It does not include upstream shot cards, demo implementations, assets, or code.
+This adapted skill reorganizes and rewrites the upstream shot-card lookup and asset-independent aesthetic guidance in English. The review against the current upstream inventory removed no card this skill cites. It does not include upstream shot cards, demo implementations, assets, or code.
 
 ## Terms and Conditions for Use, Reproduction, and Distribution
 

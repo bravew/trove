@@ -118,7 +118,7 @@ describe("shotcraft adaptations", () => {
       expect(row?.origin).toBe("adapted");
       if (row?.origin !== "adapted") throw new Error(`${skill} lacks adapted provenance`);
       expect(row.sourceId).toBe(source?.id);
-      expect(row.evidenceSha).toBe("5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab");
+      expect(row.evidenceSha).toBe("3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d");
       expect(row.upstreamPaths.length).toBeGreaterThan(0);
       expect(row.upstreamPaths).not.toContain(".");
       expect(row.upstreamPaths.some((item) => item.startsWith("workbench/"))).toBe(false);

@@ -1,0 +1,76 @@
+{
+ "source": "ai_talk_en.mp4",
+ "language": "en",
+ "words": [
+  {
+   "text": "Hey!",
+   "start": 0.0,
+   "end": 0.78
+  },
+  {
+   "text": "Uh,",
+   "start": 1.42,
+   "end": 1.42
+  },
+  {
+   "text": "hello",
+   "start": 1.7,
+   "end": 1.98
+  },
+  {
+   "text": "there!",
+   "start": 1.98,
+   "end": 2.34
+  },
+  {
+   "text": "Well,",
+   "start": 3.78,
+   "end": 4.22
+  },
+  {
+   "text": "um,",
+   "start": 4.58,
+   "end": 4.74
+  },
+  {
+   "text": "good",
+   "start": 5.14,
+   "end": 5.3
+  },
+  {
+   "text": "morning!",
+   "start": 5.3,
+   "end": 5.64
+  },
+  {
+   "text": "Hope",
+   "start": 7.06,
+   "end": 7.78
+  },
+  {
+   "text": "you're",
+   "start": 7.78,
+   "end": 8.04
+  },
+  {
+   "text": "having",
+   "start": 8.04,
+   "end": 8.28
+  },
+  {
+   "text": "a",
+   "start": 8.28,
+   "end": 8.54
+  },
+  {
+   "text": "good",
+   "start": 8.54,
+   "end": 8.72
+  },
+  {
+   "text": "day!",
+   "start": 8.72,
+   "end": 9.1
+  }
+ ]
+}

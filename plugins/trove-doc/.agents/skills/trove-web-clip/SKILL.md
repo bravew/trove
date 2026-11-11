@@ -4,7 +4,7 @@ description: "Extract readable Markdown from a supplied web page or HTML file, p
 metadata:
   source: kepano/obsidian-skills
   upstream-skill: defuddle
-  upstream-revision: a1dc48e68138490d522c04cbf5822214c6eb1202
+  upstream-revision: 3ccff5338ea700537839b21900aa5358a0402c98
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->

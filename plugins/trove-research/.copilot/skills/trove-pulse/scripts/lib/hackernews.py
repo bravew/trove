@@ -10,6 +10,7 @@ import math
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.client import HTTPException
 from typing import Any, Dict, List, Optional
 
 import re
@@ -24,6 +25,9 @@ _HN_PREFIXES = re.compile(r"^(Tell HN|Show HN|Ask HN|Launch HN)\s*:\s*", re.IGNO
 ALGOLIA_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
 ALGOLIA_SEARCH_BY_DATE_URL = "https://hn.algolia.com/api/v1/search_by_date"
 ALGOLIA_ITEM_URL = "https://hn.algolia.com/api/v1/items"
+# Official HN Firebase item API — `kids` is in the order the thread displays
+# top-level comments (Algolia's /items children do not carry useful points).
+FIREBASE_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item"
 
 DEPTH_CONFIG = {
     "quick": 15,
@@ -202,12 +206,14 @@ def _flatten_query_for_algolia(text: str) -> str:
     return " ".join(text.replace(",", " ").replace("-", " ").split())
 
 
-def _title_matches_query(title: str, query: str, author: str = "") -> bool:
-    """Check if any query token appears as a whole word in the title.
+def _title_matches_query(title: str, query: str, author: str = "", text: str = "") -> bool:
+    """Check if any query token appears as a whole word in the story.
 
     Returns True when the query is empty (no filter), or when at least one
-    query token matches as a whole word in the title after stripping
-    "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
+    query token matches as a whole word in the title or submission text after
+    stripping "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
+    Algolia searches the submission body, so a title-only check drops stories
+    whose only mention of the topic is there.
 
     We previously required *every* token to appear (all-words), which killed
     every Algolia hit on multi-keyword themes like "claude, personal agents,
@@ -224,12 +230,18 @@ def _title_matches_query(title: str, query: str, author: str = "") -> bool:
     if not query:
         return True
     stripped = _HN_PREFIXES.sub("", title).strip()
-    check_text = stripped.lower()
+    check_text = f"{stripped}\n{text}".lower()
     # Normalise the query the same way search_hackernews does so post-filter
     # tokens line up with what Algolia actually saw.
     query_words = [w for w in _flatten_query_for_algolia(query.lower()).split() if w]
     if not query_words:
         return True
+    # Algolia marks every token after the first as optional, so a title that
+    # contains only "video" survives a "remotion video react" search. A
+    # multi-word topic has to match its most distinctive token. One-word
+    # topics keep the any-match behavior.
+    if len(query_words) > 1:
+        query_words = [max(query_words, key=len)]
     for word in query_words:
         pattern = _WORD_BOUNDARY_RE_CACHE.get(word)
         if pattern is None:
@@ -256,7 +268,12 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
         before = len(hits)
         hits = [
             h for h in hits
-            if _title_matches_query(h.get("title", ""), query, h.get("author", ""))
+            if _title_matches_query(
+                h.get("title", ""),
+                query,
+                h.get("author", ""),
+                h.get("story_text") or "",
+            )
         ]
         dropped = before - len(hits)
         if dropped:
@@ -275,13 +292,16 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
 
         # Article URL vs HN discussion URL
         article_url = hit.get("url") or ""
-        hn_url = f"https://news.ycombinator.com/item?id={object_id}"
+        hn_url = _hn_item_url(object_id)
 
         # Relevance: blend Algolia rank with token-overlap content matching
         rank_score = max(0.3, 1.0 - (i * 0.02))  # 1.0 -> 0.3 over 35 items
         engagement_boost = min(0.2, math.log1p(points) / 40)
         if query:
-            content_score = token_overlap_relevance(query, hit.get("title", ""))
+            content_score = token_overlap_relevance(
+                query,
+                f"{hit.get('title', '')}\n{hit.get('story_text') or ''}",
+            )
             relevance = min(1.0, 0.6 * rank_score + 0.4 * content_score + engagement_boost)
         else:
             relevance = min(1.0, rank_score * 0.7 + engagement_boost + 0.1)
@@ -292,6 +312,7 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
             "url": article_url,
             "hn_url": hn_url,
             "author": hit.get("author", ""),
+            "text": hit.get("story_text") or "",
             "date": date_str,
             "engagement": {
                 "points": points,
@@ -302,6 +323,73 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
         })
 
     return items
+
+
+def _hn_item_url(item_id: Any) -> str:
+    """HN discussion/comment permalink for an item id."""
+    return f"https://news.ycombinator.com/item?id={item_id}"
+
+
+# Ordering is optional, so a slow Firebase must not hold up the report.
+FIREBASE_KIDS_TIMEOUT = 5
+FIREBASE_KIDS_RETRIES = 2
+FIREBASE_KIDS_BUDGET = 8.0
+
+
+def _fetch_hn_kids(object_id: str) -> Optional[List[Any]]:
+    """Return HN's display order for a story's top-level comments, or None on failure.
+
+    Algolia's `/items/<id>` children list is effectively id-order with `points`
+    always null, so sorting by points is a no-op (#1285). The Firebase item
+    endpoint returns `kids` in the same order the HN thread UI shows.
+    """
+    url = f"{FIREBASE_ITEM_URL}/{object_id}.json"
+    # Comment order is a refinement over comments Algolia already returned, so a
+    # Firebase failure must not reach the pipeline's sink and mark HN degraded.
+    try:
+        with http.capture_failures():
+            data = http.request(
+                "GET",
+                url,
+                timeout=FIREBASE_KIDS_TIMEOUT,
+                retries=FIREBASE_KIDS_RETRIES,
+                deadline_monotonic=time.monotonic() + FIREBASE_KIDS_BUDGET,
+            )
+    # http.request wraps HTTP and socket errors, but a truncated or non-UTF-8
+    # body escapes as IncompleteRead or UnicodeDecodeError.
+    except (http.HTTPError, HTTPException, UnicodeDecodeError) as e:
+        _log(f"Failed to fetch HN kids for {object_id}: {e}")
+        return None
+    if not isinstance(data, dict):
+        return None
+    kids = data.get("kids")
+    if not isinstance(kids, list):
+        return None
+    return kids
+
+
+def _order_comments_by_kids(
+    comments: List[Dict[str, Any]],
+    kids: List[Any],
+) -> List[Dict[str, Any]]:
+    """Reorder Algolia children to match HN `kids` order; unknowns keep relative order."""
+    by_id: Dict[Any, Dict[str, Any]] = {}
+    for comment in comments:
+        cid = comment.get("id")
+        if cid is not None and cid not in by_id:
+            by_id[cid] = comment
+    ordered: List[Dict[str, Any]] = []
+    seen = set()
+    for kid in kids:
+        comment = by_id.get(kid)
+        if comment is not None:
+            ordered.append(comment)
+            seen.add(kid)
+    for comment in comments:
+        cid = comment.get("id")
+        if cid not in seen:
+            ordered.append(comment)
+    return ordered
 
 
 def _fetch_item_comments(object_id: str, max_comments: int = 5) -> Dict[str, Any]:
@@ -324,22 +412,33 @@ def _fetch_item_comments(object_id: str, max_comments: int = 5) -> Dict[str, Any
 
     children = data.get("children", [])
 
-    # Sort by points (highest first), filter to actual comments
+    # Filter to actual comments. Prefer HN's Firebase `kids` order (#1285);
+    # Algolia children have null points, so a points sort is a no-op and leaves
+    # earliest-posted replies first. Fall back to points only when kids is unavailable.
     real_comments = [
         c for c in children
         if c.get("text") and c.get("author")
     ]
-    real_comments.sort(key=lambda c: c.get("points") or 0, reverse=True)
+    kids = _fetch_hn_kids(object_id)
+    if kids is not None:
+        real_comments = _order_comments_by_kids(real_comments, kids)
+    else:
+        real_comments.sort(key=lambda c: c.get("points") or 0, reverse=True)
 
     comments = []
     insights = []
+    # A quote links to where it was said: the comment's own permalink, else the
+    # story's discussion page -- never the article URL.
+    discussion_url = _hn_item_url(object_id)
     for c in real_comments[:max_comments]:
         text = _strip_html(c.get("text", ""))
         excerpt = text[:300] + "..." if len(text) > 300 else text
+        comment_id = c.get("id")
         comments.append({
             "author": c.get("author", ""),
             "text": excerpt,
             "points": c.get("points"),
+            "url": _hn_item_url(comment_id) if comment_id else discussion_url,
         })
         # First sentence as insight
         first_sentence = text.split(". ")[0].split("\n")[0][:200]
@@ -378,8 +477,12 @@ def enrich_top_stories(
     _log(f"Enriching top {len(to_enrich)} stories with comments")
 
     with ThreadPoolExecutor(max_workers=5) as executor:
+        # submit_with_context, not executor.submit: a plain submit drops the
+        # pipeline's capture_failures() sink, so failed or rate-limited item
+        # fetches would vanish and the HN source would look fully enriched.
         futures = {
-            executor.submit(
+            http.submit_with_context(
+                executor,
                 _fetch_item_comments,
                 items[idx]["id"],
             ): idx

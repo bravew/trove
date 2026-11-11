@@ -15,6 +15,8 @@ Examples:
   python3 verify.py clip.mov --keep --out ./verify_out
 """
 import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -22,9 +24,9 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
-from _common import STATE, add_common, apply_common, die, emit, info, probe
+from _common import STATE, add_common, apply_common, die, emit, guard_sidecar, info, probe
 
 HERE = Path(__file__).resolve().parent
 MEDIA_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mts", ".m2ts", ".mxf", ".wav", ".m4a", ".mp3", ".flac", ".aac"}
@@ -67,26 +69,77 @@ def collect(paths: List[str]) -> List[Path]:
     return files
 
 
+def _cell(message: str) -> str:
+    """A failure message as one Markdown table cell: one line, no pipes, at most 200 characters."""
+    return " / ".join(line.strip() for line in str(message).splitlines() if line.strip()).replace("|", "/")[:200]
+
+
+def _probe_capturing(path: str) -> "Tuple[Optional[Dict[str, Any]], Dict[str, Any]]":
+    """probe() in this process, with its failure kept: (the probe, {}) or (None, the failure's
+    kind/reason/message). probe() dies on an unreadable file; its failure document is read back
+    instead of a fixed string standing in for it (one JSON document per run: it is not printed)."""
+    was_json, STATE.json = STATE.json, True
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            return probe(path), {}
+    except SystemExit as exc:
+        try:
+            doc = json.loads(out.getvalue())
+        except ValueError:
+            doc = {}
+        e = doc.get("error") if isinstance(doc.get("error"), dict) else {}
+        failure = {k: e[k] for k in ("kind", "reason", "message") if e.get(k)}
+        failure.setdefault("message", (err.getvalue().strip().splitlines() or [f"probe exited {exc.code}"])[-1])
+        return None, failure
+    finally:
+        STATE.json = was_json
+
+
 def step(name: str, argv: List[str], timeout: float) -> Dict:
+    """Run one step and keep what its tool said: `ok` (it completed), and on a failure the tool's
+    own `kind`, `reason` and `message` (its --json failure document), `error` being that message
+    for the table. A completed step also carries the tool's `verified`."""
     t0 = time.time()
     if argv[0] == "__check_hdr__":
-        was_json, STATE.json = STATE.json, False  # probe()'s die() would print a JSON document of its own
-        try:
-            v = probe(argv[1]).get("video") or {}
-            ok = bool(v.get("bt2020_or_hdr")) and v.get("bit_depth", 8) >= 10
-            err = "" if ok else f"re-encode lost HDR: {v.get('color_transfer')}/{v.get('pix_fmt')}"
-        except SystemExit:
-            ok, err = False, "output missing"
-        finally:
-            STATE.json = was_json
-        return {"step": name, "ok": ok, "seconds": round(time.time() - t0, 1), "error": err}
+        meta, failure = _probe_capturing(argv[1])
+        if meta is None:
+            return dict({"step": name, "ok": False, "seconds": round(time.time() - t0, 1), "error": _cell(failure.get("message", ""))}, **failure)
+        v = meta.get("video") or {}
+        ok = bool(v.get("bt2020_or_hdr")) and v.get("bit_depth", 8) >= 10
+        r: Dict[str, Any] = {"step": name, "ok": ok, "seconds": round(time.time() - t0, 1),
+                             "error": "" if ok else f"re-encode lost HDR: {v.get('color_transfer')}/{v.get('pix_fmt')}"}
+        if not ok:
+            r.update(kind="verification", reason="hdr_lost", message=r["error"])
+        return r
     try:
-        proc = subprocess.run([sys.executable, str(HERE / argv[0])] + argv[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        ok = proc.returncode == 0
-        err = "" if ok else (proc.stderr.strip().splitlines() or ["?"])[-1][:200]
+        proc = subprocess.run([sys.executable, str(HERE / argv[0])] + argv[1:] + ["--json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout or None)
     except subprocess.TimeoutExpired:
-        ok, err = False, f"timeout after {timeout:.0f}s"
-    return {"step": name, "ok": ok, "seconds": round(time.time() - t0, 1), "error": err}
+        msg = f"timeout after {timeout:.0f}s"
+        return {"step": name, "ok": False, "seconds": round(time.time() - t0, 1), "error": msg,
+                "kind": "timeout", "reason": "step_timeout", "message": msg}
+    try:
+        doc = json.loads(proc.stdout)
+    except ValueError:
+        doc = None
+    doc = doc if isinstance(doc, dict) else {}
+    ok = proc.returncode == 0
+    r = {"step": name, "ok": ok, "seconds": round(time.time() - t0, 1), "error": ""}
+    if ok:
+        if "verified" in doc:
+            r["verified"] = doc["verified"]
+        return r
+    e = doc.get("error") if isinstance(doc.get("error"), dict) else {}
+    r["message"] = str(e.get("message") or (proc.stderr.strip().splitlines() or [f"exit {proc.returncode}"])[-1])
+    r["error"] = _cell(r["message"])
+    for k in ("kind", "reason", "details"):
+        if e.get(k) is not None:
+            r[k] = e[k]
+    if not e:
+        r["reason"] = "step_output_unparsed"
+    r["exit_code"] = proc.returncode
+    return r
 
 
 def main() -> int:
@@ -96,7 +149,7 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="keep the outputs")
     ap.add_argument("--quick", action="store_true", help="probe, copy cut, fit, caption, export only")
     ap.add_argument("--seconds", type=float, default=6.0, help="length of the test cut taken from each file (default 6)")
-    ap.add_argument("--timeout", type=float, default=600.0, help="per-step timeout in seconds")
+    ap.add_argument("--timeout", type=float, default=600.0, help="per-step timeout in seconds (default 600; 0 = no limit, as everywhere else)")
     ap.add_argument("--report", help="write a Markdown report here")
     add_common(ap)
     args = ap.parse_args()
@@ -107,9 +160,14 @@ def main() -> int:
     files = collect(args.paths)
     tmp = None
     if args.out:
+        # made first, so a --report inside a new --out folder passes the guard below (#413 review)
         outdir = Path(args.out)
         outdir.mkdir(parents=True, exist_ok=True)
-    else:
+    if args.report:
+        # a file this run writes itself (#408): not one of the media it verifies (a folder's
+        # files included), nor an existing file without --overwrite
+        guard_sidecar(args.report, *args.paths, *map(str, files))
+    if not args.out:
         tmp = tempfile.TemporaryDirectory(prefix="ffskill_verify_")
         outdir = Path(tmp.name)
 
@@ -117,16 +175,13 @@ def main() -> int:
     results = []
     for f in files:
         info(f"=== {f}")
-        entry: Dict = {"file": str(f), "steps": []}
-        was_json, STATE.json = STATE.json, False  # same: one JSON document per run, printed at the end
-        try:
-            meta = probe(str(f))
-        except SystemExit:
-            entry["steps"].append({"step": "probe", "ok": False, "seconds": 0, "error": "ffprobe failed"})
+        entry: Dict = {"file": str(f), "steps": [], "skipped": []}
+        meta, failure = _probe_capturing(str(f))
+        if meta is None:
+            entry["steps"].append(dict({"step": "probe", "ok": False, "seconds": 0, "error": _cell(failure.get("message", ""))}, **failure))
+            entry["skipped"].append({"step": "*", "reason": "input_unreadable", "message": "no other step runs on a file probe cannot read"})
             results.append(entry)
             continue
-        finally:
-            STATE.json = was_json
         entry["probe"] = {k: meta.get(k) for k in ("duration", "format")}
         entry["probe"]["video"] = {k: (meta.get("video") or {}).get(k) for k in ("codec", "width", "height", "fps", "pix_fmt", "hdr_format", "rotation", "variable_frame_rate_suspected")}
         entry["probe"]["audio"] = {k: (meta.get("audio") or {}).get(k) for k in ("codec", "channels", "sample_rate")}
@@ -138,6 +193,10 @@ def main() -> int:
         seg_end = min(dur, args.seconds) if dur else args.seconds
         fast = ["--fast"]
         plan = []
+        skipped: List[Dict[str, str]] = entry["skipped"]
+
+        def skip(step_name: str, reason: str, message: str) -> None:
+            skipped.append({"step": step_name, "reason": reason, "message": message})
         plan.append(("cut copy", ["cut.py", str(f), "--start", "0", "--end", f"{seg_end:.2f}", "-o", cut]))
         if has_v:
             plan.append(("cut accurate", ["cut.py", str(f), "--start", "0", "--end", f"{seg_end:.2f}", "--accurate", "-o", f"{stem}_acc.mp4"] + fast))
@@ -152,12 +211,30 @@ def main() -> int:
                     plan.append(("color to-sdr", ["color.py", f"{stem}_acc.mp4", "--to-sdr", "-o", f"{stem}_sdr.mp4"] + fast))
                     plan.append(("hdr preserved", ["__check_hdr__", f"{stem}_acc.mp4"]))
                 plan.append(("probe analyze", ["probe.py", cut, "--analyze"]))
+            else:
+                for n in ("overlay text", "look sheet", "color to-sdr", "hdr preserved", "probe analyze"):
+                    skip(n, "quick", "--quick runs probe, copy cut, fit, caption and export only")
+            if not args.quick and not (meta.get("video") or {}).get("bt2020_or_hdr"):
+                for n in ("color to-sdr", "hdr preserved"):
+                    skip(n, "not_hdr", "the file is not HDR")
             plan.append(("export x", ["export.py", cut, "--preset", "x", "-o", f"{stem}_x.mp4"]))
+        else:
+            for n in ("cut accurate", "fit 9:16", "caption", "overlay text", "look sheet", "color to-sdr", "hdr preserved",
+                      "probe analyze", "export x"):
+                skip(n, "no_video", "the file has no video stream")
         if has_a and not args.quick:
             plan.append(("loudness measure", ["loudness.py", str(f), "--measure-only"]))
             plan.append(("silence list", ["silence.py", cut, "--list"]))
             if (meta.get("audio") or {}).get("channels", 0) > 2:
                 plan.append(("audio downmix", ["audio.py", cut, "--downmix", "-o", f"{stem}_st.mp4"]))
+            else:
+                skip("audio downmix", "not_multichannel", "the audio has 2 channels or fewer")
+        elif not has_a:
+            for n in ("loudness measure", "silence list", "audio downmix"):
+                skip(n, "no_audio", "the file has no audio stream")
+        else:
+            for n in ("loudness measure", "silence list", "audio downmix"):
+                skip(n, "quick", "--quick runs probe, copy cut, fit, caption and export only")
         for name, argv in plan:
             r = step(name, argv, args.timeout)
             entry["steps"].append(r)
@@ -179,6 +256,8 @@ def main() -> int:
         lines.append("|---|---|---|---|")
         for s in e["steps"]:
             lines.append(f"| {s['step']} | {'PASS' if s['ok'] else 'FAIL'} | {s['seconds']}s | {s['error']} |")
+        for s in e.get("skipped") or []:
+            lines.append(f"| {s['step']} | SKIP | - | {s['message']} |")
         lines.append("")
     report = "\n".join(lines)
     if args.report:

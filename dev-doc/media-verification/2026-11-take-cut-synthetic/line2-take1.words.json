@@ -1,0 +1,41 @@
+{
+  "source": "line2-take1.wav",
+  "language": "en",
+  "words": [
+    {
+      "text": "Choose",
+      "start": 0.0,
+      "end": 0.18
+    },
+    {
+      "text": "the",
+      "start": 0.18,
+      "end": 0.38
+    },
+    {
+      "text": "cleanest",
+      "start": 0.38,
+      "end": 0.82
+    },
+    {
+      "text": "reading",
+      "start": 0.82,
+      "end": 1.12
+    },
+    {
+      "text": "for",
+      "start": 1.12,
+      "end": 1.38
+    },
+    {
+      "text": "each",
+      "start": 1.38,
+      "end": 1.58
+    },
+    {
+      "text": "line.",
+      "start": 1.58,
+      "end": 1.9
+    }
+  ]
+}

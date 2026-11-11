@@ -1,0 +1,328 @@
+{
+ "pre": [
+  {
+   "text": "Or",
+   "start": 0.88,
+   "end": 1.56,
+   "p": 0.08
+  },
+  {
+   "text": "think",
+   "start": 1.56,
+   "end": 1.76,
+   "p": 0.17
+  },
+  {
+   "text": "correctly",
+   "start": 1.76,
+   "end": 2.28,
+   "p": 0.55
+  },
+  {
+   "text": "about",
+   "start": 2.28,
+   "end": 2.62,
+   "p": 0.74
+  },
+  {
+   "text": "having",
+   "start": 2.62,
+   "end": 2.94,
+   "p": 0.5
+  },
+  {
+   "text": "an",
+   "start": 2.94,
+   "end": 3.16,
+   "p": 0.85
+  },
+  {
+   "text": "office,",
+   "start": 3.16,
+   "end": 3.32,
+   "p": 0.99
+  },
+  {
+   "text": "um...",
+   "start": 4.08,
+   "end": 4.96,
+   "p": 0.25
+  }
+ ],
+ "line1": [
+  {
+   "text": "Okay,",
+   "start": 5.0,
+   "end": 5.42,
+   "p": 0.13
+  },
+  {
+   "text": "all",
+   "start": 5.8,
+   "end": 5.92,
+   "p": 0.91
+  },
+  {
+   "text": "10",
+   "start": 5.92,
+   "end": 6.28,
+   "p": 0.79
+  },
+  {
+   "text": "corrected",
+   "start": 6.28,
+   "end": 6.96,
+   "p": 0.95
+  },
+  {
+   "text": "evalance",
+   "start": 6.96,
+   "end": 7.8,
+   "p": 0.51
+  },
+  {
+   "text": "testing",
+   "start": 7.8,
+   "end": 8.14,
+   "p": 0.76
+  },
+  {
+   "text": "now",
+   "start": 8.14,
+   "end": 8.94,
+   "p": 0.68
+  },
+  {
+   "text": "pass.",
+   "start": 8.94,
+   "end": 9.22,
+   "p": 0.47
+  },
+  {
+   "text": "So",
+   "start": 9.62,
+   "end": 9.76,
+   "p": 0.94
+  },
+  {
+   "text": "the",
+   "start": 9.76,
+   "end": 9.9,
+   "p": 0.87
+  },
+  {
+   "text": "CP2",
+   "start": 9.9,
+   "end": 10.42,
+   "p": 0.81
+  },
+  {
+   "text": "failure",
+   "start": 10.42,
+   "end": 10.68,
+   "p": 0.39
+  },
+  {
+   "text": "are",
+   "start": 10.68,
+   "end": 11.02,
+   "p": 0.83
+  },
+  {
+   "text": "resulting",
+   "start": 11.02,
+   "end": 11.62,
+   "p": 0.66
+  },
+  {
+   "text": "in",
+   "start": 11.62,
+   "end": 11.88,
+   "p": 0.57
+  },
+  {
+   "text": "the",
+   "start": 11.88,
+   "end": 11.9,
+   "p": 0.75
+  },
+  {
+   "text": "follow",
+   "start": 11.9,
+   "end": 12.14,
+   "p": 0.44
+  },
+  {
+   "text": "-up",
+   "start": 12.14,
+   "end": 12.3,
+   "p": 0.73
+  },
+  {
+   "text": "runs.",
+   "start": 12.3,
+   "end": 12.54,
+   "p": 0.43
+  }
+ ],
+ "line2_take1": [
+  {
+   "text": "The",
+   "start": 13.1,
+   "end": 13.4,
+   "p": 0.67
+  },
+  {
+   "text": "playing",
+   "start": 13.4,
+   "end": 13.6,
+   "p": 0.31
+  },
+  {
+   "text": "is",
+   "start": 13.6,
+   "end": 13.84,
+   "p": 0.99
+  },
+  {
+   "text": "still",
+   "start": 13.84,
+   "end": 14.08,
+   "p": 0.97
+  },
+  {
+   "text": "not",
+   "start": 14.08,
+   "end": 14.3,
+   "p": 1.0
+  },
+  {
+   "text": "complete.",
+   "start": 14.3,
+   "end": 14.82,
+   "p": 1.0
+  }
+ ],
+ "between": [
+  {
+   "text": "C",
+   "start": 15.3,
+   "end": 15.74,
+   "p": 0.4
+  },
+  {
+   "text": ".P",
+   "start": 15.74,
+   "end": 15.88,
+   "p": 0.32
+  },
+  {
+   "text": ".R.",
+   "start": 15.88,
+   "end": 16.0,
+   "p": 0.56
+  }
+ ],
+ "line2_take2": [
+  {
+   "text": "The",
+   "start": 16.0,
+   "end": 16.64,
+   "p": 0.17
+  },
+  {
+   "text": "plan",
+   "start": 16.64,
+   "end": 17.08,
+   "p": 1.0
+  },
+  {
+   "text": "is",
+   "start": 17.08,
+   "end": 17.48,
+   "p": 0.98
+  },
+  {
+   "text": "still",
+   "start": 17.48,
+   "end": 18.36,
+   "p": 0.99
+  },
+  {
+   "text": "not",
+   "start": 18.36,
+   "end": 18.66,
+   "p": 1.0
+  },
+  {
+   "text": "complete.",
+   "start": 18.66,
+   "end": 19.06,
+   "p": 0.98
+  }
+ ],
+ "line3": [
+  {
+   "text": "CP6",
+   "start": 19.35,
+   "end": 20.17,
+   "p": 0.72
+  },
+  {
+   "text": "and",
+   "start": 20.17,
+   "end": 20.37,
+   "p": 0.81
+  },
+  {
+   "text": "CP7",
+   "start": 20.37,
+   "end": 20.77,
+   "p": 0.65
+  },
+  {
+   "text": "need",
+   "start": 20.77,
+   "end": 21.03,
+   "p": 0.87
+  },
+  {
+   "text": "there,",
+   "start": 21.03,
+   "end": 21.27,
+   "p": 0.78
+  },
+  {
+   "text": "something",
+   "start": 21.39,
+   "end": 21.61,
+   "p": 0.94
+  },
+  {
+   "text": "I",
+   "start": 21.61,
+   "end": 22.01,
+   "p": 0.94
+  },
+  {
+   "text": "cannot",
+   "start": 22.01,
+   "end": 22.35,
+   "p": 0.96
+  },
+  {
+   "text": "produce.",
+   "start": 22.35,
+   "end": 22.73,
+   "p": 0.79
+  }
+ ],
+ "tail": [
+  {
+   "text": "Okay.",
+   "start": 23.1,
+   "end": 23.66,
+   "p": 0.4
+  }
+ ]
+}

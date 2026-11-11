@@ -1,0 +1,73 @@
+{
+  "file": "/tmp/trove-sync/cp6-synthetic/source.mp4",
+  "format": "mov,mp4,m4a,3gp,3g2,mj2",
+  "duration": 22.291667,
+  "start_time": 0.0,
+  "size_bytes": 17075896,
+  "bitrate": 6128171,
+  "video": {
+    "codec": "h264",
+    "profile": "Constrained Baseline",
+    "width": 1280,
+    "height": 720,
+    "display_aspect": "16:9",
+    "sample_aspect_ratio": "1:1",
+    "fps": 24.0,
+    "r_frame_rate": "24/1",
+    "avg_frame_rate": "24/1",
+    "variable_frame_rate_suspected": false,
+    "pix_fmt": "yuv420p",
+    "bit_depth": 8,
+    "hdr": false,
+    "hdr_signal": false,
+    "bt2020_or_hdr": false,
+    "hdr_format": null,
+    "dolby_vision": null,
+    "hdr10_static": null,
+    "color_space": null,
+    "color_primaries": null,
+    "color_transfer": null,
+    "color_range": null,
+    "rotation": 0,
+    "nb_frames": 535,
+    "duration": 22.291667,
+    "tagged_duration": null,
+    "start_time": 0.0,
+    "bitrate": 6067772
+  },
+  "audio": {
+    "codec": "aac",
+    "channels": 1,
+    "channel_layout": "mono",
+    "sample_rate": 16000,
+    "bitrate": 56066,
+    "duration": 22.290875,
+    "start_time": 0.0,
+    "tagged_duration": null
+  },
+  "subtitle_streams": 0,
+  "data_streams": 0,
+  "stream_counts": {
+    "video": 1,
+    "audio": 1
+  },
+  "chapters": [],
+  "tags": {},
+  "timecode": {
+    "value": null,
+    "drop_frame": null,
+    "source": null
+  },
+  "subtitle_stream_details": [],
+  "audio_streams": [
+    {
+      "index": 0,
+      "codec": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "sample_rate": 16000,
+      "language": "und",
+      "title": null
+    }
+  ]
+}

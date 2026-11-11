@@ -7,7 +7,7 @@ import re
 import unicodedata
 from collections import Counter
 
-from . import categories, competitors, entity_extract, http, providers, query, relevance, schema
+from . import categories, competitors, entity_extract, http, log, providers, query, relevance, schema
 
 # Hebrew Unicode block: U+0590–U+05FF
 _HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
@@ -141,6 +141,7 @@ SOURCE_CAPABILITIES = {
     "tiktok": {"video", "video_shortform", "social"},
     "instagram": {"video", "video_shortform", "social"},
     "hackernews": {"discussion", "link"},
+    "devto": {"discussion", "link", "reference"},
     "bluesky": {"discussion", "social"},
     "truthsocial": {"discussion", "social"},
     "polymarket": {"market"},
@@ -151,6 +152,7 @@ SOURCE_CAPABILITIES = {
     "techmeme": {"discussion", "link", "reference"},
     "trustpilot": {"reference", "company_signal", "social"},
     "amazon": {"reference", "company_signal", "product_signal"},
+    "meta_ads": {"reference", "company_signal", "product_signal"},
     "xiaohongshu": {"video", "video_shortform", "social"},
     "telegram": {"discussion", "social"},
     "github": {"discussion", "link"},
@@ -159,6 +161,10 @@ SOURCE_CAPABILITIES = {
     "jobs": {"jobs", "company_signal", "link"},
     "corpus": {"reference", "analysis"},
 }
+
+
+def _is_identity_anchor(anchor: object) -> bool:
+    return isinstance(anchor, str) and re.search(r"\w", anchor) is not None
 
 
 def validate_external_plan(raw: dict) -> None:
@@ -175,6 +181,10 @@ def validate_external_plan(raw: dict) -> None:
     for field in ("intent", "freshness_mode", "cluster_mode"):
         if not isinstance(raw[field], str) or not raw[field].strip():
             raise ValueError(f"field '{field}' must be a non-empty string")
+
+    anchors = raw.get("person_identity_anchors", [])
+    if not isinstance(anchors, list) or not all(_is_identity_anchor(a) for a in anchors):
+        raise ValueError("person_identity_anchors must be an array of non-empty strings")
 
     source_weights = raw.get("source_weights")
     if source_weights is not None and not isinstance(source_weights, dict):
@@ -330,6 +340,7 @@ def build_drill_plan(
         freshness_mode=report.query_plan.freshness_mode,
         cluster_mode=report.query_plan.cluster_mode,
         raw_topic=report.topic,
+        person_identity_anchors=list(report.query_plan.person_identity_anchors),
         subqueries=subqueries,
         source_weights={
             source: report.query_plan.source_weights.get(source, 1.0)
@@ -358,7 +369,11 @@ def plan_query(
     internal_subrun: when True, suppress the LAW 7 "No --plan passed" stderr
     warning. LAW 7 targets the hosting-reasoning-model path; competitor
     fan-out sub-runs are engine-internal and the warning is a false positive
-    there. Default False preserves the warning on every user-facing invocation.
+    there. Default False preserves the warning on every user-facing invocation
+    that ends on the deterministic fallback, including a failed internal
+    planner. On a detected agent host the CLI stops a plan-less research run
+    before this is reached, apart from its documented exemptions and the
+    ``LAST30DAYS_ALLOW_ENGINE_PLAN`` override (``last30days._law7_host_plan_gate``).
     """
     if _should_force_deterministic_plan(topic):
         return _fallback_plan(
@@ -374,12 +389,19 @@ def plan_query(
     if provider and model:
         try:
             raw = provider.generate_json(model, prompt)
-            plan = _sanitize_plan(raw, topic, available_sources, requested_sources, depth)
+            plan = _sanitize_plan(
+                raw, topic, available_sources, requested_sources, depth,
+            )
             if plan.subqueries:
                 return plan
         except (ValueError, KeyError, json.JSONDecodeError, OSError, http.HTTPError) as exc:
             import sys
             print(f"[Planner] LLM planning failed, using deterministic fallback: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # A failed internal planner (e.g. HTTP 402, no credits) degrades
+            # the run exactly like having none, and the host may not be
+            # detectable, so the LAW 7 reminder applies here too.
+            if not internal_subrun:
+                _print_law7_reminder()
             return _fallback_plan(
                 topic, available_sources, requested_sources, depth,
                 note=f"fallback-plan (LLM error: {type(exc).__name__})",
@@ -394,17 +416,22 @@ def plan_query(
     # the hosting reasoning model, YOU are the provider. LAW 7 / 2026-04-19
     # Hermes Agent Use Cases failure mode.
     if not internal_subrun:
-        import sys
-        print(
-            "[Planner] No --plan passed. If you are the reasoning model hosting "
-            "this skill (Claude Code, Codex, Hermes, Gemini, or any agent runtime), "
-            "YOU ARE the planner: generate a JSON query plan yourself and pass it "
-            "via --plan. You do not need an API key or credentials; you ARE the "
-            "LLM. The deterministic fallback below is the headless/cron path only. "
-            "See LAW 7 in SKILL.md and Step 0.75 for the plan schema.",
-            file=sys.stderr,
-        )
+        _print_law7_reminder()
     return _fallback_plan(topic, available_sources, requested_sources, depth)
+
+
+def _print_law7_reminder() -> None:
+    import sys
+    print(
+        "[Planner] No --plan passed. If you are the reasoning model hosting "
+        "this skill (Claude Code, Codex, Hermes, Gemini, or any agent runtime), "
+        "YOU ARE the planner: generate a JSON query plan yourself and pass it "
+        "via --plan. You do not need an API key or credentials; you ARE the "
+        "LLM. The deterministic fallback below is the headless/cron path only. "
+        "See LAW 7 in SKILL.md and Step 0.75 in references/research-runbook.md "
+        "for the plan schema.",
+        file=sys.stderr,
+    )
 
 
 def _build_prompt(
@@ -438,16 +465,19 @@ Return JSON only with this shape:
       "weight": 1.0
     }}
   ],
+  "person_identity_anchors": [],
   "notes": ["optional short notes"]
 }}
 
 Rules:
+- for a collision-prone person, preserve specific company/organization identity anchors explicitly supplied in the topic in person_identity_anchors; for an organization whose first word also names other people or things, use its full name (["Pace Capital"]), never a topic plus a search descriptor ("Stripe payments"); otherwise use []; never invent affiliations or use the shared name/generic role as an anchor
 - emit 1 to 5 subqueries (how_to/opinion/product/breaking_news intents benefit from 4-5; factual/concept from 2)
 - every subquery must include both search_query and ranking_query
 - sources must be drawn from Available sources only
 - use cluster_mode=none for factual or many how-to queries
 - use strict_recent for breaking news and most predictions
 - use debate for comparison/opinion, market for prediction, workflow for how_to, story for breaking_news
+- ENABLEMENT: when the topic asks how to make a named tool or agent control, operate, drive, automate, or use a computer, browser, desktop, laptop, screen, or phone ("X control my computer", "get X to use my browser"), use intent=how_to and cluster_mode=workflow, never comparison. Emit 4-5 subqueries that find what gives the named tool that capability: its own built-in route, plus third-party MCP servers, CLIs, browser or desktop automation tools, and extensions it can use. Keep the named tool in two or three search_query strings, and make at least one search_query capability-only without the named tool (e.g. 'computer use MCP server', 'browser automation CLI agent').
 - search_query should be concise and keyword-heavy
 - ranking_query should read like a natural-language question
 - preserve exact proper nouns and entity strings from the topic
@@ -466,10 +496,23 @@ def _sanitize_plan(
     available_sources: list[str],
     requested_sources: list[str] | None,
     depth: str,
+    *,
+    honor_plan_sources: bool = False,
 ) -> schema.QueryPlan:
     intent_hint = str(raw.get("intent") or _infer_intent(topic)).strip()
     if intent_hint not in ALLOWED_INTENTS:
         intent_hint = _infer_intent(topic)
+    # The LLM planner reads "best X to control my computer" as a comparison
+    # and plans a strict-recent debate about X. An enablement topic without an
+    # explicit comparison is a how-to; an explicit --plan keeps its intent.
+    enablement_override = (
+        not honor_plan_sources
+        and intent_hint != "how_to"
+        and _is_enablement(topic)
+        and _infer_intent(topic) == "how_to"
+    )
+    if enablement_override:
+        intent_hint = "how_to"
     requested = set(requested_sources or [])
     available = set(available_sources)
     eligible_sources = [
@@ -504,6 +547,15 @@ def _sanitize_plan(
         if requested:
             sources = [source for source in sources if source in requested]
         if not sources:
+            if honor_plan_sources:
+                label = str(subquery.get("label") or f"q{index}")
+                log.source_log(
+                    "Planner",
+                    f"Skipping external-plan subquery {label}: none of its planned "
+                    "sources are available under the current source configuration.",
+                    tty_only=False,
+                )
+                continue
             sources = list(source_weights)
         search_query = str(subquery.get("search_query") or "").strip()
         ranking_query = str(subquery.get("ranking_query") or "").strip()
@@ -518,9 +570,23 @@ def _sanitize_plan(
                 weight=max(0.05, float(subquery.get("weight") or 1.0)),
             )
         )
+    if (
+        depth != "quick"
+        and subqueries
+        and not honor_plan_sources
+        and intent_hint == "how_to"
+        and _is_enablement(topic)
+        and not _has_capability_subquery(subqueries, _enablement_host(topic))
+    ):
+        subqueries.extend(_enablement_subqueries(topic, list(source_weights), start=len(subqueries) + 1)[:1])
     if depth == "quick" and subqueries:
         subqueries = subqueries[:1]
     if not subqueries:
+        if honor_plan_sources:
+            raise ValueError(
+                "No available planned sources remain. Enable a source named in "
+                "--plan or revise the plan/source configuration; no retrieval was started."
+            )
         return _fallback_plan(topic, available_sources, requested_sources, depth)
 
     intent = intent_hint
@@ -528,9 +594,16 @@ def _sanitize_plan(
     if intent == "how_to":
         freshness_mode = "evergreen_ok"
     cluster_mode = str(raw.get("cluster_mode") or _default_cluster_mode(intent)).strip()
+    if enablement_override:
+        cluster_mode = _default_cluster_mode(intent)
     if cluster_mode not in ALLOWED_CLUSTER_MODES:
         cluster_mode = _default_cluster_mode(intent)
 
+    # --plan input was already validated strictly; a malformed field from the
+    # internal LLM planner degrades to unscoped instead of discarding its plan.
+    anchors = raw.get("person_identity_anchors")
+    if not isinstance(anchors, list):
+        anchors = []
     return schema.QueryPlan(
         intent=intent,
         freshness_mode=freshness_mode,
@@ -543,10 +616,13 @@ def _sanitize_plan(
                 depth,
                 eligible_sources,
                 requested_sources=requested_sources,
+                honor_plan_sources=honor_plan_sources,
             )
         ),
         source_weights=source_weights,
-        notes=[str(note).strip() for note in raw.get("notes") or [] if str(note).strip()],
+        notes=[str(note).strip() for note in raw.get("notes") or [] if str(note).strip()]
+        + (_enablement_notes(topic) if not honor_plan_sources and intent == "how_to" and _is_enablement(topic) else []),
+        person_identity_anchors=[a.strip() for a in anchors if _is_identity_anchor(a)],
     )
 
 
@@ -578,12 +654,19 @@ def _trim_subqueries_for_depth(
     depth: str,
     available_sources: list[str],
     requested_sources: list[str] | None = None,
+    honor_plan_sources: bool = False,
 ) -> list[schema.SubQuery]:
     # At non-quick depth, expand sources: use capability routing for intents
     # that define it, or all available sources otherwise. The LLM planner may
     # assign narrow source lists; we override to let fusion decide quality.
-    if depth != "quick":
+    # Operator-supplied --plan is a contract: keep per-subquery sources.
+    if depth != "quick" and not honor_plan_sources:
         expanded_sources = _default_sources_for_intent(intent, available_sources)
+        # Explicit --search sources are a user override: intent routing must not drop them.
+        expanded_sources += [
+            source for source in available_sources
+            if source in (requested_sources or []) and source not in expanded_sources
+        ]
         return [
             schema.SubQuery(
                 label=subquery.label,
@@ -709,6 +792,9 @@ def _fallback_plan(
             )
         )
 
+    if depth != "quick" and intent == "how_to" and _is_enablement(topic):
+        subqueries.extend(_enablement_subqueries(topic, list(source_weights)))
+
     # Intent-modifier fanout: when topic contains a phrase like "use cases",
     # "workflows", "examples", "review" (see _INTENT_MODIFIER_PATTERNS),
     # paraphrase the intent across 3 extra subqueries rather than echoing
@@ -733,8 +819,134 @@ def _fallback_plan(
             )
         ),
         source_weights=_normalize_weights(source_weights),
-        notes=[note],
+        notes=[note] + (_enablement_notes(topic) if intent == "how_to" and _is_enablement(topic) else []),
     )
+
+
+_SLASH_COMPARISON = re.compile(r"\b[A-Z][a-z]{2,}(?:/[A-Z][a-z]{2,})+\b")
+
+
+# Plan notes marking a topic that asks how to give a named tool (the host) a
+# capability. Rerank reads them to keep capability-only search results, which
+# name the tool that delivers the capability rather than the host, out of the
+# entity cap.
+ENABLEMENT_NOTE = "enablement"
+ENABLEMENT_HOST_NOTE = "enablement-host:"
+_HOST_FILLER = frozenset(
+    "a an the best top good which what how to can i we get make let have that "
+    "who is are for my your our some any".split()
+)
+_GENERIC_HOST = frozenset("ai agent agents bot bots tool tools app apps assistant llm model".split())
+
+_DEVICE = r"(?:my|the|your|our)\s+(?:own\s+)?(?:computer|mac|pc|desktop|laptop|browser|screen|phone|terminal)s?\b"
+# Mirrors the hosted worker's detect_enablement_intent (last30days-com).
+# A tool acting on a device the person owns: "grok bot control my computer",
+# "agent that automates the browser". Plain "use the browser" is ordinary use.
+_ENABLEMENT_TARGET_RE = re.compile(
+    r"\b(?P<verb>control(?:s|ling)?|operat(?:e|es|ing)|automat(?:e|es|ing))\s+" + _DEVICE,
+    re.IGNORECASE,
+)
+# A named tool made to act on the device: "get claude to control my browser",
+# "make chatgpt use my mac". The lookahead keeps people and idioms out, as in
+# "let my kid use the phone", "make kids use the computer", "make sure I use".
+_ENABLEMENT_AGENT_RE = re.compile(
+    r"\b(?:get|make|let|have)\s+"
+    r"(?!(?:to|me|us|them|you|sure|my|your|our|his|her|their|the\s+most|kids?|children|teens?|users?|people|customers?|employees?|students?|staff|team)\b)"
+    r"[\w.-]+(?:\s+[\w.-]+){0,2}?\s+(?:to\s+)?"
+    r"(?P<verb>control(?:s|ling)?|operat(?:e|es|ing)|drives?|automat(?:e|es|ing)|uses?)\s+" + _DEVICE,
+    re.IGNORECASE,
+)
+# Asking for news about device control is not asking how to enable it. Bare
+# "latest" or "released" stays allowed: "get the latest Claude to use my mac".
+_ENABLEMENT_NEWS_RE = re.compile(
+    r"\b(?:news|headlines?|announce(?:d|s|ment)|breaking"
+    r"|just\s+(?:shipped|launched|released)"
+    r"|(?:launch(?:ed|es)|release[sd]|unveil(?:ed|s)|ships)\s+(?:a|an|its|new)\b)",
+    re.IGNORECASE,
+)
+# A threat as the actor ("malware controlling my browser") is a security topic.
+# Only words before the verb count, so "...my browser without malware" is fine.
+_ENABLEMENT_THREAT_RE = re.compile(
+    r"\b(?:malware|virus(?:es)?|spyware|ransomware|trojans?|keyloggers?|rootkits?"
+    r"|hack(?:ed|er|ers)|scam(?:s|mers?)?|attackers?|someone|somebody|stranger)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_enablement(topic: str) -> bool:
+    """The topic asks how to give a named tool a capability, such as
+    controlling the person's computer. That is a how-to, not a comparison."""
+    if _ENABLEMENT_NEWS_RE.search(topic):
+        return False
+    for pattern in (_ENABLEMENT_TARGET_RE, _ENABLEMENT_AGENT_RE):
+        for match in pattern.finditer(topic):
+            if not _ENABLEMENT_THREAT_RE.search(topic, 0, match.start("verb")):
+                return True
+    return False
+
+
+def _enablement_host(topic: str) -> str:
+    """The named tool an enablement topic wants to give a capability, as one
+    lowercase token ("grok" for "best Grok AI bot to control my computer"), or
+    "" when the topic names no distinctive tool ("agent that automates the
+    desktop")."""
+    match = _ENABLEMENT_AGENT_RE.search(topic) or _ENABLEMENT_TARGET_RE.search(topic)
+    if not match:
+        return ""
+    if match.re is _ENABLEMENT_AGENT_RE:
+        words = re.findall(r"[\w.-]+", match.group(0).lower())[1:]
+    else:
+        words = re.findall(r"[\w.-]+", topic[: match.start()].lower())
+    words = [word for word in words if word not in _HOST_FILLER]
+    if not words or words[0] in _GENERIC_HOST:
+        return ""
+    return words[0]
+
+
+def _enablement_notes(topic: str) -> list[str]:
+    host = _enablement_host(topic)
+    return [ENABLEMENT_NOTE] + ([f"{ENABLEMENT_HOST_NOTE}{host}"] if host else [])
+
+
+def _enablement_capability_queries(topic: str) -> list[str]:
+    """Capability-only searches for an enablement topic, without the named tool.
+
+    General tools (MCP servers, agent CLIs) rarely appear in posts that name
+    the host, so the plan searches for the capability itself as well.
+    """
+    match = _ENABLEMENT_TARGET_RE.search(topic) or _ENABLEMENT_AGENT_RE.search(topic)
+    device = match.group(0).lower() if match else ""
+    if "browser" in device:
+        return ["browser automation MCP server", "browser automation CLI for AI agents"]
+    if "phone" in device:
+        return ["phone automation MCP server for AI agents", "AI agent control phone app automation"]
+    if "terminal" in device:
+        return ["terminal MCP server for AI agents", "AI agent shell CLI tool"]
+    if "mac" in device.split():
+        return ["macOS computer use MCP server", "macOS automation CLI for AI agents"]
+    return ["computer use MCP server", "desktop automation CLI for AI agents"]
+
+
+def _has_capability_subquery(subqueries, host: str) -> bool:
+    # Must leave out the host: fusion.capability_labels ignores searches that name it.
+    return any(
+        re.search(r"\b(?:mcp|cli|computer[- ]use|automation)\b", sq.search_query, re.IGNORECASE)
+        and not (host and re.search(rf"\b{re.escape(host)}", sq.search_query, re.IGNORECASE))
+        for sq in subqueries
+    )
+
+
+def _enablement_subqueries(topic: str, sources: list[str], start: int = 1) -> list[schema.SubQuery]:
+    return [
+        schema.SubQuery(
+            label=f"capability-{index}",
+            search_query=search,
+            ranking_query=f"Which tools, MCP servers, or CLIs give an AI agent this capability, as asked in '{topic}'?",
+            sources=list(sources),
+            weight=0.7,
+        )
+        for index, search in enumerate(_enablement_capability_queries(topic), start=start)
+    ]
 
 
 def _infer_intent(topic: str) -> str:
@@ -742,11 +954,11 @@ def _infer_intent(topic: str) -> str:
     if re.search(r"\b(vs|versus|compare|compared to|difference between)\b", text):
         return "comparison"
     # Slash-separated proper nouns: "React/Vue/Svelte" (not URLs, not acronyms like CI/CD or I/O)
-    if not re.search(r"https?://", topic) and re.search(r"\b[A-Z][a-z]{2,}(?:/[A-Z][a-z]{2,})+\b", topic):
+    if not re.search(r"https?://", topic) and _SLASH_COMPARISON.search(topic):
         return "comparison"
     if re.search(r"\b(odds|predict|prediction|forecast|chance|probability|will .* win)\b", text):
         return "prediction"
-    if re.search(r"\b(how to|tutorial|guide|setup|step by step|deploy|install)\b", text):
+    if _is_enablement(topic) or re.search(r"\b(how to|tutorial|guide|setup|step by step|deploy|install)\b", text):
         return "how_to"
     if re.search(r"\b(what is|what are|who is|who acquired|when did|parameter count|release date)\b", text):
         return "factual"
@@ -879,7 +1091,13 @@ def _comparison_entities(topic: str, *, uncapped: bool = False) -> list[str]:
 
     Caps at ``competitors.COMPARISON_ENTITY_MAX`` unless ``uncapped`` (caller
     truncates and may warn about dropped entities).
+
+    Standalone comparator tokens are syntax, including repeated tokens.
+    Compact ``vs.`` separates entities only after a nonempty left entity.
     """
+    if _infer_intent(topic) != "comparison":
+        return []
+
     # "difference between X and Y" -> "X vs Y" (replace "and" only in this context)
     normalized = re.sub(
         r"\bdifference between\s+(.+?)\s+and\s+",
@@ -888,11 +1106,25 @@ def _comparison_entities(topic: str, *, uncapped: bool = False) -> list[str]:
         flags=re.I,
     )
     normalized = re.sub(r"\b(compared to)\b", " vs ", normalized, flags=re.I)
-    parts = [
-        part.strip(" \t\r\n?.,:;!()[]{}\"'")
-        for part in re.split(r"\bvs\.?\b|\bversus\b|/", normalized, flags=re.I)
-        if part.strip(" \t\r\n?.,:;!()[]{}\"'")
-    ]
+    separator = r"(?<!\S)(?:(?P<standalone>vs\.?|versus)(?!\S)|vs\.(?=\S))"
+    if not re.search(separator, normalized, flags=re.I):
+        if re.search(r"https?://", normalized):
+            return []
+        normalized = _SLASH_COMPARISON.sub(
+            lambda match: match.group(0).replace("/", " vs "), normalized,
+        )
+    trim = " \t\r\n?.,:;!()[]{}\"'"
+    parts = []
+    part_start = 0
+    for match in re.finditer(separator, normalized, flags=re.I):
+        part = normalized[part_start:match.start()].strip(trim)
+        if part:
+            parts.append(part)
+        if part or match.group("standalone") is not None:
+            part_start = match.end()
+    last_part = normalized[part_start:].strip(trim)
+    if last_part:
+        parts.append(last_part)
     # Strip trailing context from parts ("Svelte for frontend in 2026" -> "Svelte")
     if len(parts) < 2:
         return []

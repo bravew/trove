@@ -8,7 +8,8 @@ from typing import FrozenSet, List, Optional, Set
 PREFIXES = [
     'what are the best', 'what is the best', 'what are the latest',
     'what are people saying about', 'what do people think about',
-    'how do i use', 'how to use', 'how to',
+    'how do i use', 'how do you use', 'how can i use', 'how to use',
+    'how do you', 'how can i', 'how to',
     'what are', 'what is', 'tips for', 'best practices for',
     # Hebrew question/meta prefixes
     'מה יש חדש ב', 'מה יש חדש על', 'מה אנשים אומרים על',
@@ -100,6 +101,10 @@ def extract_core_subject(
     text = topic.lower().strip()
     if not text:
         return text
+    # Drop the question's closing punctuation first, so that it neither keeps
+    # the last word from matching a suffix or noise word nor survives the
+    # max_words path ("What is Claude Code?" -> "claude code", not "claude code?")
+    text = text.rstrip('?!.').strip() or text
 
     # Phase 1: Strip multi-word prefixes (longest first, stop after first match)
     for p in PREFIXES:

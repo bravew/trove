@@ -1,0 +1,266 @@
+{
+  "timestamp": "2026-11-11T02:07:39.297Z",
+  "model": "claude-sonnet-5-5",
+  "effort": "high",
+  "fallbacks": "default",
+  "maxTokens": 8192,
+  "skippedSkills": [
+    "trove-a11y",
+    "trove-architect",
+    "trove-arena",
+    "trove-autoplan",
+    "trove-beat-sync",
+    "trove-brainstorm",
+    "trove-broll-ingest",
+    "trove-cdk",
+    "trove-commit",
+    "trove-component-spec",
+    "trove-debug",
+    "trove-design-review",
+    "trove-diagram-design",
+    "trove-dispatch",
+    "trove-docker",
+    "trove-docs-sync-audit",
+    "trove-execute-plan",
+    "trove-ffmpeg",
+    "trove-json-canvas",
+    "trove-lambda",
+    "trove-obsidian-bases",
+    "trove-obsidian-cli",
+    "trove-obsidian-markdown",
+    "trove-perf",
+    "trove-plan",
+    "trove-principle-data-shape",
+    "trove-principle-encode-in-structure",
+    "trove-principle-idempotency",
+    "trove-principle-laziness",
+    "trove-principle-migrate-then-delete",
+    "trove-principle-type-discipline",
+    "trove-product-video",
+    "trove-pulse",
+    "trove-pulse-cn",
+    "trove-python",
+    "trove-react",
+    "trove-react-best-practices",
+    "trove-react-native",
+    "trove-react-view-transitions",
+    "trove-receive-review",
+    "trove-refactor",
+    "trove-reflect",
+    "trove-release-notes",
+    "trove-review",
+    "trove-secret-scan",
+    "trove-security-review",
+    "trove-ship",
+    "trove-shot-recipes",
+    "trove-show-work",
+    "trove-spec",
+    "trove-swift",
+    "trove-take-cut",
+    "trove-tdd",
+    "trove-terraform",
+    "trove-test-gap-audit",
+    "trove-typescript",
+    "trove-unslop",
+    "trove-user-story",
+    "trove-verify",
+    "trove-video-edit",
+    "trove-video-review",
+    "trove-visual-parity",
+    "trove-vue",
+    "trove-web-clip",
+    "trove-why",
+    "trove-worktree",
+    "trove-write-skill",
+    "using-trove"
+  ],
+  "usage": {
+    "input": 6,
+    "output": 3535,
+    "calls": 3,
+    "fallbackCalls": 0,
+    "servedModels": {
+      "claude-sonnet-5-5": 3
+    },
+    "responses": [
+      {
+        "id": "msg_011CgvKk7Hcf4Zx7mcDJPYJb",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1089,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 2472,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2472
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 623
+          }
+        }
+      },
+      {
+        "id": "msg_011CgvKkmCfHw3H3KdMo8BHC",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1253,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 3460,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 3460
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 477
+          }
+        }
+      },
+      {
+        "id": "msg_011CgvKmZoaR9JHfNbB1E2cV",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1193,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 3119,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 3119
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 442
+          }
+        }
+      }
+    ]
+  },
+  "results": [
+    {
+      "skill": "trove-explain",
+      "task": "task-01-explain-function",
+      "score": 8.3,
+      "passed": true,
+      "details": {
+        "audience_calibrated": 7,
+        "data_flow_traced": 9,
+        "cites_files": 7,
+        "no_filler": 9,
+        "reads_real_code": 9,
+        "scales_to_complexity": 9
+      },
+      "rationale": "A reasonable response would be a single-pass, 4-5 sentence explanation with no preamble. It would say that the function collapses overlapping (start, end) pairs into a sorted, minimal list. It would trace the flow: the empty-input guard (lines 2-3), the in-place sort (line 4), seeding `merged` with the first interval (line 5), iterating the rest (line 6), extending the last interval's end with `max` on overlap (lines 7-8), appending on a gap (lines 9-10), and returning `merged` (line 11). It would also note details that come from reading the code rather than guessing: `<=` merges touching intervals, and `intervals.sort()` mutates the caller's list. Scores are held back in two places. No audience was specified, so it would default to a mid-level developer without explicitly calibrating. And because the snippet has no file path, citations are line numbers only, not file:line. Fan-out is correctly skipped, since this is a single simple function. The weighted average is 116/14, about 8.29, which clears the minimum of 7.",
+      "usage": {
+        "id": "msg_011CgvKk7Hcf4Zx7mcDJPYJb",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1089,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 2472,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 2472
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 623
+          }
+        }
+      }
+    },
+    {
+      "skill": "trove-explain",
+      "task": "task-02-explain-flow",
+      "score": 8.6,
+      "passed": true,
+      "details": {
+        "audience_calibrated": 8,
+        "data_flow_traced": 9,
+        "cites_files": 8,
+        "no_filler": 9,
+        "reads_real_code": 9,
+        "scales_to_complexity": 9
+      },
+      "rationale": "A reasonable response treats this as a simple, single-flow fixture and explains it in one pass without fanning out sub-agents, which is correct. It would follow the SKILL.md output format and stay under 500 words. It would trace both inputs end to end. For `cartId=\"fixture-cart\"`: the submit handler calls `submit` (CheckoutForm.tsx:4), the hook sets pending and clears receipt and error (useCheckout.ts:8), and the API wrapper POSTs `{cart_id}` (checkout.ts:2-4). FastAPI sums [1250, 750] to 2000 and returns `order_id` and `total_cents` (checkout_service.py:9-12). The wrapper remaps these to camelCase (checkout.ts:8), the hook stores the receipt (useCheckout.ts:9), `finally` clears pending (useCheckout.ts:11), and the form renders the receipt at CheckoutForm.tsx:6. For an unknown cart, the 404 (checkout_service.py:10-11) makes `response.ok` false and the wrapper throws (checkout.ts:6). The hook's bare `catch` replaces the error with a generic message (useCheckout.ts:10), and the form renders it in `role=\"alert\"` (CheckoutForm.tsx:7). Points deducted for plausible weaknesses: some claims, such as the camelCase remapping rationale or the pending-disabled button, may be cited at block level rather than per line, and the junior-level tone could be a bit dense. The response should note the limits of what the code proves: the 'Unknown cart' detail is discarded, so a 404, a 500 and a network failure all look identical to the user; the proxy forwarding is a stated assumption rather than something shown in the code; the response shape is not validated, so a malformed body would render 'Order undefined'; and nothing here shows a real payment, inventory or persistence layer, since the in-memory `carts` dict is fixture-only.",
+      "usage": {
+        "id": "msg_011CgvKkmCfHw3H3KdMo8BHC",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1253,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 3460,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 3460
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 477
+          }
+        }
+      }
+    },
+    {
+      "skill": "trove-explain",
+      "task": "task-03-explain-architecture",
+      "score": 8.3,
+      "passed": true,
+      "details": {
+        "audience_calibrated": 8,
+        "data_flow_traced": 8,
+        "cites_files": 8,
+        "no_filler": 8,
+        "reads_real_code": 9,
+        "scales_to_complexity": 9
+      },
+      "rationale": "This is a hypothetical response, scored against what a reasonable AI would produce from the SKILL.md. It would be two dense paragraphs pitched at a senior engineer. It would skip basics and focus on trade-offs and failure modes. The first paragraph traces the path: `api/upload.py:3-7` stores the original, creates the row as `pending`, enqueues `{media_id}`, and returns immediately. It would tie this to the infra, where the work is heavy (ffmpeg plus a model call, `summary/handler.py:7`; 3008 MB and a 5-minute timeout, `infra/summary_stack.ts:8`), so inlining it would hold the request open and put that resource profile on the API tier. The second paragraph covers the operational reasons for the split: retries and a DLQ after 3 receives (`summary_stack.ts:1,4`), a visibility timeout of 6 minutes, longer than the 5-minute function timeout (`:3,8`), `reservedConcurrentExecutions: 10` capping model and ffmpeg load (`:8`), and `batchSize: 1` for failure isolation (`:10`). It would also note the idempotency guard at `handler.py:5-6`, which makes SQS at-least-once delivery safe. A strong answer would say plainly what the excerpts do not settle: whether `summarize` is itself idempotent, how clients learn the status changed (there is no polling or notification code in the excerpts), what happens to `summary_status` when a message lands in the DLQ (the handler never sets a failed state), and whether the enqueue at `upload.py:5` can fail after the row is created at `:4`. This is a simple, single-flow subsystem, so one pass with no sub-agent fan-out is correct. Points are lost for some density-driven line-citation gaps and for the tight two-paragraph limit, which forces some trade-offs to be compressed or left implicit.",
+      "usage": {
+        "id": "msg_011CgvKmZoaR9JHfNbB1E2cV",
+        "requestedModel": "claude-sonnet-5-5",
+        "servedModel": "claude-sonnet-5-5",
+        "fallback": false,
+        "transitions": [],
+        "stopReason": "end_turn",
+        "tokens": {
+          "input_tokens": 2,
+          "output_tokens": 1193,
+          "cache_read_input_tokens": 2017,
+          "cache_creation_input_tokens": 3119,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 3119
+          },
+          "output_tokens_details": {
+            "thinking_tokens": 442
+          }
+        }
+      }
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "source": "source.mp4",
+  "lines": [
+    {
+      "line": 1,
+      "text": "Keep the original recording safe.",
+      "kept": {"take": 3, "of": 3},
+      "window": {"start": 9.5, "end": 12.0},
+      "reason": "Last clean reading, confirmed by isolated transcription. Take 2 contains a filler and a false start. The full-file transcript omitted take 3.",
+      "pause_after": 1.0
+    },
+    {
+      "line": 2,
+      "text": "Choose the cleanest reading for each line.",
+      "kept": {"take": 1, "of": 2},
+      "window": {"start": 12.6, "end": 15.3},
+      "reason": "Only clean reading. The later take says um, wrong reading, sorry before restarting, confirmed by isolated transcription.",
+      "pause_after": 1.0
+    }
+  ]
+}

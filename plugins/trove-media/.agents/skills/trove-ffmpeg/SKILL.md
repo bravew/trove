@@ -3,7 +3,7 @@ name: trove-ffmpeg
 description: "Edit video and audio locally with the vendored ffmpeg engine: cut, trim, and join clips; reframe and resize to 9:16 or 1:1; change speed; burn in captions, subtitles, logos, and titles; remove silence; sync multicam and external mics; normalise loudness; convert HDR to SDR; apply LUTs; mix background music with ducking; export for YouTube, Reels, TikTok, and X; run delivery compliance checks; detect scenes and build highlight reels, contact sheets, and whole-edit project files. Use when the request names an actual media file, a delivery target, or an edit ffmpeg performs. Do not use it for questions that merely mention video in passing."
 metadata:
   source: kajisho5/ffmpeg-skill
-  upstream-version: 2.5.1
+  upstream-version: 3.2.3
 ---
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run build:skills -->
@@ -24,20 +24,22 @@ upstream MIT notice.
 Nothing is installed for the user. Trove ships no `ffmpeg` binary and no Python
 runtime.
 
-- Required: `python3` ≥ 3.9. Standard library only; there is no `pip install`
+- Required: `python3` ≥ 3.10. Standard library only; there is no `pip install`
   step and no virtualenv.
-- Required: `ffmpeg` and `ffprobe` on `PATH`.
+- Required: `ffmpeg` and `ffprobe` 6.1 or newer on `PATH`.
 
 Check both cheaply before the first job:
 
 ```bash
 python3 --version
-command -v ffmpeg ffprobe
+ffmpeg -version
+command -v ffprobe
 ```
 
-If `python3` is missing or older than 3.9, or if `ffmpeg` or `ffprobe` is not on
-`PATH`, say which one failed and stop. Do not install anything, do not run a
-package manager, and do not reach for a different tool to work around the gap.
+If `python3` is missing or older than 3.10, or if `ffmpeg` or `ffprobe` is not on
+`PATH` or is older than 6.1, say which one failed and stop. Do not install
+anything, do not run a package manager, and do not reach for a different tool to
+work around the gap.
 
 ## Read the manual first
 

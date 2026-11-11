@@ -17,32 +17,57 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from _common import STATE, add_common, apply_common, child_args, die, emit, info, probe, read_text_or_die, run_tool
+from _common import guard_sidecar, STATE, add_common, apply_common, child_args, die, emit, info, probe, read_text_or_die, run_tool
+from _common.emit import record_skip, warn
 
 HERE = Path(__file__).resolve().parent
 
 
-def sheet_b64(path: str, tiles: str = "4x2", width: int = 1200) -> Optional[str]:
+def _child_failure(proc: Any, doc: Any) -> Dict[str, Any]:
+    """Why a sibling tool produced nothing usable: its own error (kind, reason, message), or the
+    last stderr line and the exit code when it printed no failure document."""
+    err = (doc or {}).get("error") if isinstance(doc, dict) and isinstance(doc.get("error"), dict) else {}
+    out: Dict[str, Any] = {"exit_code": proc.returncode,
+                           "message": str(err.get("message") or (proc.stderr.strip().splitlines() or ["?"])[-1])[:300]}
+    for k in ("kind", "reason"):
+        if err.get(k):
+            out[k] = err[k]
+    return out
+
+
+def sheet_b64(path: str, tiles: str = "4x2", width: int = 1200) -> "Tuple[Optional[str], Dict[str, Any]]":
+    """(the contact sheet as base64, or None; why there is none)."""
+    if STATE.dry_run:
+        return None, {"reason": "dry_run", "message": "a dry run draws no contact sheet"}
     with tempfile.TemporaryDirectory(prefix="ffskill_report_") as tmp:
         png = os.path.join(tmp, "sheet.png")
-        proc = run_tool([str(HERE / "look.py"), path, "--tiles", tiles, "--width", str(width), "-o", png] + child_args())
+        proc = run_tool([str(HERE / "look.py"), path, "--tiles", tiles, "--width", str(width), "-o", png, "--json"] + child_args())
+        try:
+            doc = json.loads(proc.stdout)
+        except ValueError:
+            doc = None
         if proc.returncode != 0 or not os.path.exists(png):
-            return None
-        return base64.b64encode(Path(png).read_bytes()).decode("ascii")
+            return None, dict(_child_failure(proc, doc), reason=((doc or {}).get("error") or {}).get("reason") or "look_failed")
+        return base64.b64encode(Path(png).read_bytes()).decode("ascii"), {}
 
 
-def loudness(path: str) -> Dict[str, Any]:
+def loudness(path: str) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
+    """(lufs/tp/lra, or {}; why there is no measurement)."""
     proc = run_tool([str(HERE / "loudness.py"), path, "--measure-only"] + child_args())
     try:
         d = json.loads(proc.stdout)
-        return {"lufs": round(float(d["input_i"]), 1), "tp": round(float(d["input_tp"]), 1), "lra": round(float(d["input_lra"]), 1)}
-    except (ValueError, KeyError):
-        return {}
+    except ValueError:
+        d = None
+    try:
+        return {"lufs": round(float(d["input_i"]), 1), "tp": round(float(d["input_tp"]), 1), "lra": round(float(d["input_lra"]), 1)}, {}
+    except (TypeError, ValueError, KeyError):
+        return {}, dict(_child_failure(proc, d), reason="loudness_not_measured")
 
 
-def check(path: str, platform: str) -> Optional[Dict[str, Any]]:
+def check(path: str, platform: str) -> "Tuple[Optional[Dict[str, Any]], Dict[str, Any]]":
+    """(check.py's document, or None when it could not run at all; why)."""
     proc = run_tool([str(HERE / "check.py"), path, "--platform", platform, "--json"] + child_args())
     try:
         doc = json.loads(proc.stdout)
@@ -51,10 +76,10 @@ def check(path: str, platform: str) -> Optional[Dict[str, Any]]:
     if not isinstance(doc, dict) or "checks" not in doc:
         # check.py could not run at all (missing ffmpeg, unreadable file): its failure document
         # has no rows to render. A failed *verification* still carries its rows and is shown.
-        reason = ((doc or {}).get("error") or {}).get("message") or (proc.stderr.strip().splitlines() or ["?"])[-1]
-        info(f"check.py could not run: {reason[:200]}")
-        return None
-    return doc
+        why = dict(_child_failure(proc, doc), reason=((doc or {}).get("error") or {}).get("reason") or "check_failed")
+        info(f"check.py could not run: {why['message'][:200]}")
+        return None, why
+    return doc, {}
 
 
 def fmt_dur(sec: Optional[float]) -> str:
@@ -116,6 +141,7 @@ def pack_report(args) -> int:
         die(f"{args.pack}: no pack table found (expected the Markdown table render.py --template all writes)")
     title = args.title or f"Social pack — {Path(args.pack).stem.replace('_pack', '')}"
     output = args.output or str(Path(args.pack).with_suffix(".html"))
+    guard_sidecar(output, args.pack)
     head = "".join(f"<th>{html.escape(h)}</th>" for h in header)
     body = ""
     for r in rows:
@@ -165,21 +191,51 @@ def main() -> int:
         return pack_report(args)
     if not args.after:
         die("--after is required (or --pack FILE for a social pack table)")
+    output = args.output or str(Path(args.after).with_name(Path(args.after).stem + "_report.html"))
+    guard_sidecar(output, args.after, args.before, args.commands, args.notes)  # before any measurement
     after = probe(args.after)
     before = probe(args.before) if args.before else None
-    ld_after = loudness(args.after) if after.get("audio") else {}
-    ld_before = loudness(args.before) if before and before.get("audio") else {}
-    chk = check(args.after, args.platform) if args.platform else None
-    sheets = {}
+    # every section the report would show is either in it or accounted for: a section that could
+    # not be built is a failing verification step (and a warning), never just absent from the page
+    verification: List[Dict[str, Any]] = []
+
+    def section(step: str, which: Optional[str], why: Dict[str, Any], what: str) -> None:
+        entry: Dict[str, Any] = {"step": step, "ok": not why}
+        if which:
+            entry["file"] = which
+        if why:
+            if why.get("reason") == "dry_run":
+                record_skip(f"{what}: {why['message']}", "report_section_dry_run", section=step, file=which)
+                return
+            entry.update({k: v for k, v in why.items() if k != "message"}, message=why.get("message"))
+            warn(f"the report has no {what}: {why.get('message')}", "report_section_missing", section=step, file=which,
+                 reason=why.get("reason"))
+        verification.append(entry)
+
+    ld_after: Dict[str, Any] = {}
+    ld_before: Dict[str, Any] = {}
+    if after.get("audio"):
+        ld_after, why = loudness(args.after)
+        section("loudness", "after", why, "loudness for --after")
+    if before and before.get("audio"):
+        ld_before, why = loudness(args.before)
+        section("loudness", "before", why, "loudness for --before")
+    chk = None
+    if args.platform:
+        chk, why = check(args.after, args.platform)
+        section("compliance", None, why, f"{args.platform} compliance table")
+        if chk is not None and verification:
+            # ok: the table is in the report; passed: what the table says about the file
+            verification[-1].update(platform=args.platform, passed=bool(chk.get("ok")))
+    sheets: Dict[str, Optional[str]] = {}
     if not args.no_sheets:
-        if before and before.get("video"):
-            sheets["before"] = sheet_b64(args.before)
-        if after.get("video"):
-            sheets["after"] = sheet_b64(args.after)
+        for which, path, meta in (("before", args.before, before), ("after", args.after, after)):
+            if meta and meta.get("video"):
+                sheets[which], why = sheet_b64(path)
+                section("contact_sheet", which, why, f"{which} contact sheet")
     commands = read_text_or_die(args.commands, "--commands").splitlines() if args.commands else []
     notes = read_text_or_die(args.notes, "--notes") if args.notes else ""
     title = args.title or f"Delivery report — {Path(args.after).name}"
-    output = args.output or str(Path(args.after).with_name(Path(args.after).stem + "_report.html"))
 
     def table(rows: List[List[str]]) -> str:
         return "<table>" + "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>" for k, v in rows) + "</table>"
@@ -235,7 +291,7 @@ def main() -> int:
         except OSError as e:
             die(f"cannot write {output}: {e}", kind="output")
         info(f"wrote {output} ({os.path.getsize(output) / 1024:.0f} KB)")
-    emit(None, report=output, check=chk, verification=([{"step": "exists", "ok": True}] if not STATE.dry_run else []))
+    emit(None, report=output, check=chk, verification=([{"step": "exists", "ok": True}] + verification if not STATE.dry_run else []))
     if not args.json:
         print(output)
     return 0

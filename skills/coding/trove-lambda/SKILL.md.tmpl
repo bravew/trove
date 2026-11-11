@@ -52,7 +52,14 @@ def parse_sns_via_sqs(event: dict) -> list[dict]:
         message = json.loads(body["Message"])
         messages.append(message)
     return messages
+
+def parse_sns_direct(event: dict) -> list[dict]:
+    # A Lambda subscribed to the topic directly gets no `body`.
+    return [json.loads(record["Sns"]["Message"]) for record in event["Records"]]
 ```
+
+Check which shape the trigger delivers before parsing. SNS through SQS puts the
+SNS envelope in `body`. A direct subscription puts it under `Sns`.
 
 ## Logging
 
@@ -60,8 +67,28 @@ Follow the same logging rules as trove-python, plus:
 - Use `@logger.inject_lambda_context(log_event=True)` on handlers
 - Use `logger.append_keys()` for request-scoped context
 - Use `logger.exception()` in error handlers (captures stack trace for Sentry)
+- Keep messages static and put values in `extra`:
+  `logger.warning("IPC token rejected", extra={"source": source})`
 
 ## IPC Pattern (Backend Communication)
+
+Inbound: an event that claims to come from the backend is untrusted until its
+token matches `BACKEND_IPC_TOKEN`. Check it before parsing the payload or doing
+any work, compare in constant time, and never log the token itself.
+
+```python
+import hmac
+
+def ipc_token_valid(presented: str | None) -> bool:
+    expected = os.environ["BACKEND_IPC_TOKEN"]  # injected from Secrets Manager
+    return presented is not None and hmac.compare_digest(presented, expected)
+```
+
+An HTTP-triggered handler reads it from the `Authorization` header and returns
+401 on a mismatch. A queued event carries it where the backend put it, such as
+an SNS message attribute, and a mismatch is logged and dropped, not retried.
+
+Outbound:
 
 ```python
 async def call_backend(endpoint: str, payload: dict) -> dict:

@@ -1,16 +1,20 @@
-"""Digg AI 1000 source for last30days.
+"""Digg source for last30days.
 
 Shells out to ``digg-pp-cli`` (read-only, no auth required) to surface
-clustered stories curated from ~1000 high-signal AI accounts on X. Each
-cluster carries a published TLDR, a curatorial rank, and a list of X
-posts that can be fetched as inline quotes.
+clustered stories from Digg's AI and Tech sections. Each cluster carries
+a published TLDR, a section rank, and a list of X posts that can be
+fetched as inline quotes.
 
 Activation gate: this source is only available when ``digg-pp-cli`` is
 on PATH. ``pipeline.available_sources`` checks ``shutil.which`` before
 including ``digg`` in the source list. The functions below also detect
 the missing-binary case as a defensive fallback.
 
-Primary path: ``digg-pp-cli search <topic> --since 30d --agent --limit N``.
+Primary path: ``digg-pp-cli search <topic> --topic ai,tech --since 30d
+--agent --limit N``. The CLI searches a local copy of each section's feed
+that ``digg-pp-cli sync`` builds. When a section has no recent sync it
+searches only the newest live pages and sets ``meta.stale``; see
+``stale_note``.
 Optional enrichment: ``digg-pp-cli posts <clusterUrlId> --agent --by rank
 --limit M`` for the top K clusters in default/deep depth, attaching the
 top-ranked X posts to each cluster's ``posts`` field.
@@ -19,9 +23,10 @@ top-ranked X posts to each cluster's ``posts`` field.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from . import log, subproc
@@ -29,6 +34,17 @@ from .relevance import token_overlap_relevance
 
 
 CLI_BIN = "digg-pp-cli"
+
+# Digg sections searched. Digg also covers world-business, sports, science,
+# gaming and entertainment; last30days keeps its Digg lane on AI and tech.
+SECTIONS = "ai,tech"
+
+# Outcome note for a search answered from a stale local copy. Kept under the
+# 140-character outcome note limit in render.
+STALE_NOTE = (
+    "no recent local sync, so only the newest stories were searched; "
+    f"run `{CLI_BIN} sync --topics {SECTIONS}` for full coverage"
+)
 
 # Per-depth knobs.
 DEPTH_CONFIG = {
@@ -49,6 +65,8 @@ ENRICH_CONFIG = {
 # Reddit/HN/YouTube/TikTok/GitHub enrichment.
 POSTS_PER_CLUSTER = 5
 
+# A stale section makes the CLI fetch up to 8 live feed pages per section
+# before answering (about 8s for ai,tech), well inside this budget.
 SEARCH_TIMEOUT = 30
 POSTS_TIMEOUT = 15
 
@@ -112,6 +130,8 @@ def _build_search_args(query: str, limit: int) -> List[str]:
         CLI_BIN,
         "search",
         query,
+        "--topic",
+        SECTIONS,
         "--since",
         "30d",
         "--agent",
@@ -133,47 +153,110 @@ def _build_posts_args(cluster_url_id: str, posts_per: int) -> List[str]:
     ]
 
 
-def _run_cli(cmd: List[str], timeout: int) -> Dict[str, Any]:
-    """Invoke digg-pp-cli and parse the JSON envelope.
+_LOCAL_FALLBACK_MARKER = "falling back to local FTS5:"
+_FALLBACK_REASON_MAX = 200
 
-    Returns ``{"results": [...]}`` on success, ``{"results": [], "error": "..."}``
-    on failure. Never raises; the pipeline relies on shape consistency.
+
+def _local_fallback_reason(stderr: str) -> str:
+    """Extract the live-search failure from digg-pp-cli's fallback stderr.
+
+    The CLI prints ``falling back to local FTS5: <error>`` and the error can
+    embed the full HTML body of a failed response, so the reason is cut at
+    the HTTP status when present and length-bounded otherwise.
+    """
+    for line in (stderr or "").splitlines():
+        _, marker, rest = line.partition(_LOCAL_FALLBACK_MARKER)
+        if not marker:
+            continue
+        rest = rest.strip()
+        status = re.match(r".*?\bHTTP \d{3}\b", rest)
+        if status:
+            return status.group(0)
+        return rest[:_FALLBACK_REASON_MAX].rstrip()
+    return ""
+
+
+def _empty_local_fallback_error(data: Dict[str, Any], stderr: str = "") -> Optional[str]:
+    """Return an error when the CLI answered from an empty local store.
+
+    ``digg-pp-cli search`` is live by default, but it falls back to its FTS5
+    store on a network error and exits 0 with ``meta.source == "local"``.
+    That store only holds rows for users who ran ``digg-pp-cli sync``
+    themselves, which last30days never does - so a broken live search
+    reaches the user as ``Digg: 0 items (no results)`` instead of an error.
+    A non-empty local store is real data and is left alone.
+
+    CLI builds from 2026.10.1 always send ``meta.stale`` and exit non-zero
+    themselves when they have no usable data, so an empty local answer from
+    them is a real "no matches" and is left alone too.
+
+    The CLI reports the live failure only on stderr; ``meta.reason`` is
+    preferred if a future CLI release adds it to the envelope.
+    """
+    meta = data.get("meta")
+    if not isinstance(meta, dict) or meta.get("source") != "local":
+        return None
+    if "stale" in meta:
+        return None
+    if data.get("results"):
+        return None
+    reason = str(meta.get("reason") or "").strip()[:_FALLBACK_REASON_MAX]
+    detail = (
+        reason
+        or _local_fallback_reason(stderr)
+        or "live search fell back to an empty local store"
+    )
+    return f"live-search-unavailable: {detail}"
+
+
+def _invoke_cli(cmd: List[str], timeout: int) -> Tuple[Dict[str, Any], str]:
+    """Invoke digg-pp-cli and return the parsed envelope with its stderr.
+
+    The envelope is ``{"results": [...]}`` on success and
+    ``{"results": [], "error": "..."}`` on failure. Never raises; the
+    pipeline relies on shape consistency.
     """
     if not _is_available():
-        return {"results": [], "error": f"{CLI_BIN} not on PATH"}
+        return {"results": [], "error": f"{CLI_BIN} not on PATH"}, ""
     try:
         result = subproc.run_with_timeout(cmd, timeout=timeout)
     except subproc.SubprocTimeout as exc:
         _log(f"Timeout: {exc}")
-        return {"results": [], "error": str(exc)}
+        return {"results": [], "error": str(exc)}, ""
     except FileNotFoundError as exc:
         _log(f"Binary missing: {exc}")
-        return {"results": [], "error": str(exc)}
+        return {"results": [], "error": str(exc)}, ""
     except OSError as exc:
         _log(f"Spawn failed: {exc}")
-        return {"results": [], "error": str(exc)}
+        return {"results": [], "error": str(exc)}, ""
 
+    stderr = result.stderr or ""
     if result.returncode != 0:
-        snippet = (result.stderr or "").strip().splitlines()[:1]
+        snippet = stderr.strip().splitlines()[:1]
         first = snippet[0] if snippet else f"exit {result.returncode}"
         _log(f"CLI exit {result.returncode}: {first}")
-        return {"results": [], "error": first}
+        return {"results": [], "error": first}, stderr
 
     stdout = result.stdout or ""
     if not stdout.strip():
-        return {"results": []}
+        return {"results": []}, stderr
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as exc:
         _log(f"JSON decode failed: {exc}")
-        return {"results": [], "error": f"json decode: {exc}"}
+        return {"results": [], "error": f"json decode: {exc}"}, stderr
 
     if not isinstance(data, dict):
-        return {"results": []}
+        return {"results": []}, stderr
     results = data.get("results")
     if not isinstance(results, list):
-        return {"results": []}
-    return data
+        return {"results": []}, stderr
+    return data, stderr
+
+
+def _run_cli(cmd: List[str], timeout: int) -> Dict[str, Any]:
+    """Invoke digg-pp-cli and return only the parsed envelope."""
+    return _invoke_cli(cmd, timeout)[0]
 
 
 def search_digg(
@@ -182,7 +265,7 @@ def search_digg(
     to_date: str,
     depth: str = "default",
 ) -> Dict[str, Any]:
-    """Search Digg AI 1000 clusters via digg-pp-cli.
+    """Search Digg AI and Tech clusters via digg-pp-cli.
 
     Args:
         topic: search query.
@@ -198,11 +281,36 @@ def search_digg(
     if not topic or not topic.strip():
         return {"results": []}
     cmd = _build_search_args(topic, limit)
-    _log(f"search '{topic}' (limit={limit}, since=30d)")
-    response = _run_cli(cmd, timeout=SEARCH_TIMEOUT)
+    _log(f"search '{topic}' (sections={SECTIONS}, limit={limit}, since=30d)")
+    response, stderr = _invoke_cli(cmd, timeout=SEARCH_TIMEOUT)
+    fallback_error = _empty_local_fallback_error(response, stderr)
+    if fallback_error:
+        _log(fallback_error)
+        return {"results": [], "error": fallback_error}
     n = len(response.get("results") or [])
     _log(f"found {n} clusters")
+    note = stale_note(response)
+    if note:
+        _log(note)
     return response
+
+
+def stale_note(response: Dict[str, Any]) -> Optional[str]:
+    """Describe a search answered from a stale local copy, else None.
+
+    ``digg-pp-cli`` sets ``meta.stale`` when a searched section has no
+    completed sync in the last 6 hours. It then searches only the newest
+    live feed pages, so older stories in the 30-day window can be missing.
+    """
+    meta = response.get("meta") if isinstance(response, dict) else None
+    if not isinstance(meta, dict) or meta.get("stale") is not True:
+        return None
+    return STALE_NOTE
+
+
+def is_stale_note(detail: Optional[str]) -> bool:
+    """True when an outcome detail carries the stale-copy note."""
+    return bool(detail) and STALE_NOTE in detail
 
 
 def _build_url(cluster_url_id: str) -> str:

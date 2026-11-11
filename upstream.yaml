@@ -77,14 +77,14 @@ sources:
       - id: trove-react-view-transitions
         upstream_path: skills/react-view-transitions
         local_path: skills/coding/trove-react-view-transitions
-        base_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
-        base_tree_digest: sha256:572e1c39c7686c7952e05ea45c6a229d78346d46c8fe2eb70a4e169473aef09c
-        local_tree_digest: sha256:953e3a17a1e29e99101c41ee0516be94a8328814de7b67fed668724bf05f50d0
-        patch_digest: sha256:5e1422aa77e30f6c4b6ef3f12bf377e3baa7f79fc4bbdecdc17a9a60042ef719
-        checked_sha: 063bee94c3f4df8453406c830b0a7df0f2860278
-        checked_at: "2026-08-28T00:00:00Z"
+        base_sha: 1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62
+        base_tree_digest: sha256:8fbfaa8d8ebd6d1f81838907489ac832633b98caab790f50ae245eb78681e337
+        local_tree_digest: sha256:cc4ee7d48a63c8645f482eb426010f5cf3296e70fc887a3fa52ff2eea4006cbf
+        patch_digest: sha256:e9673e95f79c91d564c261c6d64f90a472da6e1c2a3efc0222487ef6bf12a5fc
+        checked_sha: 1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62
+        checked_at: "2026-10-27T21:40:02Z"
         candidate_sha: null
-        imported_at: "2026-08-28T00:00:00Z"
+        imported_at: "2026-10-27T21:40:02Z"
         include:
           - SKILL.md
           - references/**
@@ -113,14 +113,14 @@ sources:
       - id: trove-pulse
         upstream_path: skills/last30days
         local_path: skills/research/trove-pulse
-        base_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8
-        base_tree_digest: sha256:481f17608da17364f7a9597f10c952f56e280a2444adc2c330545987494dab6d
-        local_tree_digest: sha256:8fa9c3aa3443695b49001904a85727e4ee0a746160eef229032b9e32b452dbf7
-        patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        checked_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8
-        checked_at: "2026-08-29T00:00:00Z"
+        base_sha: 7869eb17144789b843e6655c41bd3d570aa2288a
+        base_tree_digest: sha256:5baa08ad22048554bfdc0eaabd7d91892a36d23e7c6ae5d371786564e11427f1
+        local_tree_digest: sha256:0f14a33efc639c00f8b088464a52d34e6fdaa0edfd4c9e3e11d2ec86a8efe45f
+        patch_digest: sha256:6b3dc7c01dc97e362cd7136e15d70f51275229138171157aa7c8d8e9c43d0ff5
+        checked_sha: 7869eb17144789b843e6655c41bd3d570aa2288a
+        checked_at: "2026-11-10T02:50:38Z"
         candidate_sha: null
-        imported_at: "2026-08-29T00:00:00Z"
+        imported_at: "2026-11-10T02:50:38Z"
         include:
           - SKILL.md
           - references/**
@@ -134,22 +134,40 @@ sources:
           - scripts/evaluate_search_quality.py
           - scripts/test_device_auth.py
           - scripts/verify_v3.py
+          - scripts/lib/agentcookie.py
+          - scripts/lib/chrome_cdp.py
+          - scripts/box_chrome_login.py
         path_map:
           SKILL.md: references/runtime-spec.md
         local_only:
           - SKILL.md.tmpl
         transforms:
-          - kind: replace-literal
-            path: references/runtime-spec.md
-            from: "`/last30days"
-            to: "`/trove-research:trove-pulse"
-            minimum_occurrences: 1
+          # Only the backtick-quoted invocation form, one entry per file that
+          # contains it. The bare token also matches repository URLs, config
+          # paths, and script names, so a wider pattern would corrupt them.
+          - {kind: replace-literal, path: references/agent-mode.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          # Status lines the model is told to print verbatim.
+          - {kind: replace-literal, path: references/research-runbook.md, from: "/last30days - ", to: "/trove-research:trove-pulse - ", minimum_occurrences: 2}
+          # A suggested follow-up the model is told to offer the user.
+          - {kind: replace-literal, path: references/comparison.md, from: "with /last30days ", to: "with /trove-research:trove-pulse ", minimum_occurrences: 1}
+          - {kind: replace-literal, path: references/discovery.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3}
+          - {kind: replace-literal, path: references/followups.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3}
+          - {kind: replace-literal, path: references/hiring-signals.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: references/library-queue.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: references/runtime.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: references/save-html-brief.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2}
+          - {kind: replace-literal, path: references/setup-wizard.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2}
+          - {kind: replace-literal, path: references/synthesis.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: scripts/lib/doctor.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: scripts/lib/reddit_arctic.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - {kind: replace-literal, path: scripts/lib/render.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
         # Spec is 229 KB today and the selection is ~2.5 MB; both grow weekly.
         # Raising the globals would weaken the guard for the Vercel artifacts.
         policy:
           maximum_file_bytes: 524288
           maximum_artifact_bytes: 8388608
-        patches: []
+        patches:
+          - upstream-patches/trove-pulse/local.patch
         status: active
   - id: last30days-skill-cn
     repository: https://github.com/Jesseovo/last30days-skill-cn.git
@@ -161,18 +179,19 @@ sources:
       - id: trove-pulse-cn
         upstream_path: skills/last30days
         local_path: skills/research/trove-pulse-cn
-        base_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
-        base_tree_digest: sha256:c8a464395a376ba4ce2d6d81e23d26727cd350827dcdc5bc822e6791d2f6ded3
-        local_tree_digest: sha256:3d9a9074537cdd9219e04b0db79f6a681221839259c2e7c44fad3eaf2c811705
-        patch_digest: sha256:33e8d936c8be9f597dc9b9d02e616a652533bdc581e383162e1e7164510e4025
-        checked_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f
-        checked_at: "2026-08-29T00:00:00Z"
+        base_sha: e0e41410de18466aceb505faee5ef998cacee1e8
+        base_tree_digest: sha256:204c56b0758a487de0985ef1821e7a277581a20e3def57c9d74ef84b9251d4fe
+        local_tree_digest: sha256:43317975716cc0168803745d38a4a8c6a0052bdc83cf538f15886c31d6a6a5b4
+        patch_digest: sha256:d0dbc4a647b3c032a4a336615d663d61fd8ef2f458fe89e25f00d034813a5090
+        checked_sha: e0e41410de18466aceb505faee5ef998cacee1e8
+        checked_at: "2026-11-03T06:58:38Z"
         candidate_sha: null
-        imported_at: "2026-08-29T00:00:00Z"
+        imported_at: "2026-11-03T06:58:38Z"
         include:
           - SKILL.md
           - scripts/**
-        exclude: []
+        exclude:
+          - scripts/lib/hot_board_cat.png
         path_map:
           SKILL.md: SKILL.md.tmpl
         transforms:
@@ -302,14 +321,14 @@ sources:
       - id: trove-ffmpeg
         upstream_path: .
         local_path: skills/media/trove-ffmpeg
-        base_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
-        base_tree_digest: sha256:82c55caf5d2c0ab9bf74c65bbace37844a77c30992d15d1845ac9d06a14e8c12
-        local_tree_digest: sha256:c11b59afb0185fdd7c405a29c2e9a227e9c7ec5f1af4a443ce525be05dbe88ea
+        base_sha: 6e42a79247909659b3d80833120b272fb5e46aba
+        base_tree_digest: sha256:1c83ba83462d8cc73a45bc129357503ef38010a5c79931c92d40e6c612abafd8
+        local_tree_digest: sha256:213ca92966c855b1c22baf4a9e92ed0cc6da1a244f984293ac5fb97bf861491d
         patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        checked_sha: 008333aaf6722083392eb6bd8bd67b59884a2a26
-        checked_at: 2026-10-05T03:21:12Z
+        checked_sha: 6e42a79247909659b3d80833120b272fb5e46aba
+        checked_at: 2026-11-07T13:24:07Z
         candidate_sha: null
-        imported_at: 2026-10-05T03:21:12Z
+        imported_at: 2026-11-07T13:24:07Z
         include:
           - SKILL.md
           - references/**
@@ -419,22 +438,22 @@ skills:
   - { local_path: skills/design/trove-component-spec, origin: original }
   - { local_path: skills/design/trove-design-review, origin: original }
   - { local_path: skills/design/trove-visual-parity, origin: original }
-  - { local_path: skills/documentation/trove-obsidian-markdown, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-markdown, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
-  - { local_path: skills/documentation/trove-obsidian-bases, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-bases, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
-  - { local_path: skills/documentation/trove-json-canvas, origin: adapted, source_id: obsidian-skills, upstream_path: skills/json-canvas, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
-  - { local_path: skills/documentation/trove-obsidian-cli, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-cli, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
-  - { local_path: skills/documentation/trove-web-clip, origin: adapted, source_id: obsidian-skills, upstream_path: skills/defuddle, evidence_sha: a1dc48e68138490d522c04cbf5822214c6eb1202 }
-  - { local_path: skills/principles/trove-principle-data-shape, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-foundational-thinking, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
-  - { local_path: skills/principles/trove-principle-encode-in-structure, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-encode-lessons-in-structure, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
-  - { local_path: skills/principles/trove-principle-idempotency, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-make-operations-idempotent, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
-  - { local_path: skills/principles/trove-principle-laziness, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-laziness-protocol, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
-  - { local_path: skills/principles/trove-principle-migrate-then-delete, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-migrate-callers-then-delete-legacy-apis, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
-  - { local_path: skills/principles/trove-principle-type-discipline, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-type-system-discipline, evidence_sha: 397c8660da6d3d873a91e18c2ca2f22cac1f0ac1 }
+  - { local_path: skills/documentation/trove-obsidian-markdown, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-markdown, evidence_sha: 3ccff5338ea700537839b21900aa5358a0402c98 }
+  - { local_path: skills/documentation/trove-obsidian-bases, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-bases, evidence_sha: 3ccff5338ea700537839b21900aa5358a0402c98 }
+  - { local_path: skills/documentation/trove-json-canvas, origin: adapted, source_id: obsidian-skills, upstream_path: skills/json-canvas, evidence_sha: 3ccff5338ea700537839b21900aa5358a0402c98 }
+  - { local_path: skills/documentation/trove-obsidian-cli, origin: adapted, source_id: obsidian-skills, upstream_path: skills/obsidian-cli, evidence_sha: 3ccff5338ea700537839b21900aa5358a0402c98 }
+  - { local_path: skills/documentation/trove-web-clip, origin: adapted, source_id: obsidian-skills, upstream_path: skills/defuddle, evidence_sha: 3ccff5338ea700537839b21900aa5358a0402c98 }
+  - { local_path: skills/principles/trove-principle-data-shape, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-foundational-thinking, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
+  - { local_path: skills/principles/trove-principle-encode-in-structure, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-encode-lessons-in-structure, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
+  - { local_path: skills/principles/trove-principle-idempotency, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-make-operations-idempotent, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
+  - { local_path: skills/principles/trove-principle-laziness, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-laziness-protocol, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
+  - { local_path: skills/principles/trove-principle-migrate-then-delete, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-migrate-callers-then-delete-legacy-apis, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
+  - { local_path: skills/principles/trove-principle-type-discipline, origin: adapted, source_id: cursor-pstack, upstream_path: pstack/skills/principle-type-system-discipline, evidence_sha: 1e9c3f49094e0d4da0d7835915599fc4209d1311 }
   - { local_path: skills/product/trove-release-notes, origin: original }
   - { local_path: skills/product/trove-spec, origin: original }
   - { local_path: skills/product/trove-user-story, origin: original }
-  - { local_path: skills/research/trove-pulse, origin: adapted, source_id: last30days-skill, upstream_path: skills/last30days, evidence_sha: a218edadbc3361672f5e5e2cd72a8212b0b3fbb8 }
-  - { local_path: skills/research/trove-pulse-cn, origin: adapted, source_id: last30days-skill-cn, upstream_path: skills/last30days, evidence_sha: 1a8a04c3c347defbcdbb8da26d7cf1a531426b1f }
+  - { local_path: skills/research/trove-pulse, origin: adapted, source_id: last30days-skill, upstream_path: skills/last30days, evidence_sha: 7869eb17144789b843e6655c41bd3d570aa2288a }
+  - { local_path: skills/research/trove-pulse-cn, origin: adapted, source_id: last30days-skill-cn, upstream_path: skills/last30days, evidence_sha: e0e41410de18466aceb505faee5ef998cacee1e8 }
   - { local_path: skills/review/trove-docs-sync-audit, origin: adapted, source_id: awesome-copilot, upstream_path: skills/docs-sync-audit, evidence_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba }
   - { local_path: skills/review/trove-review, origin: original }
   - { local_path: skills/review/trove-test-gap-audit, origin: adapted, source_id: awesome-copilot, upstream_path: skills/test-gap-audit, evidence_sha: 7568a482ce2df38f8965ab5336a3220db796a4ba }
@@ -471,24 +490,27 @@ skills:
   - local_path: skills/media/trove-beat-sync
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [references/music-beat-sync.md, references/sound-design.md]
-    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+    upstream_paths: [references/music-beat-sync.md, references/sound-design.md, references/sfx-sourcing.md]
+    evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   # Also reviewed: references/aesthetic-rules.md, gallery/ resolution rules.
   - local_path: skills/media/trove-shot-recipes
     origin: adapted
     source_id: video-shotcraft
     upstream_paths: [references/aesthetic-rules.md, references/shots]
-    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+    evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   - local_path: skills/media/trove-video-review
     origin: adapted
     source_id: video-shotcraft
     upstream_paths: [references/final-review.md, references/aesthetic-rules.md]
-    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+    evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   - local_path: skills/media/trove-product-video
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md]
-    evidence_sha: 5ddbf521038b0a7accfb6dc1e0a9eb29c67277ab
+    upstream_paths: [SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md, template/public/audio/ATTRIBUTION.md]
+    evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
+  - { local_path: skills/media/trove-broll-ingest, origin: original }
+  - { local_path: skills/media/trove-take-cut, origin: original }
+  - { local_path: skills/media/trove-video-edit, origin: original }
   - local_path: skills/design/trove-diagram-design
     origin: adapted
     source_id: diagram-design
@@ -551,9 +573,15 @@ not_vendored:
     - agents
     - grok-plugin
     - translated-readmes
+    # New browser-cookie and CDP lanes added after v3.21.1, excluded by decision
+    # (plan D2). cookie_paths.py stays: the three cookie modules that already
+    # shipped import it. reddit_rss.py was deleted upstream and nothing imports it.
+    - browser-cookie-cdp
   last30days-skill-cn:
     - assets
     - tests
+    # Binary hot-board decoration; policy sets allow_binary false.
+    - hot-board-cat
     - fixtures
     - hooks
     - agents

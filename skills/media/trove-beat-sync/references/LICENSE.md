@@ -2,7 +2,7 @@
 Changes made: the music beat-sync and sound-design guidance was adapted into
 English, rewritten for Trove, and updated to use trove-ffmpeg scripts and a
 consent-gated analysis workflow. Timeline, offset, render, and verification
-procedures were reorganized and clarified. No upstream assets or code are included.
+procedures were reorganized and clarified. Sound-effect placement is now measured per file, matching the upstream guidance that each new effect is sourced and measured on its own. No upstream assets or code are included.
 
 Copyright 2026 Wei Yihao
 

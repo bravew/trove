@@ -20,20 +20,33 @@ Examples:
   python3 check.py clip.mp4 --platform custom --max-duration 30 --aspect 1:1 --lufs -16
   python3 check.py final.mp4 --platform reels --content
 
---content (opt-in) adds three content rows from one decode pass: black (share of the
+--content (opt-in) adds content rows from one decode pass: black (share of the
 duration that is black: WARN > 10%, FAIL >= 95%), frozen (longest frozen span: WARN >
 max(3 s, 30% of the duration), FAIL when the whole video is frozen) and silence (share
-below -50 dBFS: WARN > 50%, FAIL >= 95%). Without it the row set is unchanged.
+below -50 dBFS: WARN > 50%, FAIL >= 95%); and, from one more audio-only pass (2.17),
+dropouts (gaps of digital silence, <= -80 dBFS for 20 ms to 1 s with sound on both sides:
+WARN when there is any); and, from one more video pass and a one-frame decode (2.23), flashes
+(single frames that differ from both neighbours while they match each other: WARN when there is
+any) and first frame (one flat colour, the frame a feed's autoplay shows first: WARN). Without it
+the row set is unchanged.
+
+--levels bt709|ebu-r103 (opt-in) decodes every frame once more and adds a legal levels row: the share
+of luma and of chroma samples outside the standard's legal range, counted exactly per frame, with
+min/max Y/U/V (FAIL when any frame's share passes --levels-tolerance, 1 % by default). The JSON
+`levels` document repeats it per clip and per --levels-window seconds (10 by default).
 """
 import argparse
 import json
+import os
 import re
 import sys
 from fractions import Fraction
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
-from _platforms import PLATFORMS, PLATFORM_CHOICES, spec_of, resolve as resolve_platform
-from _common.probe import SILENT_PEAK_DBFS, detect_content, measured_level_dbfs
+from _platforms import PLATFORMS, PLATFORM_CHOICES, TP_TOLERANCE_DB, spec_of, resolve as resolve_platform
+from _common.probe import (LEGAL_RANGE_CHOICES, measure_signal_range, COMPARE_SSIM_WARN, CONTENT_FLAT_STD, SILENT_PEAK_DBFS, compare_pictures, detect_content,
+                           detect_flashes, first_frame_stats, presentation_times, measured_level_dbfs)
+from _common.emit import file_identity
 from _common import STATE, add_common, apply_common, die, emit, info, probe, require_tool, run, run_analysis, dry_run_input_pending
 
 # The one delivery table (scripts/_platforms.py): check.py's rows, export.py's presets and the
@@ -64,6 +77,39 @@ BLACK_WARN, BLACK_FAIL = 0.10, 0.95        # share of the duration that is black
 FROZEN_WARN_S, FROZEN_WARN_SHARE = 3.0, 0.30  # longest frozen span: WARN above max(3 s, 30%)
 FROZEN_FAIL = 0.95                         # a frozen span covering this share = whole video frozen
 SILENCE_WARN, SILENCE_FAIL = 0.50, 0.95    # share of the duration below SILENT_PEAK_DBFS
+# --levels: the share of one frame's luma (or chroma) samples that may sit outside the legal range
+# before the row FAILs -- room for a filter's overshoot at a sharp edge, not a licence for a clipped sky
+LEVELS_TOLERANCE_PCT = 1.0
+# pixel formats whose planes are Y'CbCr (an RGB or grey picture has no luma/chroma codes to count)
+_YUV_PREFIXES = ("yuv", "yuvj", "nv", "p01", "p21", "p41", "y21", "uyvy", "yuyv", "ayuv", "vuya", "xv")
+
+
+STATE_NOTES: List[str] = []
+
+
+def flash_times(flashes: List[int], v: Dict[str, Any], meta: Dict[str, Any], pts: "Optional[List[float]]" = None) -> str:
+    """The flashes row's first five times on look.py's timeline (seconds from the container
+    start). A flash frame's own presentation time when `pts` has it (presentation_times(): exact,
+    gaps in the timestamps included); otherwise index / average rate plus the video's lead over
+    the container, marked "~" (approximate), and `frame N` when there is no frame rate either."""
+    return ", ".join(frame_time(n, v, meta, pts) for n in flashes[:5]) + (" ..." if len(flashes) > 5 else "")
+
+
+def frame_time(n: int, v: Dict[str, Any], meta: Dict[str, Any], pts: "Optional[List[float]]" = None) -> str:
+    """Frame `n` (decode order) on look.py's timeline, as flash_times() describes: exact from
+    `pts`, else "~" index / average rate plus the video's lead, else `frame N`."""
+    origin = float(meta.get("start_time") or 0.0)
+    if pts and n < len(pts):
+        return f"{max(0.0, pts[n] - origin):.2f}s"
+    fps = float(v.get("fps") or 0.0)
+    lead = max(0.0, float(v.get("start_time") or 0.0) - origin)
+    return f"~{lead + n / fps:.2f}s" if fps else f"frame {n}"
+
+
+def display_size(v: Dict[str, Any]) -> "Tuple[int, int]":
+    """The frame size as decoded and auto-rotated, which is what --compare's ffmpeg pass sees."""
+    w, h = int(v.get("width") or 0), int(v.get("height") or 0)
+    return (h, w) if int(v.get("rotation") or 0) % 180 == 90 else (w, h)
 
 
 def _span_total(spans: Any) -> float:
@@ -78,7 +124,42 @@ def aspect_name(w: int, h: int) -> str:
     return f"{f.numerator}:{f.denominator}"
 
 
+def levels_row(args: argparse.Namespace, v: Dict[str, Any], row: Any) -> "Optional[Dict[str, Any]]":
+    """--levels: measure the signal range (measure_signal_range) and add the legal levels row.
+    Returns the JSON `levels` document, or None when nothing was measured."""
+    expect = f"every frame <= {args.levels_tolerance:g}% of luma and of chroma samples outside {args.levels}"
+    pix = str(v.get("pix_fmt") or "")
+    if not v:
+        return None
+    if not pix.startswith(_YUV_PREFIXES):
+        row("legal levels", "WARN", f"not measured: {pix or 'unknown'} is not a Y'CbCr picture", expect,
+            "legal levels are measured on the Y'CbCr file a broadcaster receives: check the encoded delivery, not an RGB master",
+            reason="an RGB or grey picture has no luma and chroma codes to count")
+        return None
+    doc = measure_signal_range(args.input, args.levels, args.levels_window, pix_fmt=pix)
+    if doc is None:
+        row("legal levels", "WARN", "could not measure", expect, "re-run check.py --levels, or look.py the picture",
+            reason="the decode failed or stopped part-way, so the signal range of the whole file is unknown")
+        return None
+    pct, worst = doc["out_of_range_pct"], doc["worst_frame"]
+    over = worst["y_pct"] > args.levels_tolerance or worst["chroma_pct"] > args.levels_tolerance
+    at = "" if worst["time"] is None else f" at {worst['time']:.2f}s"
+    lo, hi = doc["min"], doc["max"]
+    value = (f"luma {pct['y']:.3f}%, chroma {pct['chroma']:.3f}% out of range (worst frame{at}: luma {worst['y_pct']:.3f}%, "
+             f"chroma {worst['chroma_pct']:.3f}%); Y {lo['y']}-{hi['y']}, U {lo['u']}-{hi['u']}, V {lo['v']}-{hi['v']}")
+    full = v.get("color_range") == "pc" or pix.startswith("yuvj")
+    if full:
+        STATE_NOTES.append("--levels: the picture is tagged full range (0-255 codes by design), so it was counted against "
+                           "the limited-range limits a broadcast file uses; convert it to limited range before judging the row")
+    row("legal levels", "FAIL" if over else "PASS", value, expect,
+        f"color.py {args.input} --legalize {args.levels} (clamps after the 4:2:0 conversion and measures the result), or "
+        "pull the highlights and shadows in with a soft clip in the grade and check again" if over else "",
+        reason="a broadcaster's QC rejects or clips a picture whose levels leave the legal range" if over else "")
+    return doc
+
+
 def main() -> int:
+    STATE_NOTES.clear()  # module state: a second main() in one process starts without the first's notes
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("--platform", choices=PLATFORM_CHOICES, default=None, help="delivery spec to check against (default: youtube, with judgement rows reported as WARN because no platform was named)")
@@ -89,7 +170,22 @@ def main() -> int:
     ap.add_argument("--max-mb", type=float, help="override max file size in MB")
     ap.add_argument("--no-loudness", action="store_true", help="skip the loudness measurement (faster)")
     ap.add_argument("--content", action="store_true",
-                    help="also check the content (one decode pass): black, frozen and silence rows")
+                    help="also check the content (one decode pass, plus an audio-only and a video-only one): black, frozen, silence, dropouts, flashes and first frame rows")
+    ap.add_argument("--levels", choices=LEGAL_RANGE_CHOICES, default=None,
+                    help="also measure the broadcast signal range (one more decode of every frame): a legal levels row with "
+                         "the share of luma and chroma samples outside bt709 (16-235 / 16-240) or ebu-r103 (luma -1..103 %%), "
+                         "and min/max Y/U/V; the JSON levels document has it per clip and per --levels-window")
+    ap.add_argument("--levels-window", type=float, default=10.0, metavar="SECONDS",
+                    help="--levels: report the shares for every window of this many seconds too (default 10; 0 = the whole clip only)")
+    ap.add_argument("--levels-tolerance", type=float, default=LEVELS_TOLERANCE_PCT, metavar="PCT",
+                    help="--levels: the legal levels row FAILs when one frame has more than this percentage of its luma or of "
+                         "its chroma samples out of range (default %(default)g; 0 = any sample)")
+    ap.add_argument("--compare", metavar="REFERENCE",
+                    help="also measure the picture against REFERENCE, frame by frame (SSIM and PSNR, one pass): a "
+                         "similarity row, WARN when the mean SSIM is under 0.98, with the worst frame's time")
+    ap.add_argument("--expect-identity", metavar="SIZE:MTIME_NS",
+                    help="the output_identity a writing tool reported ({size}:{mtime_ns}): an identity row FAILs when "
+                         "the file at INPUT is not that file (a later run replaced it, or a failed run left an older one)")
     add_common(ap)
     args = ap.parse_args()
     apply_common(args)
@@ -110,12 +206,34 @@ def main() -> int:
         spec["tp"] = args.tp
     if args.max_mb is not None:
         spec["max_bytes"] = int(args.max_mb * 1024 * 1024)
+    if args.levels_window < 0:
+        die(f"--levels-window {args.levels_window:g}: a window is 0 (the whole clip only) or a number of seconds")
+    if not 0 <= args.levels_tolerance <= 100:
+        die(f"--levels-tolerance {args.levels_tolerance:g} is outside 0..100 (percent of a frame's samples)")
 
+    expected_identity = None
+    if args.expect_identity is not None:
+        # parsed before any measurement; "" (an unset shell variable) is malformed, not absent
+        try:
+            size, mtime_ns = (int(x) for x in args.expect_identity.split(":"))
+        except ValueError:
+            die(f"--expect-identity takes SIZE:MTIME_NS from a tool's output_identity, got {args.expect_identity!r}")
+        expected_identity = {"size": size, "mtime_ns": mtime_ns}
+
+    # read before anything is measured and again after: a file replaced mid-check is not the one graded
+    identity_before = None if dry_run_input_pending(args.input) else file_identity(args.input)
+    if identity_before is None and STATE.dry_run and not os.path.exists(args.input):
+        # a render/batch plan's earlier stage would write this file: there is nothing to grade yet,
+        # and grading the probe's empty answer divided by a 0 height
+        emit(None, platform=args.platform, checks=[], failed=0, warnings=0, ok=False,
+             notes=[f"[dry-run] {args.input} does not exist yet, so nothing was checked"])
+        return 0
     meta = probe(args.input)
     v, a = meta.get("video") or {}, meta.get("audio") or {}
     rows: List[Dict[str, Any]] = []
 
-    JUDGEMENT = {"duration", "aspect", "loudness", "true peak", "fps", "resolution"}
+    # first frame / flashes: a fade from black or a strobe can be the edit, so neither is a mechanical fix
+    JUDGEMENT = {"duration", "aspect", "loudness", "true peak", "fps", "resolution", "first frame", "flashes"}
 
     def row(name: str, status: str, value: Any, expect: Any, fix: str = "", reason: str = "") -> None:
         # "format" rows are safe to fix mechanically; "judgement" rows change the content
@@ -163,13 +281,25 @@ def main() -> int:
         else:
             tags = (v.get("color_primaries"), v.get("color_transfer"))
             untagged = not tags[0] and not tags[1]
-            if v.get("bt2020_or_hdr") or tags == ("bt709", "bt709") or args.platform in ("podcast", "custom"):
+            # The matrix (color_space) is a tag too (#325): a player that honours it decodes with it,
+            # so a file whose only tag is a BT.601 matrix is BT.601, not "untagged".
+            matrix = v.get("color_space")
+            matrix_709 = matrix in (None, "bt709")
+            shown = (f"{matrix} matrix, primaries/transfer untagged" if untagged and matrix else
+                     f"{tags[0]}/{tags[1]}" + ("" if matrix in (None, tags[0]) else f", {matrix} matrix"))
+            if v.get("bt2020_or_hdr") or (tags == ("bt709", "bt709") and matrix_709) or args.platform in ("podcast", "custom"):
                 row("colour", "PASS", f"{tags[0]}/{tags[1]}" + (f" ({v.get('hdr_format')})" if v.get("bt2020_or_hdr") else ""), "bt709/bt709 tagged (or HDR)")
-            elif untagged and (v.get("bit_depth") or 8) == 8:
+            elif untagged and matrix_709 and (v.get("bit_depth") or 8) == 8:
                 # untagged 8-bit video is treated as BT.709 by every player and platform; nothing to fix
-                row("colour", "PASS", "untagged (players assume bt709)", "bt709/bt709 tagged (or HDR)")
+                row("colour", "PASS", shown + " (players assume bt709)" if matrix else "untagged (players assume bt709)", "bt709/bt709 tagged (or HDR)")
+            elif matrix in ("smpte170m", "bt470bg"):
+                # The pixels are BT.601-encoded. A re-encode here converts them to the BT.709 it tags
+                # (bt709_matrix_filter); --retag bt709 is a stream copy and only relabels the matrix.
+                row("colour", "WARN", shown, "bt709/bt709 tagged (or HDR)",
+                    "export.py (any re-encode here converts the BT.601 matrix to BT.709); color.py --retag bt709 only relabels it: right only if the pixels really are BT.709",
+                    reason="a player that honours the BT.601 tag and one that ignores it on HD video (decoding it as BT.709) show different colours")
             else:
-                row("colour", "WARN", f"{tags[0]}/{tags[1]}", "bt709/bt709 tagged (or HDR)", "color.py --retag bt709 when the picture really is 709; color.py --to-sdr when it is HDR")
+                row("colour", "WARN", shown, "bt709/bt709 tagged (or HDR)", "color.py --retag bt709 when the picture really is 709; color.py --to-sdr when it is HDR")
     elif args.platform not in ("podcast", "custom"):
         row("video", "FAIL", "none", "video stream", "")
 
@@ -235,7 +365,7 @@ def main() -> int:
                 diff = abs(lm["lufs"] - spec["lufs"])
                 row("loudness", "PASS" if diff <= spec["lufs_tol"] else "FAIL", f"{lm['lufs']:.1f} LUFS", f"{spec['lufs']:g} ± {spec['lufs_tol']:g} LUFS", f"loudness.py -I {spec['lufs']:g} for speech or music; leave ambience/near-silence (<= -40 LUFS) alone and say so",
                     reason="the platform will auto-normalise it to its own target anyway, which can pump or duck the mix in ways you did not choose")
-                row("true peak", "PASS" if lm["tp"] <= spec["tp"] + 0.05 else "FAIL", f"{lm['tp']:.1f} dBTP", f"<= {spec['tp']:g} dBTP", f"loudness.py --tp {spec['tp']:g}")
+                row("true peak", "PASS" if lm["tp"] <= spec["tp"] + TP_TOLERANCE_DB else "FAIL", f"{lm['tp']:.1f} dBTP", f"<= {spec['tp']:g} dBTP (+{TP_TOLERANCE_DB:g} dB tolerance)", f"loudness.py --tp {spec['tp']:g}")
             else:
                 # ffmpeg's loudnorm JSON didn't parse out of stderr (unexpected/garbled output).
                 # Dropping the loudness/true-peak rows silently here would report an overall PASS
@@ -270,18 +400,108 @@ def main() -> int:
                 f"longest {longest:.1f}s", f"<= {limit:.1f}s frozen",
                 "look.py the frozen span: a still title card is fine, a stuck decode is not",
                 reason="a picture that never changes is usually a stuck frame, not the edit")
+        if v and not dry_run_input_pending(args.input):  # a plan's not-yet-written input: no rows, as above
+            first = first_frame_stats(args.input)
+            if first is None:
+                row("first frame", "WARN", "could not measure", f"spread >= {CONTENT_FLAT_STD:g} (not one flat colour)",
+                    "look.py the first frame", reason="the first frame did not decode, so whether it is flat is unknown")
+            else:
+                mean, spread = first
+                flat = spread < CONTENT_FLAT_STD
+                row("first frame", "WARN" if flat else "PASS", f"luma {mean:.0f}, spread {spread:.1f}",
+                    f"spread >= {CONTENT_FLAT_STD:g} (not one flat colour)",
+                    "a fade from black is a choice; where autoplay or the preview shows the first frame, start on "
+                    "a picture (cut.py --start a few frames in, or move a title card to frame 0)" if flat else "",
+                    reason="a feed shows the first frame before anything plays, and a flat one reads as a broken upload" if flat else "")
+            flashes = detect_flashes(args.input)
+            pts = presentation_times(args.input, float(v.get("start_time") or 0.0)) if flashes else None
+            at = flash_times(flashes or [], v, meta, pts)
+            if flashes is None:
+                row("flashes", "WARN", "could not measure", "no single frame unlike both its neighbours",
+                    "look.py the video: no frame decoded, so nothing was compared",
+                    reason="the video did not decode, so whether it has flashes is unknown")
+            else:
+                row("flashes", "WARN" if flashes else "PASS", f"{len(flashes)}" + (f": {at}" if flashes else ""),
+                    "no single frame unlike both its neighbours",
+                    "look.py at those times: a stray frame at a cut or join is an edit error (re-cut with cut.py "
+                    "--accurate, or join.py again); a camera flash or a strobe in the footage is fine" if flashes else "",
+                    reason="one frame that matches neither neighbour is usually a frame left over at a cut, or a decode glitch" if flashes else "")
         if "silence" in cd and span:
             share = _span_total(cd["silence"]) / span
             row("silence", "FAIL" if share >= SILENCE_FAIL else ("WARN" if share > SILENCE_WARN else "PASS"),
                 f"{share * 100:.0f}% silent", f"<= {SILENCE_WARN * 100:.0f}% below {SILENT_PEAK_DBFS:g} dBFS",
                 "silence.py to cut the gaps, or audio.py --replace when the track is empty",
                 reason="most of the running time has no audible sound")
+        if "dropouts" in cd:
+            gaps = cd["dropouts"]
+            at = ", ".join(f"{s:.2f}s ({(e - s) * 1000:.0f} ms)" for s, e in gaps[:5]) + (" ..." if len(gaps) > 5 else "")
+            row("dropouts", "WARN" if gaps else "PASS", f"{len(gaps)}" + (f": {at}" if gaps else ""),
+                "no digital-silence gap under 1 s with sound on both sides",
+                "listen at those times: a gap at a cut or join is lost audio (re-cut with cut.py --accurate, or join.py "
+                "again); a noise gate makes these on purpose" if gaps else "",
+                reason="a short stretch of digital silence in the middle of the sound is usually lost audio at a join or a glitched decode" if gaps else "")
 
+    levels_doc = None
+    if args.levels and not dry_run_input_pending(args.input):
+        levels_doc = levels_row(args, v, row)
+
+    if args.compare and not dry_run_input_pending(args.input) and not dry_run_input_pending(args.compare):
+        ref = probe(args.compare)
+        rv = ref.get("video") or {}
+        if not v or not rv:
+            row("similarity", "WARN", "not compared", "two pictures", "--compare needs a video stream in both files",
+                reason="one of the files has no picture")
+        elif display_size(v) != display_size(rv):
+            row("similarity", "WARN", "not compared: %dx%d vs %dx%d (as displayed)" % (display_size(v) + display_size(rv)),
+                "the same frame size", "compare against a reference at the delivery size (fit.py or export.py it first)",
+                reason="SSIM and PSNR compare pixels, so the two frames must be the same size")
+        else:
+            cmp_ = compare_pictures(args.input, args.compare)
+            if cmp_ is None:
+                row("similarity", "WARN", "could not measure", f"mean SSIM >= {COMPARE_SSIM_WARN:g}",
+                    "look.py --compare at a few times", reason="the comparison pass failed")
+            else:
+                pts = presentation_times(args.input, float(v.get("start_time") or 0.0))
+                at = frame_time(cmp_["worst_frame"], v, meta, pts)
+                seek = "0" if at.startswith("frame") else at.lstrip("~").rstrip("s")
+                psnr = "identical" if cmp_["psnr"] == float("inf") else (f"{cmp_['psnr']:.1f} dB" if cmp_["psnr"] is not None else "?")
+                low = cmp_["ssim"] < COMPARE_SSIM_WARN
+                row("similarity", "WARN" if low else "PASS",
+                    f"SSIM {cmp_['ssim']:.4f} (worst {cmp_['worst_ssim']:.4f} at {at}), PSNR {psnr}, {cmp_['frames']} frames",
+                    f"mean SSIM >= {COMPARE_SSIM_WARN:g}",
+                    f"look.py --compare {args.compare} --at {seek}" if low else "",
+                    reason="the picture differs visibly from the reference somewhere" if low else "")
+                # frames counted from the packets when a container does not state nb_frames
+                nout = v.get("nb_frames") or len(pts) or None
+                nref = rv.get("nb_frames") or len(presentation_times(args.compare, float(rv.get("start_time") or 0.0))) or None
+                if nref and nout and int(nref) != int(nout):
+                    STATE_NOTES.append(f"--compare: {nout} frames against the reference's {nref}; frames were paired in "
+                                       f"order, so an added or dropped frame shifts every later pair, and only the "
+                                       f"first {min(int(nref), int(nout))} were compared")
+    # read after every measurement, --compare's included, so a replacement at any point shows
+    identity = None if dry_run_input_pending(args.input) else file_identity(args.input)
+    if identity is not None and identity != identity_before and expected_identity is None:
+        STATE_NOTES.append("the file changed while it was being checked: input_identity is the file as it was "
+                           "at the end, and the rows may describe an earlier one; check it again")
+    if expected_identity is not None:
+        size, mtime_ns = expected_identity["size"], expected_identity["mtime_ns"]
+        if identity is not None:
+            changed = identity != identity_before
+            same = identity == {"size": size, "mtime_ns": mtime_ns} and not changed
+            row("identity", "PASS" if same else "FAIL", f"{identity['size']}:{identity['mtime_ns']}", f"{size}:{mtime_ns}",
+                "" if same else "re-run the tool that writes this file and check what it reports, not what the path holds",
+                reason="" if same else ("the file changed while it was being checked" if changed
+                                        else "the file at this path is not the one the run being checked wrote"))
+        elif not dry_run_input_pending(args.input):
+            row("identity", "FAIL", "no regular file at this path", f"{size}:{mtime_ns}",
+                "re-run the tool that writes this file and check what it reports, not what the path holds",
+                reason="the file at this path is not the one the run being checked wrote")
     failed = [r for r in rows if r["status"] == "FAIL"]
     warned = [r for r in rows if r["status"] == "WARN"]
     notes: List[str] = []
     if not named:
         notes.append("no --platform given: youtube's spec was assumed, so judgement rows (duration, aspect, fps, resolution, loudness, true peak) are WARN, not FAIL; name a platform to enforce them")
+    notes += STATE_NOTES
     if not args.json:
         width = max(len(r["check"]) for r in rows)
         print(f"{args.input} — {args.platform}" + ("" if named else " (assumed)"))
@@ -298,6 +518,10 @@ def main() -> int:
         for n in notes:
             print(f"  note: {n}")
     extra: Dict[str, Any] = {"notes": notes} if notes else {}
+    if levels_doc is not None:
+        extra["levels"] = levels_doc
+    if identity is not None:
+        extra["input_identity"] = identity
     if failed:
         die(f"{len(failed)} of {len(rows)} {args.platform} checks failed: {', '.join(r['check'] for r in failed)}",
             kind="verification", output=None, dry_run=STATE.dry_run,

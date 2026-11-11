@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trove-video-edit/edit-plan",
+  "title": "Edit plan",
+  "description": "The whole edit. The render reads this and nothing else. Times are seconds in the source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "mode", "beats"],
+  "properties": {
+    "source": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["shorts", "intro", "longform"] },
+    "music": { "type": "string", "minLength": 1 },
+    "beats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "start", "end", "anchor", "reason"],
+        "properties": {
+          "kind": {
+            "enum": ["caption", "title", "callout", "stat", "quote", "comparison", "list", "image", "zoom"]
+          },
+          "start": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "exclusiveMinimum": 0 },
+          "anchor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The words the speaker says while this beat is on screen."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the viewer understands from this beat that the words alone do not carry."
+          },
+          "text": { "type": "string" },
+          "asset": { "type": "string", "description": "A file the user supplied. The skill ships none." }
+        }
+      }
+    }
+  }
+}

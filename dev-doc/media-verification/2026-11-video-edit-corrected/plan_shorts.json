@@ -1,0 +1,30 @@
+{
+ "source": "talk_shorts.mp4",
+ "mode": "shorts",
+ "beats": [
+  {
+   "kind": "caption",
+   "start": 0.52,
+   "end": 2.68,
+   "anchor": "Hey, hello there.",
+   "reason": "Aligned to measured speech activity, with a short reading tail.",
+   "text": "Hey, hello there."
+  },
+  {
+   "kind": "caption",
+   "start": 3.98,
+   "end": 6.1,
+   "anchor": "Well, good morning.",
+   "reason": "Aligned to measured speech activity, with a short reading tail.",
+   "text": "Well, good morning."
+  },
+  {
+   "kind": "caption",
+   "start": 7.58,
+   "end": 9.5,
+   "anchor": "Hope you're having a good day.",
+   "reason": "Aligned to measured speech activity, with a short reading tail.",
+   "text": "Hope you're having a good day."
+  }
+ ]
+}

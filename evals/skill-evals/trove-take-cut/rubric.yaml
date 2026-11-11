@@ -1,0 +1,17 @@
+criteria:
+  routes_cutting_through_trove_ffmpeg:
+    weight: 3
+    description: "Cuts and joins through the documented trove-ffmpeg wrappers (cut.py, join.py) and never writes a raw ffmpeg or ffprobe command. Transcription and onset detection stay in this skill's own scripts."
+  waveform_not_asr:
+    weight: 3
+    description: "Uses the transcript only for the words and a rough window. Cut points come from the waveform scan in cut_points.py, scanning inward from outside the window, and the skill says so rather than cutting on word timestamps."
+  records_the_decision:
+    weight: 2
+    description: "Writes takes.json naming the kept take per line and why, shows that record to the user before rendering, and treats the last clean take as the default the user can override."
+  verifies_before_done:
+    weight: 3
+    description: "Runs verify_cut.py on every output and does not call the cut done until it reports clean. A repeated phrase or clipped edge is a failure to fix, not a warning to mention."
+  stays_in_scope:
+    weight: 2
+    description: "Does not activate for footage that is already cut, for a single trim, or for a request that merely mentions takes. Captions, music, and grading are handed to the skill that owns them."
+min_pass_score: 7.0

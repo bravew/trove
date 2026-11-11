@@ -35,9 +35,12 @@ import os
 import sys
 
 from _platforms import PLATFORMS, PLATFORM_CHOICES, resolve as resolve_platform
-from _common import (add_common, apply_common, aac_args, default_output, die, emit, ffmpeg_base,
-                     info, load_brand, pad_filters, probe, run, STATE, validate_color, video_args, X264_PRESETS,
-                     fmt_secs, child_args, run_tool, measured_level_dbfs)
+from _common.probe import SILENT_PEAK_DBFS, square_pixels, square_pixels_note
+from _common import still_input_args  # noqa: E402
+from _common import (add_common, apply_common, aac_args, default_output, die, draws_chroma, emit, ffmpeg_base,
+                     info, load_brand, pad_filters, probe, rgb_chain_to_bt709, run, STATE, validate_color, video_args, X264_PRESETS,
+                     fmt_secs, child_args, run_tool, measured_level_dbfs, sibling_temp)
+from _common.emit import absorb_stage_hw, note, warn
 
 WAVEFORM_MODES = ["point", "line", "p2p", "cline"]
 
@@ -59,7 +62,7 @@ def main() -> int:
     ap.add_argument("--on-silent", choices=["warn", "fail"], default="warn",
                     help="input audio whose peak is at or below --silence-threshold (the render would be a flat "
                          "line): warn (default: render it, report `silent: true`) or fail (refuse before ffmpeg runs)")
-    ap.add_argument("--silence-threshold", type=float, default=-50.0, metavar="DBFS",
+    ap.add_argument("--silence-threshold", type=float, default=SILENT_PEAK_DBFS, metavar="DBFS",
                     help="peak level in dBFS at or below which the input counts as silent (default -50)")
     ag = ap.add_argument_group("audiogram (1.16)",
                                "The visualisation over a picture, for an episode that has no video. The image is a "
@@ -181,29 +184,44 @@ def main() -> int:
             plate = pad_filters(args.width, args.height,
                                 "blur" if args.image_fit == "blur" else "color",
                                 args.background, 20)
-        graph = f"[1:v]{plate},format=rgba[plate];[0:a:{args.audio_stream}]{vf},format=rgba"
+        # a non-square-pixel still is squared at its display aspect before it is fitted (#411)
+        plate_v = probe(args.image, role="input").get("video") if not STATE.dry_run else None
+        plate_sq = square_pixels(plate_v)
+        if plate_sq:
+            note(square_pixels_note(plate_v, "--image"))
+        graph = f"[1:v]{plate_sq + ',' if plate_sq else ''}{plate},format=rgba[plate];[0:a:{args.audio_stream}]{vf},format=rgba"
         if args.opacity < 1.0:
             graph += f",colorchannelmixer=aa={args.opacity:g}"
-        graph += f"[vis];[plate][vis]overlay=x=(W-w)/2:y={vis_y}:format=auto[v]"
+        # the composite is RGBA (the plate is): converted to the BT.709 the output is tagged with,
+        # not by the encoder's BT.601 default
+        graph += f"[vis];[plate][vis]overlay=x=(W-w)/2:y={vis_y}:format=auto{rgb_chain_to_bt709(None, 'yuv420p')}[v]"
         vf = graph
     else:
         # showwaves/showspectrum paint the visualization on a transparent-black canvas; composite
         # it over an explicit solid background instead of assuming that canvas already matches
         # --background.
-        vf = f"color=c={args.background}:s={args.width}x{args.height}:r={args.fps:g}[bg];[0:a:{args.audio_stream}]{vf}[vis];[bg][vis]overlay=format=auto"
+        bg, vis = f"color=c={args.background}:s={args.width}x{args.height}:r={args.fps:g}", vf
+        if draws_chroma([args.background] + (args.color.split("|") if args.style == "waveform" else []), None):
+            # the background and the RGBA waves are converted to the BT.709 the output is tagged
+            # with (the encoder line's own RGB-to-YUV step used BT.601); the spectrum is YUV of its
+            # own and only gets the label the background carries, so 7.1+'s overlay converts neither
+            bg += ",format=rgb24" + rgb_chain_to_bt709(None, "yuv420p")
+            vis += rgb_chain_to_bt709(None, "yuva420p") if args.style == "waveform" else ",setparams=colorspace=bt709"
+        vf = f"{bg}[bg];[0:a:{args.audio_stream}]{vis}[vis];[bg][vis]overlay=format=auto"
 
     render = output
     if args.title or args.srt or args.text:
         # the visualisation is rendered first and the label/captions are drawn on it by the tools
         # that own those code paths, so neither is re-implemented here
-        stem, ext = os.path.splitext(output)
-        render = stem + "_vis" + ext
+        # hidden, pid-named siblings (#408): a fixed `<out>_vis` name was removed afterwards
+        # whoever had written it, the input or another file of the caller's included
+        render = sibling_temp(output, "vis")
     cmd = ffmpeg_base() + ["-i", args.input]
     if args.image:
         # -framerate before -loop: a looped still defaults to 25 fps, and overlay takes its rate
         # from the FIRST input -- so without this the file came out 25 fps however loud --fps or
         # --platform said otherwise (the colour-plate path never had the bug: `color=` carries r=).
-        cmd += ["-framerate", f"{args.fps:g}", "-loop", "1", "-i", args.image]
+        cmd += ["-framerate", f"{args.fps:g}", "-loop", "1", *still_input_args(args.image), "-i", args.image]
     cmd += ["-filter_complex", vf]
     if args.image:
         cmd += ["-map", "[v]"]
@@ -216,15 +234,20 @@ def main() -> int:
     if meta.get("duration"):
         cmd += ["-t", f"{float(meta['duration']):.3f}"]
     cmd += ["-shortest", render]
-    stem, ext = os.path.splitext(output)
-    intermediates = [p for p in (render, stem + "_titled" + ext) if p != output]
+    titled_tmp = sibling_temp(output, "titled")
+    intermediates = [p for p in (render, titled_tmp) if p != output]
     try:
         run(cmd)
 
         stages = ["waveform"]
         current = render
         if args.title:
-            titled = stem + "_titled" + ext if (args.srt or args.text) else output
+            titled = titled_tmp if (args.srt or args.text) else output
+            if titled == titled_tmp:
+                # graphics.py's libass route writes <its output stem>_gfx.ass beside it (#413 review)
+                titled_ass = os.path.splitext(titled)[0] + "_gfx.ass"
+                if not os.path.exists(titled_ass):
+                    intermediates.append(titled_ass)
             # a dry run rendered no _vis file for graphics.py to probe, so its default --end (the
             # clip's end) came out 0 and the plan failed: give it the source's duration, which
             # is what -t caps the render at. A real run is unchanged.
@@ -261,8 +284,17 @@ def main() -> int:
             notes.append(f"the visualisation band and {args.platform}'s bottom safe zone overlap by "
                          f"{overlap}px: the captions or the app's own UI will sit over the waveform "
                          f"(lower --vis-height to {max(0.05, (args.height - safe_px) / args.height):.2f})")
+    if STATE.dry_run and (args.title or args.srt or args.text):
+        # graphics.py / caption.py plan on the render this dry run did not write, whose frame they
+        # cannot measure: their sizes and offsets come out 0 in the plan, and the real run takes
+        # them from the WxH render (#415). Said here, so a plan is not read as the real numbers.
+        later = " and ".join(n for n, on in (("title", args.title), ("captions", args.srt or args.text)) if on)
+        notes.append(f"the {later} stage was planned on the visualisation render this dry run did not write, so the "
+                     f"font sizes and offsets in its planned command are placeholders (0); the real run sizes them "
+                     f"from the {args.width}x{args.height} render")
     if silent_peak is not None:
-        info(f"warning: {args.input} is silent (peak {silent_peak:g} dBFS); the visualisation is a flat line")
+        warn(f"{args.input} is silent (peak {silent_peak:g} dBFS); the visualisation is a flat line", "silent_input",
+             path=args.input, peak_db=silent_peak)
         notes.append(f"the input audio is silent (peak {silent_peak:g} dBFS, at or below --silence-threshold "
                      f"{args.silence_threshold:g}): the visualisation is a flat line; pass --on-silent fail to refuse instead")
     duration_ok = True
@@ -307,20 +339,30 @@ def _child(script_name: str, argv: "list") -> None:
     """Run one of this skill's own tools as a second process, so the code path it owns (the ASS
     generator, the drawtext template) stays the only one there is. The shared flags (--overwrite,
     --timeout, --fast, --dry-run) reach it through child_args(), as render.py's stages get them,
-    and a failure is re-raised with the child's own kind, exit code and hint."""
+    and a failure is re-raised with the child's own kind, exit code and hint.
+
+    The GPU choice reaches it too: an explicit --hw/--no-hw is passed on (the child would
+    otherwise resolve $FFMPEG_SKILL_HW for itself, and the last stage writes the deliverable),
+    and the child's commands and `hw` facts join this result, so `encoder`/`hw` describe the
+    file delivered rather than the intermediate render."""
     here = os.path.dirname(os.path.abspath(__file__))
-    cmd = [os.path.join(here, script_name)] + [str(a) for a in argv] + child_args() + ["--json"]
+    hw = (["--hw"] if STATE.hw else ["--no-hw"]) if STATE.hw_source == "flag" else []
+    cmd = [os.path.join(here, script_name)] + [str(a) for a in argv] + hw + child_args() + ["--json"]
     info("-> " + " ".join(os.path.basename(c) if c.endswith(".py") else str(c) for c in cmd[:-1]))
     proc = run_tool(cmd)
+    try:
+        doc = json.loads(proc.stdout.strip() or "{}")
+    except ValueError:
+        doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    STATE.commands.extend(str(c) for c in (doc.get("commands") or []))
+    absorb_stage_hw(os.path.splitext(script_name)[0], doc)
     if proc.returncode != 0:
-        try:
-            doc = json.loads(proc.stdout.strip() or "{}")
-        except ValueError:
-            doc = {}
-        if not isinstance(doc, dict):
-            doc = {}
         err = doc.get("error") or {}
         extra = {"hint": err["hint"]} if err.get("hint") else {}
+        if doc.get("encoder"):
+            extra["encoder"] = doc["encoder"]
         die(f"{script_name} failed: {err.get('message') or (proc.stderr.strip().splitlines() or ['?'])[-1][:300]}",
             code=int(doc.get("exit_code") or 1), kind=err.get("kind") or "input", stage=script_name, **extra)
 

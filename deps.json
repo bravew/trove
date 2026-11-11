@@ -20,6 +20,9 @@
       "trove-ffmpeg"
     ],
     "trove-brainstorm": [],
+    "trove-broll-ingest": [
+      "trove-ffmpeg"
+    ],
     "trove-cdk": [
       "trove-principle-idempotency"
     ],
@@ -111,6 +114,9 @@
       "trove-user-story"
     ],
     "trove-swift": [],
+    "trove-take-cut": [
+      "trove-ffmpeg"
+    ],
     "trove-tdd": [
       "trove-verify"
     ],
@@ -127,6 +133,11 @@
       "trove-unslop"
     ],
     "trove-verify": [],
+    "trove-video-edit": [
+      "trove-beat-sync",
+      "trove-ffmpeg",
+      "trove-video-review"
+    ],
     "trove-video-review": [
       "trove-ffmpeg",
       "trove-shot-recipes"
@@ -150,7 +161,8 @@
       "trove-arena"
     ],
     "trove-beat-sync": [
-      "trove-product-video"
+      "trove-product-video",
+      "trove-video-edit"
     ],
     "trove-brainstorm": [
       "trove-plan"
@@ -167,7 +179,10 @@
     ],
     "trove-ffmpeg": [
       "trove-beat-sync",
+      "trove-broll-ingest",
       "trove-product-video",
+      "trove-take-cut",
+      "trove-video-edit",
       "trove-video-review"
     ],
     "trove-obsidian-cli": [
@@ -245,7 +260,8 @@
       "trove-tdd"
     ],
     "trove-video-review": [
-      "trove-product-video"
+      "trove-product-video",
+      "trove-video-edit"
     ],
     "trove-worktree": [
       "trove-arena"

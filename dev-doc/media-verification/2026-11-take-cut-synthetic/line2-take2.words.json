@@ -1,0 +1,71 @@
+{
+  "source": "line2-take2.wav",
+  "language": "en",
+  "words": [
+    {
+      "text": "Choose",
+      "start": 0.0,
+      "end": 0.2
+    },
+    {
+      "text": "the,",
+      "start": 0.2,
+      "end": 0.48
+    },
+    {
+      "text": "um,",
+      "start": 0.78,
+      "end": 1.02
+    },
+    {
+      "text": "wrong",
+      "start": 1.38,
+      "end": 1.54
+    },
+    {
+      "text": "reading,",
+      "start": 1.54,
+      "end": 1.88
+    },
+    {
+      "text": "sorry,",
+      "start": 2.26,
+      "end": 2.6
+    },
+    {
+      "text": "choose",
+      "start": 2.92,
+      "end": 3.16
+    },
+    {
+      "text": "the",
+      "start": 3.16,
+      "end": 3.36
+    },
+    {
+      "text": "cleanest",
+      "start": 3.36,
+      "end": 3.8
+    },
+    {
+      "text": "reading",
+      "start": 3.8,
+      "end": 4.1
+    },
+    {
+      "text": "for",
+      "start": 4.1,
+      "end": 4.36
+    },
+    {
+      "text": "each",
+      "start": 4.36,
+      "end": 4.56
+    },
+    {
+      "text": "line.",
+      "start": 4.56,
+      "end": 4.86
+    }
+  ]
+}

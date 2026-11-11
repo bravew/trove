@@ -34,7 +34,7 @@ When the user has named a mode, honor it without asking them to choose again. Ot
 
 ## Use the template checkout
 
-The template project is not bundled. Use a path supplied by the user or an existing video-shotcraft checkout they identify. Do not clone, install, or fetch assets without authorization. Read that checkout's `template/TEMPLATE.md` and `template/THEMES.md`. Preserve the user's checkout and its assets. Select or customize the theme at render time through the composition's `--props` JSON using its supported `theme` and optional `colors` fields. Do not edit its theme source or assume its default theme. If no checkout is available, explain which template-specific work is unavailable and offer the autonomous or guided route.
+The template project's audio is historical material kept for preview and regression, not a pool of sound effects to reuse. New sound effects need their own provenance record, CC0 by default, with CC BY only when the user accepts carrying the credit into the published video. The template project is not bundled. Use a path supplied by the user or an existing video-shotcraft checkout they identify. Do not clone, install, or fetch assets without authorization. Read that checkout's `template/TEMPLATE.md` and `template/THEMES.md`. Preserve the user's checkout and its assets. Select or customize the theme at render time through the composition's `--props` JSON using its supported `theme` and optional `colors` fields. Do not edit its theme source or assume its default theme. If no checkout is available, explain which template-specific work is unavailable and offer the autonomous or guided route.
 
 ## Delivery handoff
 
