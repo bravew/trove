@@ -51,7 +51,13 @@ fs.cpSync(path.join(ROOT, artifact.localPath), localDir, { recursive: true });
 fs.rmSync(path.join(localDir, "SKILL.md"), { force: true });
 
 const diff = spawnSync("git", ["diff", "--no-index", "--no-color", "--", "a", "b"], { cwd: staging, encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
-const patch = (diff.stdout ?? "").replace(/^--- a\/a\//gm, "--- a/").replace(/^\+\+\+ b\/b\//gm, "+++ b/").replace(/^diff --git a\/a\//gm, "diff --git a/").replace(/ b\/b\//g, " b/");
+const patch = (diff.stdout ?? "")
+  .replace(/^--- a\/a\//gm, "--- a/")
+  .replace(/^\+\+\+ b\/b\//gm, "+++ b/")
+  .replace(/^diff --git a\/a\//gm, "diff --git a/")
+  .replace(/ b\/b\//g, " b/")
+  // A deleted file has no b side, so the pass above leaves "b/a/" behind.
+  .replace(/ b\/a\//g, " b/");
 const patchPath = path.join(ROOT, artifact.patches[0]!);
 fs.mkdirSync(path.dirname(patchPath), { recursive: true });
 fs.writeFileSync(patchPath, patch);

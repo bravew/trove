@@ -5,7 +5,7 @@ stdlib modules and the system openssl CLI (ships with macOS). Zero pip
 dependencies.
 
 Chromium on macOS uses v10 encryption (AES-128-CBC with Keychain-stored key).
-Every Chromium-based browser (Chrome, Brave, Edge, Vivaldi, Opera, Arc,
+Every Chromium-based browser (Chrome, Brave, Edge, Vivaldi, Opera, Arc, Dia,
 Chromium) shares the same algorithm; only the profile directory and Keychain
 service name differ, so they all run through the same decryption core.
 This is NOT affected by Windows App-Bound Encryption (v20).
@@ -14,12 +14,14 @@ This is NOT affected by Windows App-Bound Encryption (v20).
 import hashlib
 import logging
 import os
-import shutil
 import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
+
+from .cookie_paths import path_exists, path_is_dir
+from .sqlite_snapshot import copy_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ CHROMIUM_BROWSER_PROFILES: dict[str, tuple[Path, str]] = {
     "vivaldi": (_APP_SUPPORT / "Vivaldi", "Vivaldi Safe Storage"),
     "opera": (_APP_SUPPORT / "com.operasoftware.Opera", "Opera Safe Storage"),
     "arc": (_APP_SUPPORT / "Arc" / "User Data", "Arc Safe Storage"),
+    "dia": (_APP_SUPPORT / "Dia" / "User Data", "Dia Safe Storage"),
     "chromium": (_APP_SUPPORT / "Chromium", "Chromium Safe Storage"),
 }
 
@@ -208,7 +211,7 @@ def _extract_chromium_cookies_macos(
 ) -> Optional[dict[str, str]]:
     """Extract cookies from any Chromium-based browser on macOS.
 
-    Copies the locked Cookies database to a temp file, reads specified cookies,
+    Snapshots committed Cookies database state to a temp file, reads specified cookies,
     and decrypts v10-encrypted values using the Keychain-stored key.
 
     Args:
@@ -221,33 +224,42 @@ def _extract_chromium_cookies_macos(
         Dict mapping cookie name to decrypted value, or None on failure.
         Only includes cookies that were successfully found and decrypted.
     """
-    if not db_path.exists():
+    try:
+        db_path.stat()
+    except PermissionError:
+        raise
+    except OSError:
         logger.info("%s cookies database not found at %s", keychain_service, db_path)
         return None
 
-    # Copy DB to temp file (browser locks the original while running)
+    # The backup includes committed WAL updates while the browser is running.
     tmp_fd = None
     tmp_path = None
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".sqlite")
-        # mkstemp creates the file 0600. copy2 would copy the source DB's
-        # permission bits onto the temp file before the chmod below runs,
-        # briefly exposing live cookies when the source DB is looser.
-        shutil.copyfile(str(db_path), tmp_path)
+        # Snapshot content only; preserve mkstemp's 0600 permissions.
+        copy_snapshot(db_path, tmp_path)
         _lock_temp_cookie_copy(tmp_path)
     except Exception as e:
-        logger.info("Failed to copy %s cookies database: %s", keychain_service, e)
+        browser_read_denied = isinstance(e, PermissionError) and e.filename == str(db_path)
+        if browser_read_denied:
+            logger.info("Permission denied reading %s cookies database", keychain_service)
+        else:
+            logger.info("Failed to copy %s cookies database: %s", keychain_service, e)
         if tmp_path:
             try:
                 Path(tmp_path).unlink(missing_ok=True)
             except Exception:
                 pass
+        if browser_read_denied:
+            raise
         return None
     finally:
         if tmp_fd is not None:
             import os
             os.close(tmp_fd)
 
+    conn = None
     try:
         conn = sqlite3.connect(tmp_path)
         cursor = conn.cursor()
@@ -297,8 +309,6 @@ def _extract_chromium_cookies_macos(
             elif encrypted_value:
                 logger.debug("Unknown encryption for cookie %s (prefix: %r)", name, encrypted_value[:3])
 
-        conn.close()
-
         if not results:
             logger.info("No matching cookies found in %s for domain %s", keychain_service, domain)
             return None
@@ -312,6 +322,8 @@ def _extract_chromium_cookies_macos(
         logger.info("Unexpected error reading %s cookies: %s", keychain_service, e)
         return None
     finally:
+        if conn is not None:
+            conn.close()
         try:
             Path(tmp_path).unlink(missing_ok=True)
         except Exception:
@@ -330,7 +342,9 @@ def extract_chrome_cookies_macos(domain: str, cookie_names: list[str]) -> Option
     )
 
 
-def _profile_cookie_db(profile_dir: Path) -> Optional[Path]:
+def _profile_cookie_db(
+    profile_dir: Path, denials: Optional[list[PermissionError]] = None
+) -> Optional[Path]:
     """Return the Cookies DB inside a profile dir, or None.
 
     Prefers the modern ``Network/Cookies`` location (Chromium >= 96 moved the
@@ -338,10 +352,20 @@ def _profile_cookie_db(profile_dir: Path) -> Optional[Path]:
     to the legacy flat ``Cookies`` file. Different browsers and versions use
     different layouts, so both are probed.
     """
+    denied: list[PermissionError] = []
     for rel in ("Network/Cookies", "Cookies"):
         candidate = profile_dir / rel
-        if candidate.exists():
-            return candidate
+        try:
+            if path_exists(candidate):
+                if denials is not None:
+                    denials.extend(denied)
+                return candidate
+        except PermissionError as exc:
+            denied.append(exc)
+    if denials is not None:
+        denials.extend(denied)
+    elif denied:
+        raise denied[0]
     return None
 
 
@@ -364,7 +388,9 @@ def _find_chromium_cookies_db(base_dir: Path) -> Optional[Path]:
     return dbs[0] if dbs else None
 
 
-def _find_all_chromium_cookies_dbs(base_dir: Path) -> list[Path]:
+def _find_all_chromium_cookies_dbs(
+    base_dir: Path, denials: Optional[list[PermissionError]] = None
+) -> list[Path]:
     """Return ALL candidate Cookies DBs under base_dir, best-guess order first.
 
     Order: Default, the base dir itself (Opera's flat layout), then numbered
@@ -376,23 +402,35 @@ def _find_all_chromium_cookies_dbs(base_dir: Path) -> list[Path]:
     """
     paths: list[Path] = []
     seen: set[Path] = set()
+    denied: list[PermissionError] = []
 
     def add(p: Optional[Path]) -> None:
         if p is not None and p not in seen:
             seen.add(p)
             paths.append(p)
 
-    add(_profile_cookie_db(base_dir / "Default"))
-    add(_profile_cookie_db(base_dir))
+    add(_profile_cookie_db(base_dir / "Default", denied))
+    add(_profile_cookie_db(base_dir, denied))
     try:
-        candidates = [
-            child for child in base_dir.iterdir()
-            if child.is_dir() and child.name.startswith("Profile ")
-        ]
-        for child in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
-            add(_profile_cookie_db(child))
+        candidates = []
+        for child in base_dir.iterdir():
+            if not child.name.startswith("Profile "):
+                continue
+            try:
+                if path_is_dir(child):
+                    candidates.append((child.stat().st_mtime, child))
+            except PermissionError as exc:
+                denied.append(exc)
+        for _, child in sorted(candidates, reverse=True):
+            add(_profile_cookie_db(child, denied))
+    except PermissionError as exc:
+        denied.append(exc)
     except OSError:
         pass
+    if denials is not None:
+        denials.extend(denied)
+    elif denied and not paths:
+        raise denied[0]
     return paths
 
 
@@ -406,22 +444,31 @@ def _extract_chromium_cookies_any_profile(
     None if no profile yielded any. This fixes the single-profile limitation
     where a guest-only Default profile shadowed a logged-in "Profile N".
     """
-    db_paths = _find_all_chromium_cookies_dbs(base_dir)
+    denials: list[PermissionError] = []
+    db_paths = _find_all_chromium_cookies_dbs(base_dir, denials)
     if not db_paths:
+        if denials:
+            raise denials[0]
         logger.info("%s cookies database not found under %s", keychain_service, base_dir)
         return None
     best: Optional[dict[str, str]] = None
     key_cache: dict[str, Optional[bytes]] = {}
     for db_path in db_paths:
-        got = _extract_chromium_cookies_macos(
-            db_path, keychain_service, domain, cookie_names, key_cache=key_cache
-        )
+        try:
+            got = _extract_chromium_cookies_macos(
+                db_path, keychain_service, domain, cookie_names, key_cache=key_cache
+            )
+        except PermissionError as exc:
+            denials.append(exc)
+            continue
         if got:
             if all(name in got for name in cookie_names):
                 logger.debug("Found complete cookie set for %s in %s", domain, db_path)
                 return got
             if best is None:
                 best = got
+    if denials:
+        raise denials[0]
     return best
 
 
@@ -447,7 +494,7 @@ def extract_chromium_browser_cookies_macos(
     """Extract cookies from a registry-defined Chromium browser on macOS.
 
     Covers every browser in CHROMIUM_BROWSER_PROFILES (Edge, Vivaldi, Opera,
-    Arc, Chromium). They all reuse Chrome's v10 AES-128-CBC encryption; only
+    Arc, Dia, Chromium). They all reuse Chrome's v10 AES-128-CBC encryption; only
     the profile directory and Keychain service name differ.
     """
     spec = CHROMIUM_BROWSER_PROFILES.get(browser)

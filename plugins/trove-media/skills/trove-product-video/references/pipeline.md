@@ -36,7 +36,7 @@ The render must be deterministic. Do not use `Date.now()`, `Math.random()`, unse
 
 ## Stage 6: Design sound
 
-Add sound after picture timing and content have settled. Use a BGM version and a no-BGM version rendered from the same timeline through the composition's props. Do not remove the music track from a finished render to create the no-BGM stem. Keep sound effects tied to a visible action and avoid repeated accents that compete with the product message. Check peaks with the delivery steps and report licensing uncertainty for any user-provided audio.
+Add sound after picture timing and content have settled. Source new sound effects per file and record each one's provenance. Treat CC0 as the default, and use CC BY only when the credit will travel with the published video. The template project's bundled audio is historical material for preview and regression, not a source pool. Use a BGM version and a no-BGM version rendered from the same timeline through the composition's props. Do not remove the music track from a finished render to create the no-BGM stem. Keep sound effects tied to a visible action and avoid repeated accents that compete with the product message. Check peaks with the delivery steps and report licensing uncertainty for any user-provided audio.
 
 ## Stage 7: Acceptance and delivery
 

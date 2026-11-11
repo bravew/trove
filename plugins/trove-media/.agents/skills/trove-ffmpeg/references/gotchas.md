@@ -5,10 +5,37 @@ bullets. SKILL.md keeps one line per item and points here with the anchors below
 nothing here is optional reading when the job touches that area — it is the
 detail, not an aside.
 
+## One-line index
+
+The one-line form each section below starts from (SKILL.md keeps a shorter line per item).
+
+- HDR (iPhone, HDR10) re-encoded through an SDR path goes flat; the scripts keep HDR; `hdr: true` is a real PQ/HLG/DV signal, `bt2020_or_hdr: true` also BT.2020 SDR. -> [#hdr-and-colour](#hdr-and-colour)
+- Log footage (S-Log/V-Log/C-Log) is tagged SDR and looks grey: `probe.py --analyze`, then `color.py --lut` first. -> [#log-footage](#log-footage)
+- Re-encodes write opaque H.264: an alpha source needs `--keep-alpha` (color/graphics/overlay), or the `alpha` step fails; `background.py --transparent` is the canvas. -> [#alpha-channels](#alpha-channels)
+- A `-c copy` cut can start on a wrong/frozen frame; `cut.py` re-encodes past a 0.5 s snap, respect it; an .mp4/.mov copy's edit list hides the pre-roll (`--no-edit-list` off). -> [#keyframe-cuts](#keyframe-cuts)
+- VFR phone/screen clips: re-encodes go CFR; `cut.py` re-encodes measured VFR (`--vfr-guard average`: 2.x rule); odd rate: `fit.py --fps`. -> [#variable-frame-rate](#variable-frame-rate)
+- Sync/multicam `confidence` under 0.3 (or a huge offset) is suspect — check every camera; these align audio, never lip sync. -> [#sync-multicam-and-drift](#sync-multicam-and-drift)
+- "Normalised" audio can still clip (check true peak); ambience at -40 LUFS or below must never be raised to a speech target. -> [#loudness-and-ambience](#loudness-and-ambience)
+- Captions burned before a crop/resize land off-frame; burned small then upscaled by `export.py` come out soft. -> [#captions-fonts-and-text-order](#captions-fonts-and-text-order)
+- Emoji need `--emoji-assets DIR` (a PNG per glyph) to render in colour; without it they come out monochrome, reported. -> [#emoji](#emoji)
+- Non-Latin text picks a font by script (`graphics.py` shapes Devanagari, Bengali, Tamil, Thai via libass; drawtext cannot); no font = failed job. -> [#fonts-by-script](#fonts-by-script)
+- `--fit crop` 16:9→9:16 throws away 70% of the width; "60 seconds" by speed or by trim are different answers — say which and why. -> [#reframing-fps-and-duration](#reframing-fps-and-duration)
+- TikTok/Reels cover the bottom fifth and right column with their own UI — templates keep text out of those zones; `look.py --safe tiktok` shows them. -> [#platform-safe-zones](#platform-safe-zones)
+- `scenes.py --highlights` ranks by loudness (or duration), never by meaning: check the sheet before trusting picks. -> [#highlights](#highlights)
+- CPU re-encodes: x264 `medium`. -> [#chaining-and-speed](#chaining-and-speed)
+
 ## Colour, HDR and Log
 
 ### HDR and colour
-SDR outputs are H.264 tagged BT.709 `yuv420p`. When `probe.py` reports
+SDR outputs are H.264 tagged BT.709 `yuv420p`. A source tagged with a BT.601 matrix
+(`smpte170m`, `bt470bg`; also `fcc`, `smpte240m`) has its pixels converted to that BT.709 matrix
+by every re-encode (through 2.10.0 only the label changed); `color.py --retag bt709` is a
+stream copy and still only relabels. Untagged sources are taken as BT.709 and left alone. An RGB
+picture (PNG/JPEG still, logo, emoji PNG, PNG sequence, qtrle clip) is converted to BT.709 YUV
+explicitly (through 2.10.1 FFmpeg's BT.601 default did it), and `grid.py` converts each cell by its
+own tags. A colour the tools draw (pad and background colours, text, boxes, captions, waveform
+colours) is drawn in BT.709 too; through 2.10.2 it was BT.601 under the BT.709 tag (pure red
+showed as (255,24,0)). When `probe.py` reports
 `bt2020_or_hdr: true` (HDR10/PQ, HLG, Dolby Vision, or BT.2020 SDR), every editing script keeps
 the output on the 10-bit path (HEVC Main10, source colour tags) so nothing is silently
 flattened. Decide with the user: keep HDR (fine for YouTube/phones) or run
@@ -20,13 +47,30 @@ wide-gamut SDR file (1.x's `hdr`), and `hdr_format` names that in-between case
 still carries wide-gamut primaries, so an SDR-only client or platform expecting BT.709 needs
 `color.py --to-sdr` first -- `export.py` only retags BT.709, it does not convert (eval 24 h1).
 `export.py` platform presets are SDR and warn on HDR input.
-iPhone `.mov` files also carry timecode/metadata tracks; scripts map only the
-first audio track, so extra tracks are dropped on re-encode. Keep ProRes masters
+iPhone `.mov` files also carry timecode/metadata tracks; the editing tools keep one
+audio track (most map the first; `cut.py` takes ffmpeg's default pick, the one with the
+most channels; `color.py --strip-dovi` copies every track), so extra tracks are dropped,
+on a stream copy as on a re-encode
+(`cut.py` reports it: `dropped_audio_streams`, an `audio_tracks_dropped` warning). Keep ProRes masters
 at source colour: `export.py --preset prores` does not retag.
 
 Re-encoding an HDR (iPhone, HDR10) source through an SDR path flattens the
 colours. The scripts keep HDR; if you hand-write ffmpeg (never do — see SKILL.md),
 do not tag BT.709 on BT.2020 pixels.
+
+### Alpha channels
+ProRes 4444, QuickTime Animation, PNG and VP9 can carry an alpha channel; H.264, the default line
+of every re-encoding tool, cannot. `color.py --correct/--lut`, `graphics.py` and `overlay.py` take
+`--keep-alpha` (ProRes 4444 by default; `--alpha-codec qtrle|png|vp9`, each in a container that holds
+it) and read the alpha back after the write. Without it, a source whose alpha is used comes out
+opaque and the result says `verified: false` with a failing `alpha` step (`alpha_dropped`): pass
+`--drop-alpha` only when an opaque output is what you want. For a per-element layer with
+transparency, start from `background.py --transparent --duration 5 --width 1920 --height 1080 -o canvas.mov`
+and draw one element on it
+with `graphics.py`/`overlay.py --keep-alpha`. An alpha line keeps the source's colour tags (as
+`--codec prores` does). `--alpha-mode premultiplied` multiplies the written colour by the alpha;
+sources are taken as straight. A VP9 layer with alpha is decoded with libvpx-vp9; FFmpeg's own VP9
+decoder drops the alpha.
 
 ### Log footage
 S-Log, V-Log and C-Log look grey and low-contrast but are tagged SDR. Run
@@ -37,17 +81,41 @@ S-Log, V-Log and C-Log look grey and low-contrast but are tagged SDR. Run
 
 ### Keyframe cuts
 A lossless `cut.py` result may start up to one GOP (often 1–10 s) earlier than
-requested; the script re-encodes automatically when the deviation exceeds 0.5 s.
-If the user insists on lossless output, pass `--tolerance -1` and tell them the
-cut lands on the nearest earlier keyframe. A `-c copy` cut on VFR or a
+requested (`start_snapped: true`); the script re-encodes automatically when the
+deviation exceeds 0.5 s. A single-segment `.mp4`/`.m4v`/`.mov` copy keeps the MP4
+edit list by default (since 3.0.0; `--no-edit-list` starts the file at the keyframe
+instead): the pre-roll back to the keyframe is stored but hidden, so the picture
+starts at the requested time (`edit_list`, `stored_preroll_seconds`, and
+`start_snapped: false`). A player or tool that ignores edit lists shows that
+pre-roll. The **end** still lands on a packet boundary, a few frames long, and
+those extra frames can skip. `.mkv` output has no edit list, and a `--segments`
+join shows each part from its keyframe. On B-frame video an `.mp4`/`.mov`
+`--segments` part's end moves to the first keyframe at or after it, within the
+same tolerance (`segment_end_snap_seconds`); no-B-frame and `.mkv`/`.ts` parts
+are not snapped. Every copy join is checked (frames, steps, each part's sound
+against its picture) and re-cut when wrong. Open-GOP HEVC (iPhone "High Efficiency")
+always re-encodes a `--segments` join, even with `--tolerance -1`, and so does a B-frame `.mp4`/`.mov`
+join whose later segment starts between keyframes (start it on a keyframe, or write `.mkv`). If the user insists on lossless output, pass
+`--tolerance -1` and tell them the cut lands on the nearest earlier keyframe.
+Where a copy begins is measured with the seek ffmpeg makes: on B-frame `.mp4`/`.mov`
+a start a few frames before a keyframe can begin at that keyframe or one GOP
+earlier (`start_snapped: true` either way).
+`av_start_skew_seconds` warns when a copy's sound and picture start apart
+(Core Media HEVC once gave 3.7 s of sound with no picture); it is reported, not
+repaired: `--accurate` is the fix, or the default edit list (not `--no-edit-list`) for a lossless `.mp4`/`.m4v`/`.mov`. A `-c copy` cut on VFR or a
 non-keyframe boundary produces a file that "works" but starts on a frozen or
 wrong frame — respect the automatic re-encode rather than forcing the copy.
 
 ### Variable frame rate
 `probe.py` sets `variable_frame_rate_suspected` when `r_frame_rate` and
 `avg_frame_rate` disagree (phone and screen recordings). Every re-encoding
-script then adds `-fps_mode cfr` at the source's average rate, and `cut.py`
-switches itself to `--accurate` (copy-cuts on VFR are unreliable). Pick the rate
+script then adds `-fps_mode cfr` at the source's average rate. That flag is a
+whole-file average, and a phone clip at 29.98 against a nominal 30 trips it, so
+`cut.py` decides on packet timestamps sampled in up to five windows (`vfr_check`)
+instead: by default (`--vfr-guard sampled`, since 3.0.0) it switches to
+`--accurate` only when they are irregular or too few to judge;
+`--vfr-guard average` restores 2.x's re-encode on the flag alone, and
+`--vfr-guard off` keeps the copy anyway. Pick the rate
 explicitly with `fit.py --fps 30|60` when the average is odd (e.g. 23.4 fps from
 dropped frames).
 
@@ -63,6 +131,10 @@ them, not just that the command succeeded, before trusting the cut.
 movement vs. audio) — there is no face or mouth detection anywhere in this skill.
 High confidence means the audio matched well, not that the picture looks right;
 whether lip sync is correct needs a look at the video, not the reported offset.
+
+`multicam.py --switch energy` cuts to the loudest camera, a stand-in for who is
+talking, not speaker identification: it works when each speaker has their own
+camera's mic, and a shared room mic or a loud audience picks the wrong camera.
 
 Don't mix files with different frame rates or sample rates in one
 `cut.py --segments` join without re-encoding (`--accurate`). After `sync.py`,
@@ -176,6 +248,12 @@ directory of PNGs — and on most builds only the second one exists.
   `doctor --json` → `.fonts.emoji` (`mode`: `color` / `png` / `mono` / `none`,
   plus `libass_color` from that render). `contract --json --static` is the way
   to get the contract without running it; `doctor` itself always probes.
+- **No colour pixels is not a monochrome glyph.** Apple Color Emoji (an sbix
+  face) gives libass no glyph on macOS, and it draws the empty `.notdef` box.
+  `libass_glyph` compares the emoji render with U+10FFFD, a code point no font
+  has: the same frame is no glyph, `mode: none`. `caption.py` then leaves the
+  emoji out (warning `emoji_not_drawn`) and `--emoji mono` refuses, rather than
+  burn boxes; `--emoji-assets DIR` draws them as PNGs.
 - **drawtext cannot load an emoji font at all.** Not a degraded render: a
   CBDT/sbix face fails filter initialisation outright (`Could not set font size
   to 48 pixels: invalid library handle`, and at the font's own strike
@@ -251,8 +329,16 @@ see what the app covers. An explicit `--margin` always wins.
 
 ### Dimensions and rotation
 `yuv420p` needs even width/height; `fit.py` and `export.py` round to even values
-automatically. Phone footage often carries a `rotation` tag; `probe.py` reports
-it and `fit.py` accounts for it when computing the output frame.
+automatically. Phone footage often carries a `rotation` tag. `probe.py` reports
+the stored width and height plus that rotation. A tool that places or measures
+a rectangle (`fit.py`, `crop.py`, `cropdetect.py`, `broll.py`, `overlay.py
+--scale-percent` / `--platform`, `look.py --safe`) uses the displayed size,
+the two swapped for 90° and 270°, because ffmpeg applies the tag before the
+filter graph. A JPEG's EXIF Orientation counts as that rotation too. Footage that
+stores non-square pixels (DV, HDV/XDCAM 1440x1080, DVD) is reported with its
+`sample_aspect_ratio`; every tool that sizes, places or draws on the picture
+first scales it to square pixels at its display aspect (its height kept, a
+`notes` line says so), so rectangles and margins are in that displayed frame.
 
 ## Planning
 
@@ -267,7 +353,17 @@ the contact sheet (`--sheet`) before treating the picks as final.
 Anything chained by hand through three re-encodes should be one `render.py`
 project instead, so the plan is one file and the user can change one number.
 Re-encodes use x264 `medium`; for long files add `--preset veryfast` to
-intermediates and keep the default for the final export.
+intermediates and keep the default for the final export. `render.py` encodes its intermediates at
+`superfast` by itself since 2.16 (veryfast in 2.15) when its project ends in an encoding export
+(`--intermediate-preset medium` turns it off). On Apple Silicon,
+`--hw` (or `FFMPEG_SKILL_HW=1` for the machine) moves h264/hevc/prores encodes to
+VideoToolbox: 2–7× faster, 1.1–2.9× the bytes at the same quality (1.9–3.5× on HDR). The variable
+leaves `export.py`'s delivery presets on the CPU, which is the usual split (GPU
+intermediates, CPU delivery); `render.py --hw` puts the export on the GPU too. A build with no
+libx264/libx265 (an LGPL ffmpeg) has no CPU delivery to keep: its tools and presets use
+VideoToolbox by themselves, `hw.source` says `auto`.
+Check `encoder`/`hw` in the result: a job the GPU refuses (H.264 wider than 4096)
+was re-encoded on the CPU.
 
 ## Audio-only files
 

@@ -203,4 +203,4 @@
 
 CHANGES MADE
 
-The upstream workflow was adapted into Trove product-video guidance. The adaptation removes upstream assets, demos, gallery and workbench infrastructure, author promotion, and raw FFmpeg command examples. It adds Trove mode selection, privacy safeguards, the `trove-ffmpeg` wrapper handoff, and platform delivery checks.
+The upstream workflow was adapted into Trove product-video guidance. Sound-effect guidance now requires per-file provenance for new audio, following the upstream move away from its shared effect library. The adaptation removes upstream assets, demos, gallery and workbench infrastructure, author promotion, and raw FFmpeg command examples. It adds Trove mode selection, privacy safeguards, the `trove-ffmpeg` wrapper handoff, and platform delivery checks.

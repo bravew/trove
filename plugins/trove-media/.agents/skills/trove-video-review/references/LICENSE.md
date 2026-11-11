@@ -203,4 +203,4 @@
 
 ## Changes made
 
-This skill adapts the independent final-review protocol and selected aesthetic checks for Trove. It adds Trove-specific evidence requirements, frame-numbered reporting, `trove-ffmpeg` measurement steps, a BGM/no-BGM frame-match check, and explicit handling for unavailable checks and sensitive data. The source documents were rewritten and substantially adapted.
+This skill adapts the independent final-review protocol and selected aesthetic checks for Trove. It adds an audio-provenance criterion covering sound effects added after the upstream shared library was retired. It adds Trove-specific evidence requirements, frame-numbered reporting, `trove-ffmpeg` measurement steps, a BGM/no-BGM frame-match check, and explicit handling for unavailable checks and sensitive data. The source documents were rewritten and substantially adapted.

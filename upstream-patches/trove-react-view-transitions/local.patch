@@ -1,8 +1,8 @@
 diff --git a/SKILL.md.tmpl b/SKILL.md.tmpl
-index 9e59843..7190fd3 100644
+index 5aba1ad..938dec5 100644
 --- a/SKILL.md.tmpl
 +++ b/SKILL.md.tmpl
-@@ -1,334 +1,114 @@
+@@ -1,334 +1,115 @@
  ---
  name: trove-react-view-transitions
 -description: Guide for implementing smooth, native-feeling animations using React's View Transition API (`<ViewTransition>` component, `addTransitionType`, and CSS view transition pseudo-elements). Use this skill whenever the user wants to add page transitions, animate route changes, create shared element animations, animate enter/exit of components, animate list reorder, implement directional (forward/back) navigation animations, or integrate view transitions in Next.js. Also use when the user mentions view transitions, `startViewTransition`, `ViewTransition`, transition types, or asks about animating between UI states in React without third-party animation libraries.
@@ -41,10 +41,11 @@ index 9e59843..7190fd3 100644
 +## Stack Notes
  
 -Every `<ViewTransition>` should communicate a spatial relationship or continuity. If you can't articulate what it communicates, don't add it.
-+This skill assumes a Vite-based React 19 app (React Router, not Next.js
-+App Router). The React `<ViewTransition>` component is canary-only for Vite; use
-+`react@canary react-dom@canary` and verify with `npm ls react`. The
-+`references/nextjs.md` file is only for future Next.js work.
++This skill assumes a Vite-based React app (React Router, not Next.js
++App Router). `<ViewTransition>` and `addTransitionType` are stable in React 19.3,
++so use `react` and `react-dom` 19.3 or newer and verify with `npm ls react`.
++Earlier stable versions do not include these APIs. The `references/nextjs.md`
++file is only for future Next.js work.
  
 -Implement **all** applicable patterns from this list, in this order:
 +## Load On Demand
@@ -92,7 +93,7 @@ index 9e59843..7190fd3 100644
 +| 5 | Route change | Going to a new place |
  
 -- **Next.js:** Do **not** install `react@canary` — the App Router already bundles React canary internally. `ViewTransition` works out of the box. `npm ls react` may show a stable-looking version; this is expected.
--- **Without Next.js:** Install `react@canary react-dom@canary` (`ViewTransition` is not in stable React).
+-- **Without Next.js:** Use stable `react` and `react-dom` 19.3 or newer (`ViewTransition` and `addTransitionType` became stable in React 19.3). Earlier stable React versions do not include these APIs.
 -- Browser support: Chromium 125+ (React needs the v2 object form of `startViewTransition`), Firefox 144+, Safari 18.2+. Graceful degradation on unsupported browsers.
 -
 ----

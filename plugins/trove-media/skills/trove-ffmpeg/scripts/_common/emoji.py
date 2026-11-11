@@ -5,10 +5,12 @@ Split out of _common.text in the refactor after 1.17.3; every body is byte-ident
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from typing import Any, Dict, List, Tuple, Optional
+from _common.decision import escape_filter_path
 from _common.emit import die
+from _common.runner import ffmpeg_exe
+from _common.runner import safe_which as _safe_which
 
 
 # --------------------------------------------------------------------------- emoji (1.15)
@@ -164,12 +166,24 @@ EMOJI_ASSET_HINT = (
 _EMOJI_COLOR_FAMILIES = ("Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji")
 
 
+def _fc_list_path(line: str) -> str:
+    """The file from one `fc-list ... file` line.
+
+    fontconfig prints `<file>: <families>`. The separator is a colon followed by a space.
+    A Windows drive letter is `C:` followed by a backslash, so splitting on the first colon
+    yields `C` and the font is reported missing.
+    """
+    if ": " in line:
+        return line.partition(": ")[0].strip()
+    return line.strip().rstrip(":")
+
+
 _EMOJI_SUPPORT_CACHE: "Dict[Tuple[Optional[str], bool], Dict[str, Any]]" = {}
 
 
 def _emoji_color_font() -> "Tuple[Optional[str], Optional[str], bool]":
     """(family, file, fontconfig_answered) for the first installed colour emoji family."""
-    exe = shutil.which("fc-list")
+    exe = _safe_which("fc-list")
     if not exe:
         return None, None, False
     for family in _EMOJI_COLOR_FAMILIES:
@@ -181,7 +195,7 @@ def _emoji_color_font() -> "Tuple[Optional[str], Optional[str], bool]":
         if proc.returncode != 0:
             return None, None, False
         for line in proc.stdout.splitlines():
-            path = line.split(":", 1)[0].strip()
+            path = _fc_list_path(line)
             if path and os.path.exists(path):
                 return family, path, True
     return None, None, True
@@ -192,7 +206,7 @@ def _libass_color_probe() -> "Optional[bool]":
     the font listing: Noto Color Emoji installs happily on builds whose freetype/libass has no
     colour-bitmap path at all, and those render a monochrome outline instead (measured). ~80 ms.
     None means the probe could not be run (no ffmpeg, a failure) -- unknown, not false."""
-    exe = shutil.which("ffmpeg")
+    exe = ffmpeg_exe("ffmpeg")[0]
     if not exe:
         return None
     import tempfile
@@ -204,7 +218,7 @@ def _libass_color_probe() -> "Optional[bool]":
             proc = subprocess.run(
                 [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
                  "-i", "color=c=black:s=64x64:d=0.04",
-                 "-vf", "subtitles=" + srt.replace("\\", "/"), "-frames:v", "1",
+                 "-vf", "subtitles=" + escape_filter_path(srt, bind=False), "-frames:v", "1",
                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
         except (subprocess.TimeoutExpired, OSError):
@@ -219,7 +233,46 @@ def _libass_color_probe() -> "Optional[bool]":
     return False
 
 
-def emoji_support(assets: "Optional[str]" = None, probe: bool = True) -> "Dict[str, Any]":
+def _libass_render(exe: str, char: str, fonts_dir: "Optional[str]" = None) -> "Optional[bytes]":
+    """One 96x96 rgb24 frame of `char` drawn through libass (subtitles=), or None when it failed."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        srt = os.path.join(td, "g.srt")
+        with open(srt, "w", encoding="utf-8") as fh:
+            fh.write(f"1\n00:00:00,000 --> 00:00:01,000\n{char}\n")
+        try:
+            proc = subprocess.run(
+                [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                 "-i", "color=c=black:s=96x96:d=0.04",
+                 "-vf", "subtitles=" + escape_filter_path(srt, bind=False) + ":force_style='FontSize=64,Alignment=5'"
+                 + (":fontsdir=" + escape_filter_path(fonts_dir, bind=False) if fonts_dir else ""),
+                 "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+    if proc.returncode != 0 or len(proc.stdout) < 96 * 96 * 3:
+        return None
+    return proc.stdout
+
+
+def _libass_glyph_probe(fonts_dir: "Optional[str]" = None) -> "Optional[bool]":
+    """Does libass draw an emoji GLYPH at all, or only what it draws for a character no face has?
+    "No colour pixels" (_libass_color_probe False) covers both a monochrome glyph and the empty
+    .notdef box: Apple Color Emoji (an sbix bitmap face) gives libass no usable glyph, and the box
+    is white (#395). So the emoji is compared with U+10FFFD, a code point no font carries: the same
+    frame, or nothing lit, is no glyph. A caller's --fonts-dir is searched too, as the burn searches it.
+    None: the probe could not run."""
+    exe = ffmpeg_exe("ffmpeg")[0]
+    if not exe:
+        return None
+    emoji, nothing = _libass_render(exe, "\U0001F389", fonts_dir), _libass_render(exe, "\U0010FFFD", fonts_dir)
+    if emoji is None or nothing is None:
+        return None
+    lit = any(emoji[i] > 60 for i in range(0, len(emoji)))
+    return bool(lit and emoji != nothing)
+
+
+def emoji_support(assets: "Optional[str]" = None, probe: bool = True, fonts_dir: "Optional[str]" = None) -> "Dict[str, Any]":
     """What this machine can actually do with emoji, cached per process.
 
     `mode` is `color` when a render probe proves libass draws colour, else `png` when an assets
@@ -228,16 +281,20 @@ def emoji_support(assets: "Optional[str]" = None, probe: bool = True) -> "Dict[s
     from a render (see references/gotchas.md#emoji). `probe=False` (`contract --json --static`, and every
     static/JSON-only path) skips the render entirely and leaves `libass_color` unknown.
     """
-    key = (assets or None, bool(probe))
+    key = (assets or None, bool(probe), fonts_dir or None)
     if key in _EMOJI_SUPPORT_CACHE:
         return dict(_EMOJI_SUPPORT_CACHE[key])
     family, file, fc_answered = _emoji_color_font()
     libass_color = _libass_color_probe() if probe else None
+    # a colour render is a glyph; without one, ask whether libass draws one at all (#395)
+    libass_glyph = True if libass_color else (_libass_glyph_probe(fonts_dir) if probe and libass_color is False else None)
     assets_dir = assets if (assets and os.path.isdir(assets)) else None
     if libass_color:
         mode = "color"
     elif assets_dir:
         mode = "png"
+    elif family and libass_glyph is False:
+        mode = "none"
     elif family:
         mode = "mono"
     elif not fc_answered:
@@ -250,6 +307,9 @@ def emoji_support(assets: "Optional[str]" = None, probe: bool = True) -> "Dict[s
         detail = "no fontconfig on this machine; the PNG overlay path needs none"
     elif libass_color:
         detail = f"{family or 'an installed face'} renders in colour through libass on this ffmpeg"
+    elif family and libass_glyph is False:
+        detail = (f"{family} installed but libass draws no emoji glyph from it on this build (the render "
+                  "matches a code point no font has: an empty box or nothing)")
     elif family and libass_color is False:
         detail = f"{family} installed but libass renders it monochrome on this build"
     elif family and libass_color is None:
@@ -259,7 +319,7 @@ def emoji_support(assets: "Optional[str]" = None, probe: bool = True) -> "Dict[s
     else:
         detail = "no colour emoji family installed and no --emoji-assets directory"
     result = {"mode": mode, "color_font": family, "color_font_file": file,
-              "libass_color": libass_color, "assets": assets_dir,
+              "libass_color": libass_color, "libass_glyph": libass_glyph, "assets": assets_dir,
               "detail": detail, "fix": EMOJI_ASSET_HINT}
     _EMOJI_SUPPORT_CACHE[key] = result
     return dict(result)
@@ -285,12 +345,16 @@ def resolve_emoji_assets(flag: "Optional[str]" = None, project: "Optional[str]" 
 
 
 
-def emoji_filter_chain(plan, base_label, out_label, first_input=1):
+def emoji_filter_chain(plan, base_label, out_label, first_input=1, to_yuv="", base_chain=""):
     """(chains, inputs) that composite the planned PNGs on top of `base_label`.
 
     `inputs` is a list of argv fragments, each ending in the asset path, to be appended to the
     ffmpeg command in order (an overlay that fades needs `-loop 1` on its input so the still has
     a timeline the fade filter can move along; one that does not is a plain `-i`).
+    `to_yuv` ends each PNG's chain: the caller's rgb_chain_to_bt709(meta), so the RGBA asset is
+    converted to the BT.709 the output is tagged with instead of by overlay's BT.601 default;
+    `base_chain` (label_chain(meta, meta): an untagged source's BT.709 label) goes in front of
+    the first overlay, so 7.1+ does not convert the two pictures to one another.
     """
     overlays = plan.get("overlays") or []
     if not overlays:
@@ -328,11 +392,15 @@ def emoji_filter_chain(plan, base_label, out_label, first_input=1):
                 chain += f",fade=t=out:st={max(gstart, gend - fout):.3f}:d={fout:.3f}:alpha=1"
         else:
             inputs.append(["-i", asset])
+        chain += to_yuv
         if len(labels) > 1:
             chain += f",split={len(labels)}"
         chains.append(chain + "".join(f"[{l}]" for l in labels))
         pads[key] = labels
     cur = base_label
+    if base_chain:
+        chains.append(f"[{cur}]{base_chain}null[ebase]")
+        cur = "ebase"
     remaining = {key: list(v) for key, v in pads.items()}
     for j, o in enumerate(overlays):
         label = remaining[_key(o)].pop(0)

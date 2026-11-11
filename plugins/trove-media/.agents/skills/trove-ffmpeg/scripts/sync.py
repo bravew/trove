@@ -32,9 +32,23 @@ import os
 import sys
 from typing import Dict, List
 
+from _common.runner import fail_if_classified
 from _common import video_args, add_common, apply_common, emit, aac_args, audio_codec_for, default_output, die, ffmpeg_base, info, probe, require_tool, run, run_analysis, x264_args, decode_pcm_mono, rms_envelope
+from _common.emit import record_skip, warn
+from _common.decision import stream_starts
 
 SR = 8000  # decode sample rate
+
+
+def sync_meaning(offset: float) -> str:
+    """The sentence a caller reads next to offset_seconds.
+
+    A zero offset used to take the else branch of `later if offset > 0` and say the second
+    file starts earlier. Values that print as 0.000 s (under half a millisecond) say the two
+    recordings start together; anything larger keeps later/earlier."""
+    if abs(offset) < 5e-4:
+        return "second starts together with the reference"
+    return "second starts %.3fs %s than reference" % (abs(offset), "later" if offset > 0 else "earlier")
 
 # Scoring constants for coarse alignment. Both come from tests/bench_sync.py on real dialogue and
 # music with +/-30 s offsets, gain, noise and EQ (see evals/results and CHANGELOG 0.8.0):
@@ -207,6 +221,9 @@ def measure_one(reference: str, path: str, args) -> Dict:
     offset, score = measure_offset(reference, path, 0.0, args.analyze_seconds, args.step_ms, args.max_offset, args.fine_ms)
     drift_ratio = 1.0
     drift_info = None
+    # why a requested --fix-drift was not applied: too_short (no tail window far enough from
+    # the head to measure over) or low_confidence (the tail did not correlate); None when applied
+    skipped_reason = None
     if args.fix_drift:
         ref_dur = probe(reference)["duration"] or 0.0
         sec_dur = probe(path)["duration"] or 0.0
@@ -214,7 +231,10 @@ def measure_one(reference: str, path: str, args) -> Dict:
         head_len = min(args.analyze_seconds, overlap_end)
         tail_start = overlap_end - args.drift_window
         if tail_start <= head_len / 2 + 5:
-            info(f"warning: {path} too short to measure drift reliably; skipping drift correction")
+            skipped_reason = "too_short"
+            record_skip(f"{path} too short to measure drift reliably; skipping drift correction", "drift_correction_skipped",
+                        path=path, reason=skipped_reason, overlap_seconds=round(overlap_end, 3),
+                        drift_window=args.drift_window)
         else:
             ref_start = tail_start
             sec_start = tail_start - offset
@@ -240,10 +260,13 @@ def measure_one(reference: str, path: str, args) -> Dict:
                                   abs(drift_ratio - 1) * 1e6, "long/slow" if drift_ratio > 1 else "short/fast", abs(residual), elapsed),
                               "confidence": round(end_score, 3)}
             else:
-                info(f"warning: could not measure drift with confidence for {path}; skipping drift correction")
+                skipped_reason = "low_confidence"
+                record_skip(f"could not measure drift with confidence for {path}; skipping drift correction",
+                            "drift_correction_skipped", path=path, reason=skipped_reason,
+                            confidence=round(max(0.0, end_score), 3), measured_over_seconds=round(elapsed, 2))
     return {"path": path, "offset_seconds": round(offset, 4), "offset_s": round(offset, 4),
             "confidence": round(max(0.0, min(1.0, score)), 3), "drift_ratio": drift_ratio, "drift": drift_info,
-            "drift_ppm": (drift_info["drift_ppm"] if drift_info else None)}
+            "drift_ppm": (drift_info["drift_ppm"] if drift_info else None), "drift_skipped_reason": skipped_reason}
 
 
 def main() -> int:
@@ -290,10 +313,11 @@ def main() -> int:
     measured = [measure_one(args.reference, p, args) for p in args.sources]
     for p, m in zip(args.sources, measured):
         if m["confidence"] < 0.1:
-            info(f"warning: {p}: low correlation confidence; check that it shares an audio event with the reference")
+            warn(f"{p}: low correlation confidence; check that it shares an audio event with the reference",
+                 "sync_low_confidence", path=p, confidence=m["confidence"])
 
     sources_block = [{"path": p, "offset_s": m["offset_s"], "confidence": m["confidence"],
-                      **({"drift_ppm": m["drift_ppm"]} if args.fix_drift else {})}
+                      **({"drift_ppm": m["drift_ppm"], "drift_skipped_reason": m["drift_skipped_reason"]} if args.fix_drift else {})}
                      for p, m in zip(args.sources, measured)]
 
     if n_sources == 1:
@@ -307,13 +331,13 @@ def main() -> int:
             "second": args.second,
             "offset_seconds": offset,
             "confidence": score,
-            "meaning": ("second starts %.3fs %s than reference" % (abs(offset), "later" if offset > 0 else "earlier")),
+            "meaning": sync_meaning(offset),
             "sources": sources_block,
         }
         if drift_info:
             result["drift"] = drift_info
-        if score < 0.1:
-            info("warning: low correlation confidence; check that both files contain the same audio event")
+        if args.fix_drift:
+            result["drift_skipped_reason"] = m["drift_skipped_reason"]
     else:
         offset = drift_ratio = drift_info = None  # not used below; output writing is 1-source only
         result = {"reference": args.reference, "sources": sources_block}
@@ -333,6 +357,11 @@ def main() -> int:
         if abs(drift_ratio - 1.0) > 1e-7:
             # the second file runs long by drift_ratio -> play it faster by that ratio (pitch shift is ~ppm, inaudible)
             drift_af = [f"asetrate={sec_sr * drift_ratio:.6f}", f"aresample={sec_sr}"]
+        # the offset is measured between the files' clocks (decode_pcm_mono pads a late sound), so
+        # the second's sound is placed on its own clock first: one that starts 0.3 s after its
+        # file's start keeps that 0.3 s instead of being delayed from its first sample (#409).
+        # Only then, so the command for an ordinary file is the one it always was.
+        on_clock = ["aresample=async=1:first_pts=0"] if stream_starts(second_meta)[1] > 0.0005 else []
 
         if args.replace_audio:
             cmd = ffmpeg_base() + ["-i", args.reference]
@@ -345,10 +374,11 @@ def main() -> int:
             # its length instead of -shortest, which cut the reference's tail whenever the second
             # file started earlier (head_trim > 0) or was simply shorter
             ref_dur = probe(args.reference).get("duration")
-            af_parts = drift_af + ([f"adelay={delay_ms}:all=1"] if delay_ms > 0 else []) + ["apad"]
+            af_parts = on_clock + drift_af + ([f"adelay={delay_ms}:all=1"] if delay_ms > 0 else []) + ["apad"]
             cmd += ["-af", ",".join(af_parts)]
             cmd += aac_args() + (["-t", f"{ref_dur:.3f}"] if ref_dur else ["-shortest"]) + [output]
             proc = run(cmd, check=False)
+            fail_if_classified(proc)  # a cause the re-encode would hit too is reported, not retried (#415)
             if proc.returncode != 0:
                 cmd = [c for c in cmd if c != "copy"]
                 idx = cmd.index("-c:v"); del cmd[idx]
@@ -361,6 +391,7 @@ def main() -> int:
                     cmd += ["-movflags", "+faststart"]
                 cmd += ["-avoid_negative_ts", "make_zero", output]
                 proc = run(cmd, check=False)
+                fail_if_classified(proc)
                 if proc.returncode != 0:
                     cmd = ffmpeg_base() + ["-ss", f"{head_trim:.4f}", "-i", args.second] + (video_args(probe(args.reference) if args.replace_audio else probe(args.second), args.crf) if has_video else []) + audio_codec_for(output) + [output]
                     run(cmd)
@@ -369,7 +400,7 @@ def main() -> int:
                 if head_trim > 0:
                     cmd += ["-ss", f"{head_trim:.4f}"]
                 cmd += ["-i", args.second]
-                af_parts = list(drift_af)
+                af_parts = on_clock + drift_af
                 if delay_ms > 0:
                     af_parts.append(f"adelay={delay_ms}:all=1")
                 if has_video:

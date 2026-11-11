@@ -1,6 +1,6 @@
 # Sound design and alignment
 
-Wait until the picture structure is stable before placing sound effects. Lay the BGM first to establish the energy shape, then add only effects that clarify visible actions. Keep the beat map and the sound-effect table in one auditable timeline.
+Wait until the picture structure is stable before placing sound effects. Lay the BGM first to establish the energy shape, then add only effects that clarify visible actions. Measure each sound effect file for its own peak, duration, and offset. Do not reuse a measurement taken from a different file. Keep the beat map and the sound-effect table in one auditable timeline.
 
 A repeating effect needs variation in sample, level, or timing. If individual sounds blur together, reduce them to a single sweep or omit them. Give long samples an explicit duration that matches the action. Let impact tails decay naturally.
 

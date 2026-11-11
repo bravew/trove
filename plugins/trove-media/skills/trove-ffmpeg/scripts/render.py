@@ -22,7 +22,8 @@ Project format (all keys optional except clips):
   ],
   "overlays": [
     {"logo": true},
-    {"text": "Episode 12", "position": "bottom", "start": 1, "end": 5, "fade": 0.3, "box": true}
+    {"text": "Episode 12", "position": "bottom", "start": 1, "end": 5, "fade": 0.3, "box": true},
+    {"video": "webcam.mp4", "position": "bottom-right", "scale": 480, "chromakey": "0x00ff00"}
   ],
   "audio": {"voice": "medium", "music": "bed.mp3", "music_volume": -16, "duck": true, "music_fade_out": 2,
             "effects": "sfx.wav", "stems": {"dialogue": 0, "music": -18, "effects": -22}},
@@ -37,12 +38,21 @@ Stages run in this order: clips (cut) → join → silence → fit → captions 
 graphics → overlays → audio → loudness → export → chapters → check. Missing stages are
 skipped. "brand" points caption/graphics/overlay at a brand.json (fonts,
 colours, logo, safe margin); {"logo": true} in overlays places the brand logo.
+An overlay entry draws one of logo, image, text or video (a picture-in-picture
+layer, overlay.py --video; "chromakey", "chromakey_similarity" and
+"chromakey_blend" key a colour out of that video and need "video"). "scale"
+is that layer's width in px for a logo, image or video; a text entry's size
+is "font_size", and "scale" on a text entry is refused.
 
 "check" mirrors check.py's own exit code: a delivery-spec FAIL (or check.py
 itself failing to run) exits 1, same as running check.py directly would --
 the render is not silently reported as successful just because every stage
 up to it completed. The output file is still written and `--json`'s
-`check` field still carries the full row-by-row result either way.
+`check` field still carries the full row-by-row result either way. A check
+stage with only "content": true runs check.py --content without a platform.
+`verified` is every stage's: a stage that completed unverified (an export that
+missed its loudness) leaves the render verified false, its steps and notes in
+the result.
 
 Examples:
   python3 render.py --init project.json          # write a commented starter project
@@ -64,7 +74,9 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from export import PRESETS, PLATFORM_OF
 from _platforms import PLATFORMS, caption_defaults, resolve as resolve_platform
-from _common import STATE, add_common, aspect_ratio, brand_caption_style, load_brand, apply_common, child_args, die, emit, info, probe, require_tool, run, run_tool, place_output, refuse_output_is_input, _check_existing_output, _check_output_path, fingerprint, PLAN_VERSION, ffmpeg_version
+from _common import guard_sidecar, STATE, add_common, aspect_ratio, brand_caption_style, load_brand, apply_common, child_args, die, emit, info, probe, require_tool, run, run_tool, place_output, refuse_output_is_input, _check_existing_output, _check_output_path, fingerprint, PLAN_VERSION, ffmpeg_version, X264_PRESETS
+from _common.runner import HW_ENV, HW_FORCED_ENV, add_hw_orchestrator_args, child_exit_code, found_exe, kept_clause, kept_deliverables, mark_delivered, remember_written
+from _common.emit import absorb_stage, audit, record_fallback, record_skip, refuse, warn
 import subprocess
 from _contract import CONTRACT_VERSION
 from batch import file_key
@@ -138,8 +150,10 @@ OBJECT_KEYS: Dict[str, frozenset] = {
     "graphics[]": frozenset({"template", "name", "title", "subtitle", "start", "end", "position",
                              "from", "scale", "primary", "text_color", "lang",
                              "text", "top", "bottom", "duration", "margin", "platform"}),
+    # #326: "video" is a fourth layer kind (overlay.py --video), keyed with the chromakey* keys
     "overlays[]": frozenset({"logo", "image", "text", "position", "start", "end", "fade", "opacity",
-                             "scale", "font_size", "font", "font_file", "margin", "box", "platform"}),
+                             "scale", "font_size", "font", "font_file", "margin", "box", "platform",
+                             "video", "chromakey", "chromakey_similarity", "chromakey_blend"}),
     "audio": frozenset({"music", "replace", "music_volume", "fade_in", "fade_out", "music_fade_out",
                         "gain", "duck_amount", "duck_threshold", "duck_attack", "duck_release",
                         "voice", "denoise", "duck", "music_loop", "stereo", "mono", "downmix",
@@ -328,10 +342,16 @@ def render_pack(names: List[str], args) -> int:
     and platform check), so the pack reports per-platform results rather than one verdict."""
     stem = Path(args.input).with_suffix("").name
     outdir = Path(args.output).parent if args.output else Path(args.input).resolve().parent
+    # the table is a file this run writes itself (#408): an existing one is refused without
+    # --overwrite, before the first destination renders
+    if outdir.is_dir():  # a missing folder is the destinations' own refusal (and a dry run's plan)
+        side = [v for k, v in vars(args).items() if k != "output" and isinstance(v, str) and os.path.isfile(v)]
+        guard_sidecar(str(outdir / f"{stem}_pack.md"), args.input, *side)
     dests = {name: str((load_template(name).get("check") or {}).get("platform") or name) for name in names}
     rows: List[Dict[str, Any]] = []
     outputs: List[str] = []
     failed: List[str] = []
+    stopped: List[Dict[str, Any]] = []  # destinations a timeout stopped: {kind, exit_code}
     for name in names:
         # the destination decides the container: an audio-only destination in a pack must not be
         # handed a .mp4 name the single-template form would never have written (review 12)
@@ -339,7 +359,8 @@ def render_pack(names: List[str], args) -> int:
         argv = [str(HERE / "render.py"), args.input, "--template", name, "-o", dest_out]
         for flag, value in (("--cues", args.cues), ("--srt", args.srt), ("--logo", args.logo),
                             ("--title", args.title), ("--brand", args.brand), ("--fit", args.fit),
-                            ("--chapters", args.chapters), ("--image", args.image)):
+                            ("--chapters", args.chapters), ("--image", args.image),
+                            ("--intermediate-preset", args.intermediate_preset)):
             if value:
                 argv += [flag, str(value)]
         info(f"→ pack: {name}")
@@ -354,6 +375,7 @@ def render_pack(names: List[str], args) -> int:
             if line.startswith("$ ") or line.startswith("[dry-run]"):
                 STATE.commands.append(line[2:] if line.startswith("$ ") else line)
         STATE.commands.extend(str(c) for c in (doc.get("commands") or []))
+        absorb_stage(name, doc)
         out = doc.get("output") or dest_out
         chk = doc.get("check") or {}
         ok = proc.returncode == 0 and doc.get("status") == "completed"
@@ -373,6 +395,9 @@ def render_pack(names: List[str], args) -> int:
         outputs.append(out)
         if not ok:
             failed.append(name)
+            err = doc.get("error") or {}
+            if err.get("kind") in ("timeout", "interrupted"):
+                stopped.append({"kind": err["kind"], "exit_code": child_exit_code(doc, proc.returncode)})
     pack = str(outdir / f"{stem}_pack.md")
     lines = [f"# Social pack — {stem}", "",
              "| platform | file | size | duration | check |", "|---|---|---|---|---|"]
@@ -383,11 +408,17 @@ def render_pack(names: List[str], args) -> int:
     lines += ["", f"{len(rows)} destinations from one edit ({os.path.basename(args.input)}).",
               "Rendered by ffmpeg-skill; `report.py --pack` turns this table into an HTML report."]
     if not STATE.dry_run:
+        if not outdir.is_dir():
+            die(f"pack: the output folder {outdir} does not exist, so the table was not written", kind="input",
+                pack=rows, outputs=outputs)
         Path(pack).write_text("\n".join(lines) + "\n", encoding="utf-8")
     info(("[dry-run] would write " if STATE.dry_run else "wrote ") + pack)
     if failed:
+        # a destination that was stopped makes the pack a stopped run: its kind and exit code (124,
+        # 130/143), as a stage's are render.py's (docs/contract.md); otherwise a verification failure
         die(f"pack: {len(failed)} of {len(rows)} destinations failed: {', '.join(failed)}",
-            kind="verification", output=pack, dry_run=STATE.dry_run, pack=rows, outputs=outputs)
+            code=stopped[0]["exit_code"] if stopped else 1, kind=stopped[0]["kind"] if stopped else "verification",
+            output=pack, dry_run=STATE.dry_run, pack=rows, outputs=outputs)
     emit(pack, pack=rows, outputs=outputs, stages=["pack"],
          verification=[{"step": "check", "ok": r["ok"], "platform": r["platform"]} for r in rows])
     return 0
@@ -405,6 +436,32 @@ def check_keys(obj: Any, schema: str, label: str) -> None:
         near = NEAR_KEYS.get(schema, {}).get(str(key)) or next(iter(difflib.get_close_matches(str(key), sorted(valid), n=1, cutoff=0.6)), None)
         die(f"{label}: unknown key {key!r}" + (f" (did you mean {near!r}?)" if near
             else f" (valid keys: {', '.join(sorted(valid))})"))
+
+
+def check_overlay(ov: Any, label: str) -> None:
+    """#326: a video layer is one kind of overlay, as overlay.py's --image/--text/--logo/--video
+    are one mutually exclusive choice, and the chromakey* keys only act on it. A logo, image and
+    text in one entry still draw the first of them, as before; only a combination with the new
+    "video" key is refused, so no project 2.8.6 rendered is refused now."""
+    if not isinstance(ov, dict):
+        return
+    if ov.get("video"):
+        others = [k for k in ("logo", "image", "text") if ov.get(k)]
+        if others:
+            die(f"{label}: give one of logo, image, text or video per entry, not video and {others[0]} "
+                "(add a second overlays[] entry for the other layer)")
+    else:
+        keyed = [k for k in ("chromakey", "chromakey_similarity", "chromakey_blend") if ov.get(k) is not None]
+        if keyed:
+            die(f"{label}: {keyed[0]} keys a colour out of a video layer and needs \"video\" (overlay.py --chromakey needs --video)")
+    if ov.get("chromakey") is None:
+        tuned = [k for k in ("chromakey_similarity", "chromakey_blend") if ov.get(k) is not None]
+        if tuned:
+            die(f"{label}: {tuned[0]} tunes \"chromakey\", which this entry does not set")
+    # scale is a layer width (overlay.py --scale). A text entry that carries it used to complete
+    # with the default font size, because the text branch never reads the flag.
+    if ov.get("text") and not any(ov.get(k) for k in ("logo", "image", "video")) and ov.get("scale") is not None:
+        die(f"{label}: scale sizes an image, logo or video layer; text size is font_size", kind="input")
 
 
 def require_object(obj: Any, label: str) -> None:
@@ -467,6 +524,8 @@ def validate_project(proj: Dict[str, Any], timeline: bool = False, stop_after: O
                     die(f"{name}[{i}]: must be an object {{...}}, got {type(item).__name__} {item!r:.60}")
         for i, item in enumerate(items if isinstance(items, list) else []):
             check_keys(item, f"{name}[]", f"{name}[{i}]")
+            if name == "overlays":
+                check_overlay(item, f"overlays[{i}]")
             if name != "clips":
                 continue
             # every clip stage starts from rel(c["src"]): without one it was a KeyError traceback
@@ -502,6 +561,13 @@ def sh(script: str, *argv: Any, extra: List[str] = None, stage: str = None) -> s
     cache instead of re-encoded. `stages_done` is unchanged either way: a cached stage is still
     a stage that happened.
     """
+    if (INTERMEDIATE["preset"] and script in _X264_STAGES
+            and "--preset" not in [str(a) for a in argv] + (extra or [])):
+        extra = (extra or []) + ["--preset", INTERMEDIATE["preset"]]
+        if not INTERMEDIATE["applied"]:
+            info(f"intermediate stages: preset {INTERMEDIATE['preset']} (the export re-encodes them; "
+                 "--intermediate-preset medium for the stages' own default)")
+        INTERMEDIATE["applied"] = True
     full = [str(a) for a in argv] + (extra or [])
     dest = full[full.index("-o") + 1] if "-o" in full[:-1] else None
     key = None
@@ -511,18 +577,21 @@ def sh(script: str, *argv: Any, extra: List[str] = None, stage: str = None) -> s
         # would make a second run with the first run's output already on disk miss every time.
         key_args = ["<out>" if a == dest else a for a in full]
         key = cache_key(stage, script, key_args, inputs, dest)
-        if cache_lookup(stage, key, dest):
+        if cache_lookup(stage, key, dest, Path(script).stem):
             CACHE["hits"].append(stage)
             info(f"→ {script} {stage}: served from --cache")
             # No child ran, so there is no document: say so rather than leaving the PREVIOUS
             # child's document standing, which a caller reading _LAST_DOC would misattribute.
             _LAST_DOC.clear()
             _LAST_DOC["cached"] = True
+            if not STATE.dry_run:
+                remember_written(dest)  # placed by this run, as a stage's own write would be (#415)
             return dest
         CACHE["misses"].append(stage)
         _refuse_uncached_earlier_stage(stage)
     elif stage and CACHE.get("dir"):
         CACHE["misses"].append(stage)
+        _cache_miss(stage, "no_output_path")  # nothing names where the artifact goes, so there is nothing to keep
     started = time.time()
     cmd = [str(HERE / script)] + [str(a) for a in argv] + (extra or []) + child_args() + ["--json"]
     info("→ " + " ".join(os.path.basename(c) if i < 1 else c for i, c in enumerate(cmd[:-1])))
@@ -541,14 +610,42 @@ def sh(script: str, *argv: Any, extra: List[str] = None, stage: str = None) -> s
         # needs (a timeout inside audio.py is a timeout, not an "input" error of render.py).
         err = doc.get("error") or {}
         extra_fields = {"hint": err["hint"]} if err.get("hint") else {}
-        die(f"{script} failed: {err.get('message') or (proc.stderr.strip().splitlines() or ['?'])[-1][:300]}",
-            code=int(doc.get("exit_code") or 1), kind=err.get("kind") or "input", stage=script, **extra_fields)
+        error_extra = absorb_stage(Path(script).stem, doc)  # the stage's reason/details and records ride along
+        extra_fields.update(_stage_failure_hw(doc))
+        why = err.get('message') or (proc.stderr.strip().splitlines() or ['?'])[-1][:300]
+        if kept_deliverables() and err.get("kind") in ("timeout", "interrupted"):
+            # a stage after the delivery (chapters, check): the stage's own "nothing was written"
+            # is about its own file, while the delivery is on disk (#415)
+            why = why.replace("; nothing was written", "") + f" ({kept_clause()})"
+            extra_fields.setdefault("output", kept_deliverables()[-1])
+        elif err.get("kind") in ("timeout", "interrupted") and doc.get("output") and os.path.isfile(str(doc["output"])):
+            # the stage was stopped after writing its own deliverable and kept it (export.py's
+            # --normalize pass): its message says so, and the file is this run's output too
+            extra_fields.setdefault("output", str(doc["output"]))
+        die(f"{script} failed: {why}",
+            code=int(doc.get("exit_code") or 1), kind=err.get("kind") or "input", stage=script, error_extra=error_extra, **extra_fields)
     _LAST_DOC.clear()
     _LAST_DOC.update(doc if isinstance(doc, dict) else {})
+    absorb_stage(Path(script).stem, doc)  # a stage's GPU facts (ran on VideoToolbox, fell back and why) and its diagnostics reach this result
     out_path = str(doc.get("output") or "")
+    if not STATE.dry_run:
+        # A file a stage of this run wrote is this run's, not someone else's: the chapters stage
+        # places its tagged copy over the export's delivery, which the output guard would
+        # otherwise refuse as an existing file without --overwrite (#415).
+        remember_written(out_path, dest)
     if key:
-        cache_store(stage, key, out_path or (dest or ""), time.time() - started)
+        cache_store(stage, key, out_path or (dest or ""), time.time() - started, doc)
     return out_path
+
+
+def _stage_failure_hw(doc: Any) -> Dict[str, Any]:
+    """A failed stage's `encoder` -- the command that failed -- for render's own failure document
+    (absorb_stage() has already joined the stage's `hw` to the earlier stages'; a fallback before
+    the failure is not lost). die() then adds `hw` for a kind: ffmpeg failure, as a tool's own
+    run() failure carries it."""
+    if not isinstance(doc, dict):
+        return {}
+    return {"encoder": doc["encoder"]} if doc.get("encoder") else {}
 
 
 # ------------------------------------------------------------------ the stage cache (1.17)
@@ -561,7 +658,7 @@ STAGE_ORDER = ("clips", "audiogram", "join", "silence", "fit", "captions", "grap
                "overlays", "audio", "loudness", "export", "chapters")
 
 def _fresh_cache() -> "Dict[str, Any]":
-    return {"dir": None, "ffmpeg": None, "hits": [], "misses": [], "saved_seconds": 0.0,
+    return {"dir": None, "ffmpeg": None, "hits": [], "misses": [], "miss_reasons": [], "saved_seconds": 0.0,
             "entries": 0, "would_hit": [], "from": None}
 
 
@@ -570,13 +667,38 @@ def _fresh_cache() -> "Dict[str, Any]":
 # inherit each other's hit/miss lists.
 CACHE: Dict[str, Any] = _fresh_cache()
 
+# The stages whose x264 encode (x265 on the HDR path, which takes the same --preset) is an
+# intermediate when an encoding export follows: export.py
+# re-encodes their output, so their own `medium` pass bought nothing the delivery keeps. Measured
+# on a 30 s 1080p reels render (4 cores): fit 18 s and captions 27 s of a 70 s run at `medium`;
+# `veryfast` at the same CRF encodes in about half the time (SSIM 0.997 against `medium`) and
+# the export, still `medium`, sets the delivered quality. 2.16: `superfast` (the default since): on
+# FFmpeg 8.0.1 the same render took 30 s instead of 33 s with veryfast, SSIM against a lossless
+# reference 0.9868 vs 0.9863 (the export decides what is kept); on 6.1 the two took the same time.
+# `ultrafast` was faster still (26 s) but measurably worse (0.9814). `--intermediate-preset medium`
+# restores the stages' own default.
+_X264_STAGES = frozenset({"cut.py", "fit.py", "join.py", "silence.py", "caption.py", "graphics.py", "overlay.py", "waveform.py"})
+INTERMEDIATE: Dict[str, Any] = {"preset": None, "applied": False}
+
+
+def _intermediate_used() -> Optional[str]:
+    """The preset `intermediate_preset` reports: only once a stage actually received it (a project
+    whose only encode is the export reports null)."""
+    return INTERMEDIATE["preset"] if INTERMEDIATE["applied"] else None
+
 
 def _content_hash(path: str) -> str:
     """The same cheap content fingerprint batch.py caches on: name, size, mtime, first and last
-    MB. Reused rather than reinvented so one file has one identity across the skill."""
+    MB. Reused rather than reinvented so one file has one identity across the skill. A file that
+    cannot be read keys as "missing" -- recorded (cache_input_unreadable), since two unreadable
+    files then share that part of the key."""
     try:
         return file_key(Path(path))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        entry = {"code": "cache_input_unreadable", "path": str(path)}
+        if not any(all(w.get(k) == v for k, v in entry.items()) for w in STATE.warnings):
+            warn(f"cache: could not fingerprint {path} ({exc}); it is keyed as \"missing\"", "cache_input_unreadable",
+                 path=str(path), error=str(exc))
         return "missing"
 
 
@@ -589,14 +711,19 @@ def ffmpeg_banner() -> str:
     key. Unreadable falls back to the parsed pair, which still separates the major releases.
     """
     try:
-        out = subprocess.run(["ffprobe", "-version"], stdout=subprocess.PIPE,
+        out = subprocess.run([found_exe("ffprobe"), "-version"], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", timeout=20).stdout
         first = (out or "").strip().splitlines()
         if first:
             return first[0].strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return ".".join(str(n) for n in ffmpeg_version())
+        why = "ffprobe -version printed nothing"
+    except (OSError, subprocess.SubprocessError) as exc:
+        why = str(exc)
+    pair = ".".join(str(n) for n in ffmpeg_version())
+    # two builds of one major.minor now share cache entries: say so
+    record_fallback(f"cache: the ffmpeg build banner could not be read ({why}); keying on ffmpeg {pair} instead, so builds "
+                    "of the same major.minor share entries", "cache_ffmpeg_banner_unreadable", used=pair, error=why)
+    return pair
 
 
 def cache_key(stage: str, script: str, argv: "Sequence[Any]", inputs: "Sequence[str]",
@@ -623,27 +750,55 @@ def cache_key(stage: str, script: str, argv: "Sequence[Any]", inputs: "Sequence[
         "inputs": [{"hash": _content_hash(p)} for p in inputs],
         "child": [a for a in child_args() if a != "--dry-run"],
         "codec": STATE.codec, "ext": Path(dest).suffix if dest else None,
+        # what a stage's encoder resolves from: $FFMPEG_SKILL_HW (inherited) and whether the outer
+        # command made it explicit (--hw/--no-hw, which reaches export.py too). A GPU encode is not
+        # the CPU's bytes, so a --hw artifact is never served to a CPU run or the other way round.
+        "hw": [os.environ.get(HW_ENV, "").strip().lower() in ("1", "true", "yes", "on"), os.environ.get(HW_FORCED_ENV) == "1"],
         "ffmpeg": CACHE.get("ffmpeg"), "skill": SKILL_VERSION, "contract": CONTRACT_VERSION,
     }
-    return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode(), usedforsecurity=False).hexdigest()
 
 
-def cache_lookup(stage: str, key: str, dest: str) -> bool:
+def _cache_miss(stage: str, reason: str, **facts: Any) -> bool:
+    """Record why `stage` was not served from the cache (`cache.miss_reasons`); a damaged entry
+    (unreadable sidecar, artifact of the wrong size) is also a warning and an audit line in the
+    cache directory, because something rewrote or truncated a file this tool wrote."""
+    CACHE["miss_reasons"].append(dict({"stage": stage, "reason": reason}, **facts))
+    if reason in ("sidecar_corrupt", "artifact_truncated"):
+        msg = f"cache: the {stage} entry is damaged ({reason.replace('_', ' ')}); the stage runs again"
+        warn(msg, "cache_entry_damaged", stage=stage, reason=reason, **facts)
+        audit("cache_entry_damaged", dict({"stage": stage, "reason": reason}, **facts),
+              default_path=str(Path(CACHE["dir"]) / ".ffskill-audit.jsonl"))
+    return False
+
+
+def cache_lookup(stage: str, key: str, dest: str, tool: Optional[str] = None) -> bool:
     """Put the cached artifact for `key` at `dest` and return True, or return False on any
-    mismatch -- silently, because a miss is not an error, it is just work to do."""
+    mismatch. A miss is not an error, it is work to do, but it is not silent either: why each
+    stage missed is in `cache.miss_reasons` (not_cached, sidecar_missing, artifact_missing,
+    sidecar_corrupt, artifact_truncated). A hit replays the stage's recorded result (its
+    verification, notes and diagnostics) into this run, as a stage that ran would have."""
     cdir = CACHE.get("dir")
     if not cdir:
         return False
     side = Path(cdir) / f"{key}.json"
     art = Path(cdir) / f"{key}{Path(dest).suffix or '.bin'}"
-    if not (side.exists() and art.exists()):
-        return False
+    if not side.exists() and not art.exists():
+        return _cache_miss(stage, "not_cached", key=key)
+    if not side.exists():
+        return _cache_miss(stage, "sidecar_missing", key=key, artifact=str(art))
+    if not art.exists():
+        return _cache_miss(stage, "artifact_missing", key=key, sidecar=str(side))
     try:
         meta = json.loads(side.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if int(meta.get("size") or -1) != art.stat().st_size:
-        return False
+        if not isinstance(meta, dict):
+            raise ValueError("not a JSON object")
+        expected = int(meta.get("size") or -1)
+    except (OSError, ValueError, TypeError) as exc:
+        return _cache_miss(stage, "sidecar_corrupt", key=key, sidecar=str(side), error=str(exc))
+    actual = art.stat().st_size
+    if expected != actual:
+        return _cache_miss(stage, "artifact_truncated", key=key, artifact=str(art), expected_size=expected, actual_size=actual)
     if STATE.dry_run:
         CACHE["would_hit"].append(stage)
         return True
@@ -655,11 +810,26 @@ def cache_lookup(stage: str, key: str, dest: str) -> bool:
     except OSError:
         shutil.copy2(art, dest)     # ... and a copy where it does not. Never a move: the cache
     CACHE["saved_seconds"] += float(meta.get("seconds") or 0.0)
+    result = meta.get("result")
+    if isinstance(result, dict):
+        absorb_stage(tool or stage, dict(result, status="completed", dry_run=False))  # tagged as the stage's tool, as a live run is
+    else:
+        # an entry written before the stage's result was kept: what the stage verified is unknown
+        record_skip(f"cache: the {stage} entry predates recorded results, so what that stage verified is not "
+                    "known; rerun without --cache to see it", "cache_result_unrecorded", stage=stage)
     return True
 
 
-def cache_store(stage: str, key: str, produced: str, seconds: float) -> None:
-    """Keep `produced` for the next run. Never under --dry-run: a plan writes nothing."""
+def _stage_result(doc: Any) -> Dict[str, Any]:
+    """What a cache entry keeps of the stage's own --json document, replayed on a hit."""
+    if not isinstance(doc, dict):
+        return {}
+    return {k: doc[k] for k in ("verified", "verification", "notes", "diagnostics") if k in doc}
+
+
+def cache_store(stage: str, key: str, produced: str, seconds: float, doc: Any = None) -> None:
+    """Keep `produced` for the next run. Never under --dry-run: a plan writes nothing. A store
+    that fails is a warning (cache_store_failed), never a failure of the run."""
     cdir = CACHE.get("dir")
     if not cdir or STATE.dry_run or not produced or not os.path.exists(produced):
         return
@@ -669,46 +839,127 @@ def cache_store(stage: str, key: str, produced: str, seconds: float) -> None:
         Path(cdir, f"{key}.json").write_text(json.dumps({
             "stage": stage, "ffmpeg": CACHE.get("ffmpeg"), "skill": SKILL_VERSION,
             "created": time.time(), "size": art.stat().st_size, "seconds": round(seconds, 2),
-            "artifact": art.name}, indent=2), encoding="utf-8")
+            "artifact": art.name, "result": _stage_result(doc)}, indent=2), encoding="utf-8")
         CACHE["entries"] += 1
     except OSError as exc:
-        info(f"cache: could not store the {stage} artifact ({exc}); the run is unaffected")
+        warn(f"cache: could not store the {stage} artifact ({exc}); the run is unaffected", "cache_store_failed",
+             stage=stage, error=str(exc))
+
+
+def _utc_now() -> str:
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _plan_sha256(path: str) -> Optional[str]:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _reject_plan(path: str, plan_sha256: Optional[str], reason: str, msg: str, *, hint: Optional[str] = None,
+                 **details: Any) -> None:
+    """Refuse a plan: one audit record (the plan's `<plan>.audit.jsonl`, or --audit-log), then
+    the failure document with `error.reason` and `error.details` -- the plan, its sha256, when it
+    was checked, the facts below, and where the audit record went."""
+    details = dict({"plan": path, "plan_sha256": plan_sha256, "checked_at": _utc_now()}, **details)
+    details["audit_log"] = audit("plan_rejected", dict(details, reason=reason), default_path=path + ".audit.jsonl",
+                                 plan_sha256=plan_sha256)
+    refuse("input", reason, msg, hint=hint, extra={"plan": path}, **details)
+
+
+def plan_input_status(inputs: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Each fingerprinted plan input against the file as it is now: {path, status: unchanged |
+    changed | missing, expected: {size, sha256_head_tail}, actual: {size, sha256_head_tail} or
+    "missing"}."""
+    rows: List[Dict[str, Any]] = []
+    for inp in inputs:
+        inp = inp if isinstance(inp, dict) else {"path": inp}
+        p = inp.get("path")
+        expected = {"size": inp.get("size"), "sha256_head_tail": inp.get("sha256_head_tail")}
+        if not p or not os.path.isfile(str(p)):
+            rows.append({"path": p, "status": "missing", "expected": expected, "actual": "missing"})
+            continue
+        try:
+            now = fingerprint(str(p))
+        except OSError:
+            rows.append({"path": p, "status": "missing", "expected": expected, "actual": "missing"})
+            continue
+        actual = {"size": now["size"], "sha256_head_tail": now["sha256_head_tail"]}
+        rows.append({"path": p, "status": "unchanged" if actual == expected else "changed", "expected": expected, "actual": actual})
+    return rows
+
+
+def run_check(output: str, platform: Optional[str], content: bool) -> Dict[str, Any]:
+    """check.py on `output` for a project's "check" stage or a plan's check step: `platform`
+    (or none: check.py's youtube assumption, judgement rows WARN) and `content` (--content).
+    Returns check.py's own document; when check.py printed none that parses, a failure document
+    in its shape -- status failed, error {kind, reason: check_output_unparsed, message,
+    exit_code, stderr_tail} -- so a caller never reads a bare string."""
+    cp = run_tool([str(HERE / "check.py"), output] + (["--platform", str(platform)] if platform else [])
+                  + (["--content"] if content else []) + ["--json"] + child_args())
+    try:
+        doc = json.loads(cp.stdout)
+    except ValueError:
+        doc = None
+    if isinstance(doc, dict):
+        return doc
+    tail = cp.stderr.strip()[-300:]
+    msg = "check.py printed no JSON document" + (f": {tail.splitlines()[-1]}" if tail else "")
+    warn(f"check: {msg}", "check_output_unparsed", exit_code=cp.returncode)
+    return {"status": "failed", "platform": platform, "ok": False,
+            "error": {"kind": "timeout" if cp.returncode == 124 else "verification", "reason": "check_output_unparsed",
+                      "message": msg, "exit_code": cp.returncode, "stderr_tail": tail}}
 
 
 def execute_plan(plan: Dict[str, Any], path: str) -> int:
     """Run a plan written by `<tool> --plan FILE`: refuse if any fingerprinted input changed since
     the plan was made (the plan's commands would then describe a different edit), run the tool
-    with the planned argv, then the plan's verify steps. --dry-run prints the planned commands."""
+    with the planned argv, then the plan's verify steps. --dry-run prints the planned commands.
+
+    Every refusal is `kind: input` with `error.reason` and `error.details` and appends one audit
+    record (docs/design-decisions.md, "Nothing happens silently")."""
+    digest = _plan_sha256(path)
     if plan.get("plan_version") != PLAN_VERSION:
-        die(f"{path}: plan_version {plan.get('plan_version')!r} is not {PLAN_VERSION}")
+        _reject_plan(path, digest, "plan_version_unsupported",
+                     f"{path}: plan_version {plan.get('plan_version')!r} is not {PLAN_VERSION}",
+                     plan_version=plan.get("plan_version"), supported=[PLAN_VERSION])
     tool = str(plan.get("tool") or "")
     script = HERE / f"{tool}.py"
     if not re.fullmatch(r"[a-z][a-z0-9_]*", tool) or not script.exists() or tool == "render":
-        die(f"{path}: unknown tool {tool!r}")
-    changed = []
-    for inp in plan.get("inputs") or []:
-        p = inp.get("path")
-        if not p or not os.path.isfile(p):
-            changed.append(f"{p}: missing")
-            continue
-        now = fingerprint(p)
-        if now["size"] != inp.get("size") or now["sha256_head_tail"] != inp.get("sha256_head_tail"):
-            changed.append(f"{p}: content changed since the plan was made")
-    if changed:
-        die("plan inputs differ from what was planned; re-run the tool with --plan to make a new plan:\n  " + "\n  ".join(changed),
-            hint="plans are bound to the exact input files they were made from")
+        _reject_plan(path, digest, "plan_unknown_tool", f"{path}: unknown tool {tool!r}", tool=tool)
+    unbound = [str(u) for u in (plan.get("unbound_inputs") or [])]
+    rows = plan_input_status(plan.get("inputs") or [])
+    bad = [r for r in rows if r["status"] != "unchanged"]
+    if bad:
+        lines = [f"{r['path']}: missing" if r["status"] == "missing" else f"{r['path']}: content changed since the plan was made"
+                 for r in bad]
+        _reject_plan(path, digest, "plan_inputs_changed",
+                     "plan inputs differ from what was planned; re-run the tool with --plan to make a new plan:\n  " + "\n  ".join(lines),
+                     hint="plans are bound to the exact input files they were made from",
+                     inputs=rows, unbound_inputs=unbound)
+    if unbound:
+        warn(f"{len(unbound)} plan input(s) did not exist when the plan was made, so nothing checks that they are the files "
+             "it was made for: " + ", ".join(unbound), "plan_unbound_inputs", paths=unbound)
     if plan.get("cwd"):
         if not os.path.isdir(plan["cwd"]):
-            die(f"plan cwd {plan['cwd']} no longer exists; relative paths in the plan would resolve elsewhere -- re-plan")
+            _reject_plan(path, digest, "plan_cwd_missing",
+                         f"plan cwd {plan['cwd']} no longer exists; relative paths in the plan would resolve elsewhere -- re-plan",
+                         cwd=plan["cwd"])
         os.chdir(plan["cwd"])
     if not isinstance(plan.get("argv"), list):
-        die(f"{path}: argv must be a list")
+        _reject_plan(path, digest, "plan_argv_invalid", f"{path}: argv must be a list", argv_type=type(plan.get("argv")).__name__)
     argv = [str(a) for a in plan["argv"]]
     if STATE.dry_run:
         for c in plan.get("commands") or []:
             STATE.commands.append(c)
             info("[dry-run] " + c)
-        emit(plan.get("output"), plan=path, tool=tool, stages=[tool], check=None)
+        for step in plan.get("verify") or []:
+            if step.get("tool") == "check" and (step.get("platform") or step.get("content") is True):
+                record_skip("[dry-run] the plan's check step is not run: there is no output to check yet",
+                            "check_dry_run", platform=step.get("platform"), content=step.get("content") is True)
+        emit(plan.get("output"), plan=path, plan_sha256=digest, tool=tool, stages=[tool], check=None, unbound_inputs=unbound)
         return 0
     info(f"executing plan {path}: {tool} " + " ".join(argv))
     proc = run_tool([str(script)] + argv + child_args() + ["--json"])
@@ -723,8 +974,12 @@ def execute_plan(plan: Dict[str, Any], path: str) -> int:
         doc = {}
     if proc.returncode != 0 or doc.get("status") != "completed":
         err = doc.get("error") or {}
+        error_extra = absorb_stage(tool, doc)  # the tool's reason/details and records ride along
+        # the tool's exit code is the plan's (124 timeout, 130/143 interrupted), as sh() passes a stage's on
         die(f"{tool} failed while executing the plan: {err.get('message') or proc.stderr.strip()[-300:]}",
-            kind=err.get("kind", "ffmpeg"), plan=path, tool=tool)
+            code=child_exit_code(doc, proc.returncode), kind=err.get("kind", "ffmpeg"), plan=path, tool=tool,
+            error_extra=error_extra, **_stage_failure_hw(doc))
+    absorb_stage(tool, doc)  # the tool's GPU facts (fell back and why, ran on VideoToolbox) and diagnostics reach this result
     output = doc.get("output") or plan.get("output")
     check_result = None
     exit_code = 0
@@ -732,14 +987,12 @@ def execute_plan(plan: Dict[str, Any], path: str) -> int:
         # a check step names a platform, asks for check.py --content's black/frozen/silence rows
         # ("content": true), or both -- the same keys a project's "check" stage takes
         if step.get("tool") == "check" and (step.get("platform") or step.get("content") is True) and output:
-            cp = run_tool([str(HERE / "check.py"), output] + (["--platform", str(step["platform"])] if step.get("platform") else [])
-                          + (["--content"] if step.get("content") is True else []) + ["--json"] + child_args())
-            try:
-                check_result = json.loads(cp.stdout)
-            except ValueError:
-                check_result = {"error": cp.stderr.strip()[-300:]}
+            check_result = run_check(output, step.get("platform"), step.get("content") is True)
             if check_result.get("failed") or check_result.get("status") == "failed" or check_result.get("error"):
                 exit_code = 1
+        elif step.get("tool") == "check" and not output:
+            record_skip("the plan's check step is not run: the tool reported no output", "check_no_output",
+                        platform=step.get("platform"))
     # a failed platform check is reported the way the direct path reports it: the tool completed,
     # verified is false, the rows say what to fix (review 6: a plan must not fail harder than the
     # same command run by hand)
@@ -748,9 +1001,10 @@ def execute_plan(plan: Dict[str, Any], path: str) -> int:
         info(f"plan done: {output}, but the {check_result.get('platform') or 'content'} check failed" + (f": {', '.join(failed_rows)}" if failed_rows else ""))
     else:
         info(f"plan done: {output}")
-    emit(output, plan=path, tool=tool, stages=[tool] + (["check"] if check_result else []), check=check_result, tool_result=doc,
-         verification=([{"step": "check", "ok": not exit_code, "platform": check_result.get("platform")}] if check_result else [])
-         + [s for s in (doc.get("verification") or []) if s.get("step") != "probe"])
+    # the tool's own steps (export's loudness, ...) come in through absorb_stage() above, tagged
+    # with `stage`, so `verified` is theirs and the check's together
+    emit(output, plan=path, plan_sha256=digest, unbound_inputs=unbound, tool=tool, stages=[tool] + (["check"] if check_result else []), check=check_result, tool_result=doc,
+         verification=([{"step": "check", "ok": not exit_code, "platform": check_result.get("platform")}] if check_result else []))
     return 0
 
 
@@ -774,7 +1028,8 @@ def frame_from_preset(frame: Dict[str, Any], export: Dict[str, Any]) -> None:
     if abs(float(m.group(1)) / float(m.group(2)) - preset["w"] / preset["h"]) > 0.01:
         return
     frame["width"], frame["height"] = preset["w"], preset["h"]
-    info(f"frame: {preset['w']}x{preset['h']} from the {export['preset']} export preset (captions and overlays are sized for delivery)")
+    warn(f"frame: {preset['w']}x{preset['h']} from the {export['preset']} export preset (captions and overlays are sized for delivery)",
+         "frame_from_export_preset", preset=export["preset"], width=preset["w"], height=preset["h"])
 
 
 def export_timeline(proj: Dict[str, Any], rel, dest: str) -> int:
@@ -827,6 +1082,22 @@ def export_timeline(proj: Dict[str, Any], rel, dest: str) -> int:
     return 0
 
 
+def _has_sound(current: str, proj: Dict[str, Any], rel: Any) -> bool:
+    """Whether the render carries sound at this point: measured on the intermediate when it
+    exists, otherwise (a dry run) from the sources: a clip with an audio stream, music or a
+    replacement track."""
+    if os.path.exists(current) and not STATE.dry_run:   # a dry run may find an earlier render's file there
+        return bool((probe(current).get("audio") or {}).get("codec"))
+    au = proj.get("audio") or {}
+    if au.get("music") or au.get("replace"):
+        return True
+    for c in proj.get("clips") or []:
+        src = rel(c["src"]) if isinstance(c, dict) and c.get("src") else None
+        if not src or not os.path.exists(src) or (probe(src).get("audio") or {}).get("codec"):
+            return True
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", nargs="?", help="project.json, or a plan.json written by <tool> --plan")
@@ -845,6 +1116,14 @@ def main() -> int:
                     help="write the project's cut as an editor timeline instead of rendering it: .fcpxml (Final Cut, "
                          "Resolve), .edl (CMX 3600: Premiere, Resolve, Avid) or .otio (OpenTimelineIO); clips, speed, "
                          "transitions, the music bed and chapter markers carry over, everything else is listed as not exported")
+    ap.add_argument("--audit-log", metavar="FILE",
+                    help="append the audit records of this run (a refused plan, a lock taken over, ...) to FILE as JSON lines; "
+                         "default for a refused plan: <plan>.audit.jsonl next to it. A record that cannot be written is a "
+                         "warning, never a failure")
+    ap.add_argument("--intermediate-preset", default="superfast", choices=X264_PRESETS,
+                    help="x264/x265 preset of the stages before an encoding export (default superfast: the export "
+                         "re-encodes them, and its own preset sets the delivered quality); medium = the stages' own default. "
+                         "Not used without an export stage, with --stop-after before it, with --fast, or for a copy export")
     ap.add_argument("--stop-after", choices=["clips", "join", "silence", "fit", "captions", "graphics", "overlays", "audio", "loudness", "export"], help="stop after this stage (for iterating)")
     tpl = ap.add_argument_group("delivery templates (one command per destination)")
     tpl.add_argument("--template", metavar="NAME", help="render INPUT with a shipped template: " + ", ".join(template_names())
@@ -863,13 +1142,16 @@ def main() -> int:
                                             "or 'all' its directory is where the pack is written")
     tpl.add_argument("--write-project", metavar="FILE", help="write the filled project.json for editing and stop (no render)")
     add_common(ap)
+    add_hw_orchestrator_args(ap)
     args = ap.parse_args()
     apply_common(args)
+    STATE.audit_log = os.path.abspath(args.audit_log) if args.audit_log else None
 
     if args.list_templates:
         list_templates()
         return 0
     if args.init:
+        guard_sidecar(args.init)
         Path(args.init).write_text(json.dumps(TEMPLATE, indent=2) + "\n", encoding="utf-8")
         info(f"wrote {args.init}; edit clips/src and run: render.py {args.init}")
         print(args.init)
@@ -908,6 +1190,10 @@ def main() -> int:
     validate_project(proj, timeline=bool(args.export_timeline), stop_after=args.stop_after)
     if args.write_project:
         # Only the filled project: the point is to edit it before rendering, so nothing runs.
+        # the project file and every clip it names are inputs the JSON must not replace
+        where = Path(args.project).resolve().parent if args.project else Path.cwd()
+        srcs = [c["src"] for c in proj.get("clips") or [] if isinstance(c, dict) and isinstance(c.get("src"), str)]
+        guard_sidecar(args.write_project, args.project, *[str(where / s) for s in srcs])
         try:
             Path(args.write_project).write_text(json.dumps(proj, indent=2) + "\n", encoding="utf-8")
         except OSError as exc:
@@ -932,6 +1218,15 @@ def main() -> int:
     output = rel(proj.get("output") or "final.mp4")
     # the final stage is a copy from the work dir, so run()'s own guard never sees the sources (review 5)
     refuse_output_is_input(output, *[rel(c.get("src")) for c in clips if c.get("src")])
+    if _reaches("overlays", args.stop_after):
+        # #326: an overlay video is the caller's file, never an earlier stage's output, so a
+        # missing one is refused here, under --dry-run too, not after every stage before it ran
+        for i, ov in enumerate(proj.get("overlays") or []):
+            if ov.get("video"):
+                layer = rel(ov["video"])
+                refuse_output_is_input(output, layer)
+                if not os.path.isfile(layer):
+                    die(f"overlays[{i}].video: file not found: {layer}", kind="input")
     # 2.0 refuses an existing output without --overwrite; the final place_output() would, but
     # only after every stage had run -- say so before the first one instead
     _check_existing_output(["ffmpeg", output])
@@ -947,7 +1242,12 @@ def main() -> int:
         work.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         die(f"cannot create the work directory {work}: {e}")
-    if not args.keep and not args.work:
+    # --stop-after before the export reports a stage file inside the work directory as its output:
+    # removing the directory at exit deleted the file the result named (and its output_identity)
+    previewing = bool(args.stop_after) and args.stop_after != "export" and not STATE.dry_run
+    if previewing and not args.keep and not args.work:
+        info(f"--stop-after {args.stop_after}: keeping the work directory {work}, since the result's output is in it")
+    if not args.keep and not args.work and not previewing:
         # a failed or dry run used to leave <output>_work_<pid>/ behind (sweep F15): the
         # auto-named directory is ours alone, so remove it on every exit path
         import atexit
@@ -966,6 +1266,13 @@ def main() -> int:
     # unchanged -- it never gets a --platform it did not ask for.
     dest = str(((proj.get("check") or {}).get("platform") or "")) if proj.get("template") else ""
     platform_args: List[str] = ["--platform", dest] if dest in PLATFORMS and PLATFORMS[dest].get("frame") else []
+    ex_cfg = proj.get("export")
+    # a malformed "export" is refused by the export stage with its own message; here it only means
+    # "no encoding export", never a traceback before that refusal
+    ex_preset = str(ex_cfg.get("preset") or "") if isinstance(ex_cfg, dict) else ""
+    if (ex_preset and "copy" not in PRESETS.get(ex_preset, {}).get("video", [])
+            and args.stop_after in (None, "export") and args.intermediate_preset != "medium" and not STATE.fast):
+        INTERMEDIATE["preset"] = args.intermediate_preset
     stages_done: List[str] = []
     # what the caption stage reported (wrapped/split counts and the fit-size keys), so a caller
     # reading render.py's JSON can see whether the type was shrunk to fit or a cue was split.
@@ -1097,7 +1404,7 @@ def main() -> int:
         stages_done.append("audiogram")
 
     if args.stop_after == "clips":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- join
@@ -1113,7 +1420,7 @@ def main() -> int:
         sh("join.py", *argv, stage="join")
         stages_done.append("join")
     if args.stop_after == "join":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- silence
@@ -1128,7 +1435,7 @@ def main() -> int:
         current = nxt
         stages_done.append("silence")
     if args.stop_after == "silence":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- fit (duration and/or frame)
@@ -1165,7 +1472,7 @@ def main() -> int:
         current = nxt
         stages_done.append("fit")
     if args.stop_after == "fit":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- captions
@@ -1194,7 +1501,7 @@ def main() -> int:
         current = nxt
         stages_done.append("captions")
     if args.stop_after == "captions":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- graphics
@@ -1213,7 +1520,7 @@ def main() -> int:
         if "graphics" not in stages_done:
             stages_done.append("graphics")
     if args.stop_after == "graphics":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- overlays
@@ -1226,9 +1533,13 @@ def main() -> int:
             argv += ["--image", rel(ov["image"])]
         elif ov.get("text"):
             argv += ["--text", ov["text"]]
+        elif ov.get("video"):
+            # #326: sized and placed here, after fit, against the frame that ships
+            argv += ["--video", rel(ov["video"])]
         else:
-            die(f"overlays[{i}] needs image or text")
-        for k, flag in (("position", "--position"), ("start", "--start"), ("end", "--end"), ("fade", "--fade"), ("opacity", "--opacity"), ("scale", "--scale"), ("font_size", "--font-size"), ("font", "--font"), ("font_file", "--font-file"), ("margin", "--margin"), ("platform", "--platform")):
+            die(f"overlays[{i}] needs logo, image, text or video")
+        for k, flag in (("position", "--position"), ("start", "--start"), ("end", "--end"), ("fade", "--fade"), ("opacity", "--opacity"), ("scale", "--scale"), ("font_size", "--font-size"), ("font", "--font"), ("font_file", "--font-file"), ("margin", "--margin"), ("platform", "--platform"),
+                        ("chromakey", "--chromakey"), ("chromakey_similarity", "--chromakey-similarity"), ("chromakey_blend", "--chromakey-blend")):
             if ov.get(k) is not None:
                 argv += [flag, str(ov[k])]
         if ov.get("box"):
@@ -1240,7 +1551,7 @@ def main() -> int:
         if "overlays" not in stages_done:
             stages_done.append("overlays")
     if args.stop_after == "overlays":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- audio
@@ -1277,11 +1588,16 @@ def main() -> int:
         current = nxt
         stages_done.append("audio")
     if args.stop_after == "audio":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- loudness
     ld = proj.get("loudness")
+    if ld and not _has_sound(current, proj, rel):
+        # a template's loudness stage on a silent source (screen recording, timelapse, drone) used
+        # to fail the render after the picture stages had run, while the dry run said it would work
+        record_skip("the loudness stage is not run: the video has no audio", "loudness_no_audio", stage="loudness")
+        ld = None
     if ld:
         nxt = str(work / f"loudnorm{mid}")
         argv = [current, "-o", nxt]
@@ -1293,7 +1609,7 @@ def main() -> int:
         current = nxt
         stages_done.append("loudness")
     if args.stop_after == "loudness":
-        emit(current, stages=stages_done)
+        emit(current, stages=stages_done, intermediate_preset=_intermediate_used())
         return 0
 
     # ---- export
@@ -1310,7 +1626,8 @@ def main() -> int:
             # was rendered again; a platform preset with no loudness stage of its own gets the
             # one-export behaviour by default ("normalize": false opts out)
             normalize = True
-            info(f"export: --normalize on by default for the {ex['preset']} preset (set \"normalize\": false to skip)")
+            warn(f"export: --normalize on by default for the {ex['preset']} preset (set \"normalize\": false to skip)",
+                 "normalize_on_by_default", preset=ex["preset"])
         if normalize:
             argv += ["--normalize"]  # one export that meets the platform's loudness (export.py --normalize)
         sh("export.py", *argv, stage="export")
@@ -1320,6 +1637,8 @@ def main() -> int:
             place_output(current, output)
         info(("[dry-run] would copy" if STATE.dry_run else "copied") + f" final stage to {output}")
     current = output
+    if not STATE.dry_run:
+        mark_delivered(output)  # the chapters and check stages run on it: a stop from here keeps it, and says so (#415)
 
     # ---- chapters (metadata.py on the delivered file: streams copied, markers written)
     ch = proj.get("chapters")
@@ -1343,22 +1662,35 @@ def main() -> int:
     ck = proj.get("check")
     check_result = None
     exit_code = 0
-    if ck and ck.get("platform") and not STATE.dry_run:
-        proc = run_tool([str(HERE / "check.py"), output, "--platform", ck["platform"], "--json"]
-                        + (["--content"] if ck.get("content") is True else []) + child_args())
-        try:
-            check_result = json.loads(proc.stdout)
-        except ValueError:
-            check_result = {"error": proc.stderr.strip()[-300:]}
+    # a platform, --content's rows, or both: the same rule a plan's check step follows (a
+    # {"content": true} stage without a platform used to be skipped without a word)
+    wants_check = bool(ck) and (bool(ck.get("platform")) or ck.get("content") is True)
+    check_label = ck.get("platform") if ck and ck.get("platform") else "content"
+    if wants_check and STATE.dry_run:
+        record_skip("[dry-run] the check stage is not run: a dry run writes no output to check",
+                    "check_dry_run", platform=ck.get("platform"), content=ck.get("content") is True)
+    elif wants_check:
+        check_result = run_check(output, ck.get("platform"), ck.get("content") is True)
         if check_result.get("failed"):
             info(f"check: {check_result['failed']} FAIL — " + "; ".join(f"{r['check']}={r['value']} ({r['fix']})" for r in check_result["checks"] if r["status"] == "FAIL"))
             exit_code = 1
         elif check_result.get("error") or check_result.get("status") == "failed":
-            info(f"check: could not run check.py — {check_result.get('error')}")
+            err = check_result.get("error")
+            if isinstance(err, dict) and err.get("kind") in ("timeout", "interrupted"):
+                # stopped, not failed: the run exits with check.py's own code (124, 130/143), as a
+                # stage that stopped does, and says the delivery it had written is kept (#415)
+                why = str(err.get("message") or "").replace("; nothing was written", "")
+                die(f"check.py failed: {why} ({kept_clause()})",
+                    code=int(check_result.get("exit_code") or err.get("exit_code") or 1), kind=err["kind"],
+                    stage="check.py", output=output, stages=stages_done)
+            info(f"check: could not run check.py — {err.get('message') if isinstance(err, dict) else err}")
             exit_code = 1
         else:
-            info(f"check: OK for {ck['platform']}")
+            info(f"check: OK for {check_label}")
         stages_done.append("check")
+    elif "check" in proj:
+        record_skip('the check stage names neither "platform" nor "content": true, so nothing was checked',
+                    "check_nothing_to_check", keys=sorted(ck or {}))
 
     if not args.keep and not args.work:
         # Also clean up on --dry-run: a dry run still creates this directory (and some steps,
@@ -1371,14 +1703,14 @@ def main() -> int:
         # The deliverable is written and verified, but it does not meet the requested platform
         # spec (or the check itself could not run): a failed delivery, reported as one.
         failed_rows = [r["check"] for r in (check_result or {}).get("checks", []) if r.get("status") == "FAIL"]
-        die(f"rendered {output} but the {ck['platform']} check failed" + (f": {', '.join(failed_rows)}" if failed_rows else ""),
+        die(f"rendered {output} but the {check_label} check failed" + (f": {', '.join(failed_rows)}" if failed_rows else ""),
             kind="verification", output=output, dry_run=STATE.dry_run, stages=stages_done, check=check_result,
             probe=probe(output, role="output"))
     info(f"rendered {output} via {' → '.join(stages_done)}")
     cache_report = None
     if args.cache:
         cache_report = {"dir": CACHE["dir"], "ffmpeg": CACHE["ffmpeg"],
-                        "hits": CACHE["hits"], "misses": CACHE["misses"],
+                        "hits": CACHE["hits"], "misses": CACHE["misses"], "miss_reasons": CACHE["miss_reasons"],
                         "saved_seconds": round(CACHE["saved_seconds"], 1),
                         "entries": CACHE["entries"]}
         if STATE.dry_run:
@@ -1392,8 +1724,8 @@ def main() -> int:
         snap_report = dict(snap_reports[0])
         snap_report["clips"] = snap_reports
     emit(output, stages=stages_done, check=check_result, snap=snap_report, cache=cache_report,
-         caption=caption_report,
-         verification=[{"step": "check", "ok": True, "platform": ck["platform"]}] if check_result else [])
+         caption=caption_report, intermediate_preset=_intermediate_used(),
+         verification=[{"step": "check", "ok": True, "platform": ck.get("platform")}] if check_result else [])
     return 0
 
 

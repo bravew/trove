@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 
 from _common import add_common, apply_common, default_output, die, emit, ffmpeg_base, info, probe, run, video_args, X264_PRESETS, concat_list_line, fmt_secs
+from _common.emit import note, warn
+from _common.probe import display_size, square_pixels_note
 
 
 def even(n: float) -> int:
@@ -97,13 +99,17 @@ def main() -> int:
         # to be dropped silently, giving a shorter video; name the gap and what was left out
         later = _frames_after(directory, args.pattern, i)
         if later:
-            info(f"WARNING: frame {args.pattern % i} is missing; {len(later)} later frame(s) "
-                 f"(from {later[0].name}) are NOT in the sequence -- fill the gap or rename them")
+            warn(f"frame {args.pattern % i} is missing; {len(later)} later frame(s) "
+                 f"(from {later[0].name}) are NOT in the sequence -- fill the gap or rename them", "sequence_gap",
+                 missing=args.pattern % i, frames_left_out=len(later), first_left_out=later[0].name)
 
     frame_meta = probe(str(frames[0]))
     if not frame_meta.get("video"):
         die(f"{frames[0]} is not a readable image")
-    sw, sh = frame_meta["video"]["width"], frame_meta["video"]["height"]
+    # the displayed frame: an EXIF rotation applied, non-square pixels squared (#411)
+    sw, sh = display_size(frame_meta["video"])
+    if square_pixels_note(frame_meta["video"], "the first frame"):
+        note(square_pixels_note(frame_meta["video"], "the first frame"))
 
     if args.width and args.height:
         out_w, out_h = even(args.width), even(args.height)
@@ -131,7 +137,8 @@ def main() -> int:
         cmd = ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", str(list_path)]
         vf = [f"scale={out_w}:{out_h}", "setsar=1", f"fps={args.fps:g}"]
         cmd += ["-vf", ",".join(vf)]
-        cmd += video_args(None, args.crf, args.preset)
+        # RGB (PNG) frames are converted to the BT.709 the line is tagged with (the first frame's probe)
+        cmd += video_args(None, args.crf, args.preset, source=frame_meta)
         # The concat demuxer's trailing repeated-last-file trick (needed so the last real file's
         # duration line takes effect) has been observed to produce an extra frame's worth of
         # duration on some ffmpeg builds -- force the exact intended length rather than trust it.

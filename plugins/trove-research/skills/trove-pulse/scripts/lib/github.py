@@ -102,7 +102,7 @@ def _fetch_json(
 
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with http.open_request(req, timeout) as resp:
             body = resp.read().decode("utf-8")
             return json.loads(body)
     except urllib.error.HTTPError as e:
@@ -169,10 +169,17 @@ def _compute_relevance(
 # GitHub search qualifiers the planner sometimes writes straight into the topic
 # string (e.g. "open source AI stars:>1000 created:>2025-03-20"). They must not
 # reach the query builder in `search_github`: it appends its own
-# `created:>{from_date}`, and when two `created:` qualifiers collide GitHub
+# `created:{from_date}..{to_date}`, and when two `created:` qualifiers collide GitHub
 # honours the FIRST and silently ignores ours. The API then returns
 # out-of-window items that `parse_github_response`'s date filter drops
 # wholesale — a source that fetches results and reports zero (issue #949).
+# Qualifiers may also arrive fully wrapped in one pair of parens/brackets/
+# quotes ("(created:>2025-03-20)", '"stars:>1000"'), which an LLM planner
+# plausibly emits; _WRAPPED_QUALIFIER_RE consumes the whole wrapper pair with
+# the qualifier so no stray `()`/`""` residue reaches the query (issue #952).
+# The plain regex's boundary also accepts wrapper openers so a qualifier with
+# a missing closer ("(created:>2025-03-20") is still stripped rather than
+# leaking into the query; qualifier-only wrapper residue is discarded below.
 QUALIFIER_KEYS = frozenset({
     "archived", "assignee", "author", "base", "closed", "comments", "commenter",
     "created", "fork", "forks", "head", "in", "interactions", "involves", "is",
@@ -182,10 +189,26 @@ QUALIFIER_KEYS = frozenset({
     "topic", "topics", "type", "updated", "user",
 })
 
+_QUALIFIER_KEYS_ALT = "|".join(sorted(QUALIFIER_KEYS))
+
 _QUALIFIER_RE = re.compile(
-    r"(?:(?<=[\s,;])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
+    r"(?:(?<=[\s,;(\[\"'])|^)(?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
     re.IGNORECASE,
 )
+
+# A qualifier fully wrapped in a single pair of parens/brackets/quotes. The
+# wrapper pair is consumed with the qualifier, so stripping leaves no residue.
+# An unbalanced quote (e.g. `label:"bug`) is not a wrapper shape and is left
+# to _QUALIFIER_RE, which strips the qualifier as before.
+_WRAPPED_QUALIFIER_RE = re.compile(
+    r"[\(\[\"'](?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[\)\]\"']",
+    re.IGNORECASE,
+)
+
+# Empty wrapper pairs left behind when a nested wrapper collapses (e.g. the
+# `()` from "((created:>2025-03-20))"). Removed to fixpoint; a pair enclosing
+# real text stays.
+_EMPTY_WRAPPER_RE = re.compile(r"\(\s*\)|\[\s*\]|\"\s*\"|'\s*'")
 
 
 def strip_search_qualifiers(text: str) -> str:
@@ -195,7 +218,30 @@ def strip_search_qualifiers(text: str) -> str:
     but qualifiers; callers must handle that rather than searching on an empty
     term, which would match the entire site.
     """
-    return " ".join(_QUALIFIER_RE.sub(" ", text).split())
+    stripped = _WRAPPED_QUALIFIER_RE.sub(" ", text)
+    stripped = _QUALIFIER_RE.sub(" ", stripped)
+    # Malformed/nested wrappers can leave only punctuation after a qualifier
+    # is removed (#969). There is no subject to search in that case. Keep
+    # wrappers around actual topic text, including unbalanced ones like "ai (foo".
+    if stripped != text and re.fullmatch(r"[\s()\[\]\"']*", stripped):
+        return ""
+    while True:
+        cleaned = _EMPTY_WRAPPER_RE.sub("", stripped)
+        if cleaned == stripped:
+            break
+        stripped = cleaned
+    return " ".join(stripped.split())
+
+
+# Bound topic fragments in logs/error envelopes so fanout cannot blow them up (#954).
+_DIAGNOSTIC_TOPIC_LIMIT = 120
+
+
+def _truncate_diagnostic(text: str, limit: int = _DIAGNOSTIC_TOPIC_LIMIT) -> str:
+    """Cap a topic fragment used in logs or error envelopes."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def search_github(
@@ -226,22 +272,24 @@ def search_github(
     count = DEPTH_LIMITS.get(depth, DEPTH_LIMITS["default"])
     core = extract_core_subject(topic)
     plain_core = strip_search_qualifiers(core)
-    if plain_core != core:
-        _log(f"Stripped search qualifiers: '{core}' -> '{plain_core}'")
     if not plain_core:
         # A qualifier-only (or empty) topic leaves nothing to search on.
-        # Report it instead of querying an empty term, which would match the
-        # whole site and then be discarded by the date filter as a bogus
-        # "no results" (issue #949).
+        # Skip the network rather than querying an empty term, which would
+        # match the whole site (#949). Return a clean empty envelope, not an
+        # error, so the pipeline records NO_RESULTS instead of ERROR (#953)
+        # and GitHub is not marked as a failed attempt. Mixed-topic strip
+        # logs below stay bounded by _truncate_diagnostic (#954).
         _log("Topic contained only search qualifiers or was empty; nothing to search")
         return {
             "items": [],
             "context": {"core": core, "from_date": from_date,
                         "to_date": to_date, "count": count},
-            "error": (
-                f"GitHub topic contained only search qualifiers or was empty: {topic!r}"
-            ),
         }
+    if plain_core != core:
+        _log(
+            "Stripped search qualifiers: "
+            f"'{_truncate_diagnostic(core)}' -> '{_truncate_diagnostic(plain_core)}'"
+        )
     core = plain_core
     resolved_token = _resolve_token(token)
     authed = bool(resolved_token)
@@ -253,7 +301,7 @@ def search_github(
     _log(f"Searching for '{core}' (raw: '{topic}', since {from_date}, count={count})")
 
     # Build search query with date filter
-    base_q = f"{core} created:>{from_date}"
+    base_q = f"{core} created:{from_date}..{to_date}"
 
     def _search(qualifier: Optional[str]) -> Optional[Dict[str, Any]]:
         q = f"{base_q} {qualifier}" if qualifier else base_q
@@ -540,7 +588,7 @@ def _fetch_readme_snippet(repo: str, token: str, max_chars: int = 500) -> Option
 
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with http.open_request(req, 10) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError):
         return None
@@ -707,8 +755,8 @@ def search_github_person(
     _log(f"Person-mode search for @{username} (since {from_date})")
 
     # Phase 1: PR velocity via search API
-    total_q = urllib.parse.quote(f"author:{username} type:pr created:>{from_date}")
-    merged_q = urllib.parse.quote(f"author:{username} type:pr is:merged created:>{from_date}")
+    total_q = urllib.parse.quote(f"author:{username} type:pr created:{from_date}..{to_date}")
+    merged_q = urllib.parse.quote(f"author:{username} type:pr is:merged created:{from_date}..{to_date}")
 
     total_url = f"{SEARCH_URL}?q={total_q}&per_page=1"
     merged_url = f"{SEARCH_URL}?q={merged_q}&sort=reactions&order=desc&per_page=100"
@@ -780,7 +828,7 @@ def search_github_person(
     num_repos = len(repo_pr_counts)
     velocity_text = (
         f"GitHub Person Profile: @{username}\n\n"
-        f"CONTRIBUTION VELOCITY (last {(to_date > from_date) and 30 or 30} days)\n"
+        f"CONTRIBUTION VELOCITY (last {dates.days_ago(from_date, to_date)} days)\n"
         f"- {merged_count} PRs merged across {num_repos} repos ({merge_rate}% merge rate)\n"
         f"- {total_prs} total PRs submitted, {open_prs} still open\n"
     )
@@ -798,7 +846,7 @@ def search_github_person(
         "snippet": velocity_text,
         "relevance": 0.95,
         "why_relevant": f"GitHub profile: @{username} - {merged_count} PRs merged across {num_repos} repos",
-        "engagement": {"merged_prs": merged_count, "comments": total_prs},
+        "engagement": {"merged_prs": merged_count, "total_prs": total_prs},
         "metadata": {
             "labels": ["person-profile", "velocity"],
             "state": "open",
@@ -851,7 +899,7 @@ def search_github_person(
                 "id": f"GH{idx}",
                 "title": f"{repo} ({stars_str} stars) - {pr_count} PRs merged",
                 "url": f"https://github.com/{repo}",
-                "date": releases[0]["date"] if releases and releases[0].get("date") else to_date,
+                "date": _snapshot_date(releases, from_date, to_date),
                 "author": username,
                 "source": "github",
                 "score": stars,
@@ -859,13 +907,14 @@ def search_github_person(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.9, 0.6 + math.log1p(stars) / 30 + min(0.15, pr_count / 20)),
                 "why_relevant": f"GitHub contribution: {pr_count} PRs merged to {repo} ({stars_str} stars)",
-                "engagement": {"stars": stars, "comments": pr_count},
+                "engagement": {"stars": stars, "contributed_prs": pr_count},
                 "metadata": {
                     "labels": ["person-profile", "external-repo"],
                     "state": "open",
-                    "comment_count": pr_count,
+                    "comment_count": 0,
                     "reactions": stars,
                     "is_pr": False,
+                    "date_is_snapshot": not _has_in_window_release(releases, from_date, to_date),
                 },
             })
 
@@ -909,7 +958,7 @@ def search_github_person(
                 "id": f"GH{idx}",
                 "title": f"{repo_name} ({stars_str} stars) - own project, {open_issues} open issues",
                 "url": f"https://github.com/{repo_name}",
-                "date": releases[0]["date"] if releases and releases[0].get("date") else to_date,
+                "date": _snapshot_date(releases, from_date, to_date),
                 "author": username,
                 "source": "github",
                 "score": stars,
@@ -917,13 +966,14 @@ def search_github_person(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.95, 0.7 + math.log1p(stars) / 25),
                 "why_relevant": f"GitHub own project: {repo_name} ({stars_str} stars)",
-                "engagement": {"stars": stars, "comments": open_issues},
+                "engagement": {"stars": stars, "open_issues": open_issues},
                 "metadata": {
                     "labels": ["person-profile", "own-repo"],
                     "state": "open",
-                    "comment_count": open_issues,
+                    "comment_count": 0,
                     "reactions": stars,
                     "is_pr": False,
+                    "date_is_snapshot": not _has_in_window_release(releases, from_date, to_date),
                 },
             })
 
@@ -1079,11 +1129,11 @@ def _person_recent_pushes(
                 f"GitHub activity: @{repo['actor']} pushed {name} on {repo['pushed']} "
                 f"({stars_str} stars)"
             ),
-            "engagement": {"stars": stars, "comments": open_issues},
+            "engagement": {"stars": stars, "open_issues": open_issues},
             "metadata": {
                 "labels": ["person-profile", "recent-push"],
                 "state": "open",
-                "comment_count": open_issues,
+                "comment_count": 0,
                 "reactions": stars,
                 "is_pr": False,
                 "event_type": "PushEvent",
@@ -1112,6 +1162,29 @@ def _enrich_own_repo(repo: str, token: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Project-mode search: fetch comprehensive data for specific repos
 # ---------------------------------------------------------------------------
+
+def _snapshot_date(releases: List[Dict[str, Any]], from_date: str, to_date: str) -> str:
+    """Date for a live repo snapshot item (stars, issues, PRs read now).
+
+    The newest release's date when it falls in the window, else ``to_date``.
+    An older release date would make the report's date filter drop a repo the
+    user pinned: Ghostty's newest release object is its 2022 "tip" nightly.
+    """
+    if _has_in_window_release(releases, from_date, to_date):
+        return releases[0]["date"]
+    return to_date
+
+
+def _has_in_window_release(releases: List[Dict[str, Any]], from_date: str, to_date: str) -> bool:
+    """True when the newest release date is a real in-window event.
+
+    False means ``_snapshot_date`` fell back to ``to_date``: that date keeps the
+    item through the date filter but says nothing about recency, so the item is
+    marked ``date_is_snapshot`` and ranks on neutral freshness.
+    """
+    release_date = releases[0].get("date") if releases else None
+    return bool(release_date and from_date <= release_date <= to_date)
+
 
 def search_github_project(
     repos: List[str],
@@ -1190,7 +1263,7 @@ def search_github_project(
                 "id": f"GH{idx + 1}",
                 "title": f"{repo} ({stars_str} stars) - {open_issues} open issues",
                 "url": f"https://github.com/{repo}",
-                "date": releases[0]["date"] if releases and releases[0].get("date") else to_date,
+                "date": _snapshot_date(releases, from_date, to_date),
                 "author": repo.split("/")[0],
                 "source": "github",
                 "score": stars,
@@ -1198,13 +1271,14 @@ def search_github_project(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.95, 0.7 + math.log1p(stars) / 25),
                 "why_relevant": f"GitHub project: {repo} ({stars_str} stars, live)",
-                "engagement": {"stars": stars, "comments": open_issues},
+                "engagement": {"stars": stars, "open_issues": open_issues},
                 "metadata": {
                     "labels": ["project-mode"],
                     "state": "open",
-                    "comment_count": open_issues,
+                    "comment_count": 0,
                     "reactions": stars,
                     "is_pr": False,
+                    "date_is_snapshot": not _has_in_window_release(releases, from_date, to_date),
                     "github_stars": {repo: stars},
                 },
             })

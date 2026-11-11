@@ -23,9 +23,15 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 # `detect_scenes` moved into _common/probe.py in 1.16.0 (see silence.py); the body is unchanged.
-from _common import (detect_scenes, STATE, add_common, apply_common, beat_grid, default_font_file, die, emit,
-                     escape_filter_path, ffmpeg_base, info, print_json, probe, run, decode_pcm_mono,
+from _common import (guard_sidecar, detect_scenes, STATE, add_common, apply_common, beat_grid, default_font_file, die, emit,
+                     ffmpeg_base, info, print_json, probe, run, decode_pcm_mono,
                      rms_envelope, BEAT_MIN_CONFIDENCE, decode_gray_frames, frame_flow, label_shot_flow)
+from _common import drawtext_fontfile  # noqa: E402
+from _common import ffmpeg_filters, filter_missing_hint  # noqa: E402
+from _common.emit import note, record_fallback  # noqa: E402
+from _common.color import bt709_label_filter  # noqa: E402
+from _common.probe import square_pixels  # noqa: E402
+from _common import dry_run_input_pending  # noqa: E402
 
 SHOT_FPS = 4.0          # frames/second sampled for --shots' flow estimate
 SHOT_W, SHOT_H = 48, 27  # decode size for --shots (16:9-ish; enough blocks, still a few KB/shot)
@@ -139,10 +145,29 @@ def main() -> int:
     add_common(ap)
     args = ap.parse_args()
     apply_common(args)
+    if args.highlights:  # the EDL is written only with --highlights
+        guard_sidecar(args.edl, args.input, siblings=(args.sheet,))
 
     meta = probe(args.input)
-    if not meta.get("video"):
-        die("input has no video stream")
+    # Under --dry-run in a render.py/batch.py plan the input may be an earlier stage's output that
+    # was never written: every measurement is skipped (diagnostics.skipped measurement_input_pending)
+    # and the document keeps its shape with nothing measured, as loudness.py/cut.py do -- not an
+    # ffmpeg failure that stops the plan from being written.
+    pending = dry_run_input_pending(args.input)
+    # An audio-only file (WAV/FLAC/MP3 ...) is measured too (after 3.2.0): the beat grid, the loudness
+    # peaks and the speech ratio are measurements of the sound, and a music bed is usually
+    # delivered without a picture. It has no picture to cut, so it is one scene from 0 to its
+    # duration -- the same answer a video with no cut in it gets -- and the result says
+    # audio_only: true. What needs a picture (--sheet, --shots) is refused, not skipped.
+    audio_only = not meta.get("video")
+    if audio_only:
+        if not meta.get("audio"):
+            die("input has no video or audio stream")
+        picture_flags = [f for f, on in (("--sheet", args.sheet), ("--shots", args.shots)) if on]
+        if picture_flags:
+            die(f"{' and '.join(picture_flags)} need{'s' if len(picture_flags) == 1 else ''} a video stream; "
+                "this file is audio-only (input has no video stream). --beats, --audio-peaks, --speech "
+                "and --highlights measure the sound alone.", kind="input")
     # Only parsed when it is going to be used: --beat-range is a --beats flag, and a run that
     # never asked for beats should not be able to die on one.
     beat_range = parse_beat_range(args.beat_range) if args.beats else (60.0, 200.0)
@@ -152,18 +177,22 @@ def main() -> int:
         if args.beat_step <= 0:
             die("--beat-step must be greater than 0", kind="input")
     dur = meta.get("duration") or 0.0
-    cuts = detect_scenes(args.input, args.threshold, args.min_scene, dur, args.ratio)
+    cuts = [0.0] if (audio_only or pending) else detect_scenes(args.input, args.threshold, args.min_scene, dur, args.ratio)
+    has_audio = bool(meta.get("audio")) and not pending
     bounds = cuts + [dur]
     step_s = 0.5
     # With --beats the file is decoded once, at the finer rate, and both envelopes come from that
     # one pass: the 0.5 s scene blocks are an exact multiple of the 10 ms onset blocks.
     beat_rate = 22050
     need_fine = args.beats or args.audio_peaks or args.speech
-    fine_samples = decode_pcm_mono(args.input, beat_rate, check=False) if (need_fine and meta.get("audio")) else None
+    # --beats decodes with check=True: a decode that fails is an ffmpeg failure, not an empty
+    # envelope reported as "no steady pulse in this audio" (the scene scoring alone tolerates it
+    # and runs on the picture)
+    fine_samples = decode_pcm_mono(args.input, beat_rate, check=bool(args.beats)) if (need_fine and has_audio) else None
     if fine_samples is not None:
         env = audio_envelope(args.input, step_s, rate=beat_rate, samples=fine_samples)
     else:
-        env = audio_envelope(args.input, step_s) if meta.get("audio") else []
+        env = audio_envelope(args.input, step_s) if has_audio else []
 
     scenes = []
     for i in range(len(bounds) - 1):
@@ -185,6 +214,8 @@ def main() -> int:
         peaks.sort(key=lambda p: p["time"])
 
     result: Dict = {"file": args.input, "duration": round(dur, 3), "scene_count": len(scenes), "scenes": scenes, "audio_peaks": peaks}
+    if audio_only:
+        result["audio_only"] = True
     info(f"{len(scenes)} scenes, {len(peaks)} audio peaks over {dur:.1f}s")
 
     if args.shots:
@@ -196,7 +227,7 @@ def main() -> int:
         info(f"--shots: {len(shots)} shots (" + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())) + ")")
 
     if args.audio_peaks:
-        if not meta.get("audio"):
+        if not has_audio:
             result["audio_peaks_db"] = []
             info("--audio-peaks: no audio stream, nothing to measure")
         else:
@@ -205,7 +236,7 @@ def main() -> int:
             info(f"--audio-peaks: {len(result['audio_peaks_db'])} peaks")
 
     if args.speech:
-        if not meta.get("audio"):
+        if not has_audio:
             result["speech"] = []
             info("--speech: no audio stream, nothing to measure")
         else:
@@ -217,9 +248,15 @@ def main() -> int:
         # A beat grid is a measurement of the music's periodicity, not a statement about where a
         # cut belongs. scenes.py reports what it measured, including a low confidence: reporting a
         # weak measurement is honest, and only a tool that CHANGES a file refuses to act on one.
-        fine = rms_envelope(fine_samples or [], max(1, int(round(beat_rate * args.beat_step))))
-        grid = beat_grid(fine, args.beat_step, bpm_range=beat_range,
-                         min_confidence=args.min_confidence, duration=dur)
+        # The envelope's real step is a whole number of samples: 220 / 22050 = 9.977 ms for the
+        # default 10 ms. Timing the onsets as if it were 10 ms stretched every measured time by
+        # 0.23 % -- 68 ms by the end of a 30 s track, the "40-60 ms off" a click track showed --
+        # so the grid is timed (and step_s reported) at the step the envelope actually has.
+        beat_block = max(1, round(beat_rate * args.beat_step))
+        fine = rms_envelope(fine_samples or [], beat_block)
+        grid = beat_grid(fine, beat_block / beat_rate, bpm_range=beat_range,
+                         min_confidence=args.min_confidence, duration=dur,
+                         pcm=fine_samples, pcm_rate=beat_rate)
         result["beats"] = grid["beats"]
         result["beat_grid"] = {
             # The regular grid AND the subset a measured onset supports. A tool that MOVES
@@ -231,8 +268,13 @@ def main() -> int:
             "onsets": len(grid["onsets"]), "supported": grid["supported"],
             "unsupported": grid["unsupported"], "method": grid["method"],
             "step_s": grid["step_s"], "range_bpm": grid["range_bpm"], "usable": grid["usable"],
+            # after 3.2.0, additive: how each onset was timed below the envelope step
+            # ("pcm-window-ratio": placed on the decoded samples; null: at the step)
+            "onset_refinement": grid["onset_refinement"],
         }
-        if grid["tempo_bpm"] is None:
+        if pending:
+            info("--beats: [dry-run] the input does not exist yet, nothing measured")
+        elif grid["tempo_bpm"] is None:
             info(f"--beats: no steady pulse in this audio (confidence {grid['confidence']:.2f}) -- "
                  "speech, ambience or rubato has no tempo to measure")
         else:
@@ -280,21 +322,37 @@ def main() -> int:
         cols = min(4, max(1, n))
         rows = max(1, math.ceil(n / cols))
         tile_w = 1280 // cols // 2 * 2
-        # exactly one frame per scene: the frame index at the scene start
-        fps = meta["video"].get("fps") or 30.0
-        expr = "+".join(f"eq(n\\,{int(round(sc['start'] * fps))})" for sc in scenes)
+        # exactly one frame per scene: the first frame at or after the scene start. The starts are
+        # presentation times, so the frame is chosen by its time, not by start x fps as a frame
+        # number -- on a variable-frame-rate source that number is another frame (#411)
+        def first_at(t: float) -> str:
+            a = f"{max(0.0, t - 0.0006):.4f}"
+            return f"gte(t\\,{a})*(isnan(prev_t)+lt(prev_t\\,{a}))"
+        expr = "+".join(first_at(sc["start"]) for sc in scenes)
         stamp = ""
+        if not args.no_timecode and ffmpeg_filters() and "drawtext" not in ffmpeg_filters():
+            # as look.py (#394): the sheet needs drawtext only for its stamps
+            args.no_timecode = True
+            record_fallback("this ffmpeg build has no drawtext filter, so the --sheet has no timecode stamps "
+                            "(the same as --no-timecode)", "scenes_sheet_no_drawtext")
+            note("--sheet without timecode stamps: this ffmpeg build has no drawtext filter ("
+                 + filter_missing_hint("drawtext") + ")")
         if not args.no_timecode:
             default_font = default_font_file("DejaVu Sans")
-            font_prefix = f"fontfile={escape_filter_path(default_font)}:" if default_font else ""
+            font_prefix = f"{drawtext_fontfile(default_font)}:" if default_font else ""
             stamp = f",drawtext=text='%{{pts\\:hms}}':{font_prefix}fontcolor=white:fontsize=h/14:box=1:boxcolor=black@0.55:boxborderw=4:x=6:y=6"
-        vf = (f"select='{expr}',scale={tile_w}:-2{stamp},"
+        # an untagged source is labelled BT.709 (tags only), or the sheet's RGB read it as BT.601 (#410);
+        # a non-square-pixel source is squared at its display aspect (#411)
+        lab = bt709_label_filter(meta)
+        square = square_pixels(meta["video"])
+        vf = (f"select='{expr}'," + (lab + "," if lab else "") + (square + "," if square else "")
+              + f"scale={tile_w}:-2{stamp},"
               f"tile={cols}x{rows}:padding=2:margin=2:color=0x202020")
-        run(ffmpeg_base() + ["-i", args.input, "-vf", vf, "-frames:v", "1", "-fps_mode", "vfr", args.sheet])
+        run(ffmpeg_base() + ["-i", args.input, "-an", "-vf", vf, "-frames:v", "1", "-fps_mode", "vfr", "-update", "1", args.sheet])
         info(f"wrote {args.sheet}")
         result["sheet"] = args.sheet
 
-    if args.json:
+    if STATE.json:  # --json-brief too: emit() is what adds the diagnostics (scenes_sheet_no_drawtext)
         emit(None, **result)
     else:
         print_json(result)

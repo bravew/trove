@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html
 import re
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from . import http
@@ -113,6 +114,12 @@ def keyless_search(
         if searxng_url:
             items = _search_searxng(query, count, searxng_url)
             used = "searxng"
+    # These backends never return a publish date, so normalize's grounding
+    # require_date would drop every result. Keep undated links only when the
+    # window reaches today; a historical window can't vouch for them.
+    if date_range[1] >= datetime.now(timezone.utc).date().isoformat():
+        for item in items:
+            item["metadata"] = {"date_window_basis": "keyless_current"}
     artifact = {
         "label": "keyless",
         "webSearchQueries": [query],
@@ -161,8 +168,7 @@ def _search_startpage(query: str, count: int) -> list[dict]:
         return []
     items: list[dict] = []
     result_matches = list(_SP_RESULT_RE.finditer(text))
-    desc_matches = list(_SP_DESC_RE.finditer(text))
-    for match in result_matches:
+    for idx, match in enumerate(result_matches):
         if len(items) >= count:
             break
         target = html.unescape(match.group("href"))
@@ -172,12 +178,9 @@ def _search_startpage(query: str, count: int) -> list[dict]:
         title = _strip_html(h2.group("title") if h2 else match.group("inner"))
         if not title:
             continue
-        # First description block that appears after this result's title anchor.
-        snippet = ""
-        for desc in desc_matches:
-            if desc.start() > match.end():
-                snippet = _strip_html(desc.group("snippet"))
-                break
+        next_start = result_matches[idx + 1].start() if idx + 1 < len(result_matches) else len(text)
+        desc = _SP_DESC_RE.search(text, match.end(), next_start)
+        snippet = _strip_html(desc.group("snippet")) if desc else ""
         items.append(_to_item(len(items), title, target, snippet))
     return items
 
