@@ -1,3 +1,5 @@
-# Task: Wrong-tool input
+# Task: Bug fix bundled with a feature
 
-Idea: 'Fix the off-by-one in pagination.' This is a bug fix, not a new feature. Autoplan should recognize that and decline to run the full spec→story→release pipeline; it should hand off to trove-commit + trove-review instead.
+Idea: "Fix the off-by-one in pagination, and while you're in there, add a page-size selector (10, 25, or 50 rows) that remembers each user's choice."
+
+This is a fictional request against an admin table whose pagination already has a spec. The off-by-one drops the last row of every page. The page-size selector is new behavior. Plan this request.
