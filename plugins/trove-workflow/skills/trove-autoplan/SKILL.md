@@ -44,6 +44,10 @@ fix, gives the three hand-offs in order, and asks one question: does the fix
 change user-visible behavior enough to need a spec? Run the pipeline only if
 the user says yes.
 
+When one request bundles a fix with new behavior, split it. Route the fix as
+above and run the pipeline on the new behavior alone, so the spec never
+describes the fix.
+
 ## Decision Gate: input type
 
 Context: The pipeline only fits new behavior, and running it on a fix produces
