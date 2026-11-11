@@ -35,6 +35,24 @@ This skill ships Trove conventions. Prefer existing project patterns over generi
 - Following spacing scale (4px grid)
 - Using design tokens for colors, typography, shadows
 
+## Findings
+
+Every finding carries a severity and a location.
+
+- **Severity.** `blocker` breaks the spec for a user, for example a missing
+  keyboard path or contrast below AA. `important` is visible drift from the
+  spec or a hardcoded value where a token exists. `suggestion` is polish the
+  spec does not require.
+- **Location.** Give `file:line` when you have the code. Otherwise name the
+  screen and component, and say that no file was supplied.
+- **Expected vs actual.** Quote the spec value or token and the implemented
+  value. For a value that has no token, say so and name the nearest one.
+
+One drift often hides another. A hardcoded color usually means the hover,
+focus, and active states built from that color drifted too, and an off-scale
+spacing value usually repeats elsewhere. Name the related places to check, and
+mark them unverified until you have seen them.
+
 ## Output Format
 
 ```markdown
@@ -42,12 +60,16 @@ This skill ships Trove conventions. Prefer existing project patterns over generi
 
 ### Match Score: X/10
 
-### Discrepancies
-- [screenshot/description] Expected vs Actual
+### Findings
+- [blocker|important|suggestion] [file:line or screen > component]
+  Expected: <spec or token>. Actual: <implemented value>. Fix: <change>.
 
 ### Accessibility Issues
-- [WCAG criterion] Description
+- [blocker|important|suggestion] [WCAG criterion] [location] Description
+
+### Related places to check
+- <state or screen>: unverified
 
 ### Recommendations
-- Suggested improvements
+- Suggested improvements, ordered by severity
 ```

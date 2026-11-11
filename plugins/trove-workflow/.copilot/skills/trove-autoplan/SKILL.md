@@ -26,6 +26,34 @@ re-implementing the detail.
   passkey login").
 - Optional: target release window, audience, constraints.
 
+## Not for bug fixes
+
+The pipeline plans new behavior. A bug fix, a regression, or a refactor
+restores or preserves behavior that already has a spec, so it gets no spec,
+no stories, and no release framing from this skill. Decline the pipeline and
+route it:
+
+1. **`trove-debug`** to reproduce the bug and find the cause.
+2. **`trove-review`** on the fix.
+3. **`trove-commit`** to land it.
+
+Return a short routing note in place of the packet. It names the input as a bug
+fix, gives the three hand-offs in order, and asks one question: does the fix
+change user-visible behavior enough to need a spec? Run the pipeline only if
+the user says yes.
+
+## Decision Gate: input type
+
+Context: The pipeline only fits new behavior, and running it on a fix produces
+a spec for something that already exists.
+Question: Is the input a new feature or a change to existing behavior?
+Options:
+- A. New feature or a behavior change - run the three stages.
+- B. Bug fix, regression, or refactor - decline and route as above.
+- C. Unclear - ask the user before Stage 1.
+Default: C, because a wrong guess either skips planning a feature or plans a
+fix as if it were new.
+
 ## Workflow
 
 ### Stage 1 — Frame the spec
