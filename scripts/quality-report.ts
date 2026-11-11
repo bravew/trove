@@ -10,6 +10,7 @@ import {
   applyVallyBaseline,
   calculateScore,
   compareTrend,
+  normalizeVallyBaselineKey,
   parseVallyOutput,
   QUALITY_REPORT_VERSION,
   readQualityReport,
@@ -19,6 +20,7 @@ import {
   type QualityDimension,
   type QualityFinding,
   type QualityReport,
+  vallyFindingKey,
 } from "./lib/quality-report";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -129,16 +131,19 @@ if (skills.length > 0) {
       skill,
     });
   }
-  const observed = new Set(vallyFindings.map((finding) => `${finding.skill ?? ""}|${finding.rule}|${finding.message}`));
+  const observed = new Set(vallyFindings.map(vallyFindingKey));
+  const baselineKeys = new Set(baseline.findings.map(normalizeVallyBaselineKey));
   const scopedBaseline = baseline.findings.filter((key) => skills.includes(key.split("|", 1)[0]));
-  const staleBaseline = scopedBaseline.filter((key) => !observed.has(key)).map((key): QualityFinding => ({
-    source: "vally",
-    severity: "error",
-    rule: "stale-baseline",
-    message: `baseline entry no longer matches Vally output: ${key}`,
-    skill: key.split("|", 1)[0],
-  }));
-  vallyFindings = [...applyVallyBaseline(vallyFindings, new Set(baseline.findings)), ...staleBaseline];
+  const staleBaseline = scopedBaseline
+    .filter((key) => !observed.has(normalizeVallyBaselineKey(key)))
+    .map((key): QualityFinding => ({
+      source: "vally",
+      severity: "error",
+      rule: "stale-baseline",
+      message: `baseline entry no longer matches Vally output: ${key}`,
+      skill: key.split("|", 1)[0],
+    }));
+  vallyFindings = [...applyVallyBaseline(vallyFindings, baselineKeys), ...staleBaseline];
 }
 const newVallyErrors = vallyFindings.filter((finding) => finding.severity === "error");
 checks.push({
