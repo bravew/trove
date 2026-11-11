@@ -1,0 +1,95 @@
+---
+name: trove-take-cut
+description: "Cut a raw multi-take recording down to one keeper per line. Use when the same lines were read several times and the retakes, stumbles, and dead air should go. Not for footage that is already a single take, and not for a single trim."
+license: MIT
+when_to_use: "cut out the bad takes; keep the last take of each line; remove the retakes from this recording; tighten the pauses in this read"
+user-invocable: true
+metadata:
+  inspired-by: "BuildLoop video skills"
+---
+<!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
+<!-- Regenerate: bun run build:skills -->
+
+# Take cut
+
+A raw recording where each line was read several times becomes one keeper per
+line, joined without clicks or clipped consonants. This decides which takes
+survive and where the cuts fall. Captions, music, and grading belong to
+`trove-video-edit` afterwards, and a single trim of an already-cut file belongs
+to `trove-ffmpeg`.
+
+## Why the cuts are not on the transcript
+
+Word timestamps drift by up to a few tenths of a second, so a cut placed on one
+lands in the breath before a word or clips the consonant off it. Use the
+transcript for the words and for finding where each take roughly sits. Take the
+cut points from the waveform.
+
+Three more rules come from the same failure:
+
+- A breath sits just before the first word and is quieter than speech. An
+  absolute threshold between the two skips the breath. A threshold relative to
+  the line's loudest sample does not, because a shouted line pushes it high
+  enough to clip the quiet word that opens it.
+- Scan inward from outside the window. Scanning outward from the middle stops
+  at a pause inside the line and cuts it in half.
+- A phrase that appears twice in the result means two windows covered the same
+  words. Durations and a glance will not show it.
+
+## Workflow
+
+Work in a scratch directory next to the source. The source file is never
+modified.
+
+1. **Probe and transcribe.** Read `references/runtime-spec.md` in `trove-ffmpeg`
+   before the first command, and use its `probe.py` for duration, frame rate,
+   and any subtitle track. Extract a mono 16 kHz WAV, then transcribe it to
+   word level and write `words.json` matching
+   [words.schema.json](references/words.schema.json). The engine is the user's
+   choice. `faster-whisper` with word timestamps works. A script supplied by the
+   user works. Do not install one they did not ask for. Recognizers drop "uh"
+   and "um" by default, and a dropped filler hides the stumble that decides the
+   keeper. Ask the engine to keep them. With `faster-whisper`, an initial
+   prompt that itself contains fillers does that. Transcribe each candidate
+   reading on its own as well, since a filler the full pass dropped often
+   shows up when its take is transcribed alone.
+
+2. **Group the readings.** Each script line was read several times. Group the
+   segments that are the same line, in order. When the user supplied the
+   script, align to it. Otherwise take the wording of the cleanest reading as
+   the line.
+
+3. **Pick the keeper.** Default to the last reading that contains no stumble,
+   false start, or flubbed word. Prefer a reading that is followed by a real
+   pause in the source, because a line chopped out of a longer run keeps the
+   rising intonation of the words that came after it. Prefer one continuous
+   reading of several sentences over stitching them from separate takes. Record
+   the choice in `takes.json` matching [takes.schema.json](references/takes.schema.json),
+   with a rough window around each keeper, and show it to the user before
+   rendering. They override per line. When every reading of a line has a
+   stumble, keep the cleanest, name the stumble in its `reason`, and say so.
+   Cutting a filler out of a kept line is `trove-ffmpeg`'s
+   `silence.py --filler`, run only when the user asks.
+
+4. **Find the edges and render.** Run `scripts/cut_points.py` with the WAV and
+   `takes.json`. It prints one `{start, end}` per line, scanned inward from the
+   waveform. The default threshold suits a normally levelled voice. On a quiet
+   recording, a soft word ending, such as the "s" in "runs", sits below it and
+   gets clipped. When the source is gated to digital silence between words,
+   lower `--threshold` toward that floor and confirm the last word of each line
+   in the fresh transcript. Pass those to `trove-ffmpeg`'s `cut.py --segments`
+   with `--accurate` and a short declick, then `join.py` if the segments are separate files. Never
+   write a raw ffmpeg command, and never cut on the word timestamps.
+
+5. **Verify.** Transcribe the result to a fresh `words.json` and run
+   `scripts/verify_cut.py`. A cut is not done until it prints `CONTENT: clean`.
+   Clean means no line plays twice and the first word is on time. It does not
+   check for fillers.
+   On a failure, re-pick the offending line as one continuous take, re-cut, and
+   run it again. Run it on every output, including every variation.
+
+## Pace
+
+Gaps that still feel long are a smaller pad, not a new cut. A pause inside a
+kept line is the speaker's delivery. Leave it unless the user asks. Softening a
+join with a crossfade belongs to the edit that follows, not here.

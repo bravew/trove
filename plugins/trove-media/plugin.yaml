@@ -21,6 +21,12 @@ skills:
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
   - path: ./skills/trove-product-video
     platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-take-cut
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-broll-ingest
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
+  - path: ./skills/trove-video-edit
+    platforms: [claude, cursor, codex, agents, gemini, opencode, copilot]
 
 platforms:
   claude:

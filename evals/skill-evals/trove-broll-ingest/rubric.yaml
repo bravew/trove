@@ -1,0 +1,17 @@
+criteria:
+  reads_the_frames_before_cutting:
+    weight: 3
+    description: "Builds a timestamped contact sheet and names the exact moment of each select before any cut. Does not cut on scene-detection boundaries or guess from the filename."
+  grades_from_the_transfer:
+    weight: 3
+    description: "Chooses the LUT from the probed transfer characteristics, Rec.709 or S-Log3, and never applies the Rec.709 grade to log footage. The user can override with their own .cube."
+  routes_through_trove_ffmpeg:
+    weight: 3
+    description: "Cuts and grades through the documented trove-ffmpeg wrappers (cut.py, color.py --lut) and never writes a raw ffmpeg command. Frame maps, shake scoring, and the catalog stay in this skill's own scripts."
+  catalogs_where_the_user_points:
+    weight: 2
+    description: "Appends to a catalog at the library root the user supplies and refuses to invent or hardcode one. Records the source span, category, and whether the shot was stabilized."
+  stays_in_scope:
+    weight: 2
+    description: "Does not activate for a talking-head script, a finished edit, or a request that merely mentions b-roll. Stabilizes only locked shots where the score improves, and says when it did not."
+min_pass_score: 7.0

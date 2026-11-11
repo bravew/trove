@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trove-take-cut/words",
+  "title": "Word-level transcript",
+  "description": "One entry per recognised word, in order. Times are seconds from the start of the source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "language", "words"],
+  "properties": {
+    "source": { "type": "string", "minLength": 1 },
+    "language": { "type": "string" },
+    "words": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "start", "end"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "start": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

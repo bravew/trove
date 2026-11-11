@@ -7,7 +7,10 @@
     "./.agents/skills/trove-beat-sync",
     "./.agents/skills/trove-shot-recipes",
     "./.agents/skills/trove-video-review",
-    "./.agents/skills/trove-product-video"
+    "./.agents/skills/trove-product-video",
+    "./.agents/skills/trove-take-cut",
+    "./.agents/skills/trove-broll-ingest",
+    "./.agents/skills/trove-video-edit"
   ],
   "logo": "assets/logo.svg"
 }

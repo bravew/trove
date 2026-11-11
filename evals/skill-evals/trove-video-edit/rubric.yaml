@@ -1,0 +1,17 @@
+criteria:
+  plan_drives_the_edit:
+    weight: 3
+    description: "Authors an edit plan where every beat names the words it lands on and why it is there, and renders only from that plan. Nothing reaches the frame that is not in the plan."
+  lints_before_rendering:
+    weight: 3
+    description: "Runs the plan linter and does not render a plan that fails it. A beat with no reason, a missing asset, or an impossible time range is fixed in the plan, not worked around at render time."
+  preview_before_final:
+    weight: 3
+    description: "Renders a preview first, shows it to the user, and renders the final only after the user approves. Never jumps to the final on the first pass."
+  audio_through_trove_ffmpeg:
+    weight: 2
+    description: "Scores music and sound effects through the documented trove-ffmpeg audio wrappers, using files the user supplied. Ships no music, sound effects, or logos of its own, and never writes a raw ffmpeg command."
+  stays_in_scope:
+    weight: 2
+    description: "Does not activate for a raw multi-take recording, for finding b-roll, or for a request that merely mentions editing. Hands those to trove-take-cut and trove-broll-ingest, and hands a finished cut to trove-video-review."
+min_pass_score: 7.0
