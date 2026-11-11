@@ -99,7 +99,7 @@ describe("quality report", () => {
       expect(refs.every((ref) => /^[0-9a-f]{40}$/.test(ref))).toBe(true);
       expect(workflow).toContain("contents: read");
       expect(workflow).not.toContain("pull-requests: write");
-      expect(workflow).toContain("node-version: 22.12.0");
+      expect(workflow).toContain("node-version: 22.23.4");
       expect(workflow).toContain("bun-version: 1.3.11");
       expect(workflow).toContain("retention-days: 90");
     }
