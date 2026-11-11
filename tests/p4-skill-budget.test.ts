@@ -5,6 +5,7 @@ import {
   CLAUDE_DESCRIPTION_AND_WHEN_TO_USE_CHAR_LIMIT,
   DESCRIPTION_CHAR_LIMIT,
   estimateSkillTokens,
+  findDescriptionXmlTag,
   flattenSkillText,
   measureSkillBudget,
   validateSkillBudget,
@@ -49,4 +50,12 @@ test("skill budget: rejects descriptions and bodies over the limits", () => {
     `body is ${BODY_LINE_LIMIT + 1} lines (limit: ${BODY_LINE_LIMIT})`,
     `body is ~${BODY_TOKEN_LIMIT + Math.ceil((BODY_LINE_LIMIT * 5 + 1) / 4)} tokens (limit: ~${BODY_TOKEN_LIMIT})`,
   ]);
+});
+
+test("findDescriptionXmlTag flags tags Claude Desktop sync rejects", () => {
+  expect(findDescriptionXmlTag("React's View Transition API (`<ViewTransition>`)")).toBe("<ViewTransition>");
+  expect(findDescriptionXmlTag("close with </details> here")).toBe("</details>");
+  expect(findDescriptionXmlTag('link <a href="x"> text')).toBe('<a href="x">');
+  expect(findDescriptionXmlTag("the `ViewTransition` component")).toBeNull();
+  expect(findDescriptionXmlTag("use when a < b and c > d")).toBeNull();
 });

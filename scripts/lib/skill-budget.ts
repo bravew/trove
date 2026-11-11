@@ -25,6 +25,16 @@ export function flattenSkillText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }
 
+/**
+ * Returns the first XML-like tag (`<Foo>`, `</foo>`, `<a href="x">`) in a
+ * skill description, or null. Claude Desktop's marketplace sync drops a skill
+ * whose description contains one ("SKILL.md description cannot contain XML
+ * tags"), even inside backticks. Comparisons such as `a < b` do not match.
+ */
+export function findDescriptionXmlTag(description: string): string | null {
+  return description.match(/<\/?[A-Za-z][^<>]*>/)?.[0] ?? null;
+}
+
 export function estimateSkillTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }

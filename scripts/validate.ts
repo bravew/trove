@@ -34,7 +34,7 @@ import {
   collectSkillRegistrations,
   findDuplicateSkillRegistrationFindings,
 } from "./lib/inventory";
-import { flattenSkillText, validateSkillBudget } from "./lib/skill-budget";
+import { findDescriptionXmlTag, flattenSkillText, validateSkillBudget } from "./lib/skill-budget";
 import {
   SPEC_REVISION,
   SPEC_URL,
@@ -177,6 +177,28 @@ function validateMarketplace(): void {
 
 // ─── Plugin validation ──────────────────────────────────────
 
+/** Error text for a description that Claude Desktop's sync would reject. */
+function xmlTagMessage(tag: string): string {
+  return `description must not contain XML-like tags (found '${tag}'); Claude Desktop marketplace sync rejects them`;
+}
+
+/**
+ * Reads `description` from a SKILL.md frontmatter block. Returns undefined
+ * when the file is missing or unparseable; other checks report those cases.
+ */
+function readSkillDescription(filePath: string): unknown {
+  if (!fs.existsSync(filePath)) return undefined;
+  const content = fs.readFileSync(filePath, "utf-8");
+  if (!content.startsWith("---\n")) return undefined;
+  const fmEnd = content.indexOf("\n---", 4);
+  if (fmEnd === -1) return undefined;
+  try {
+    return (YAML.parse(content.slice(4, fmEnd)) as Record<string, unknown> | null)?.description;
+  } catch {
+    return undefined;
+  }
+}
+
 function validatePlugin(pluginName: string): void {
   console.log(`\n── Plugin: ${pluginName} ──`);
   const pluginDir = path.join(PLUGINS_DIR, pluginName);
@@ -236,6 +258,12 @@ function validatePlugin(pluginName: string): void {
         if (skillName.includes(":")) {
           error(`plugin.yaml: skill name '${skillName}' must not contain ':'`);
         }
+
+        // The bundled copy is what Claude Desktop syncs. Checking it covers
+        // plugin-local skills, which validateSkillTemplates never walks.
+        const bundled = path.join(pluginDir, "skills", skillName, "SKILL.md");
+        const xmlTag = findDescriptionXmlTag(flattenSkillText(readSkillDescription(bundled)));
+        if (xmlTag) error(`${path.relative(ROOT, bundled)}: ${xmlTagMessage(xmlTag)}`);
       }
 
       ok(`plugin.yaml: ${plugin.skills.length} skills defined`);
@@ -752,17 +780,9 @@ function validateSkillFile(filePath: string, knownSkills: Set<string> = new Set(
     error(`${relPath}: ${finding.message}`);
   }
 
-  // Claude Desktop's marketplace sync rejects XML-like tags in a skill
-  // description ("SKILL.md description cannot contain XML tags") and claude.ai
-  // stores it with angle brackets stripped, so `<Foo>` never survives the trip.
-  const claudeDescription = flattenSkillText(claudeFm.description);
-  const xmlTag = claudeDescription.match(/<\/?[A-Za-z][^<>]*>/);
-  if (xmlTag) {
-    error(
-      `${relPath}: description must not contain XML-like tags (found '${xmlTag[0]}'); ` +
-        `Claude Desktop marketplace sync rejects them`,
-    );
-  }
+  // Catch it at the source; validatePlugin re-checks the shipped bundle.
+  const xmlTag = findDescriptionXmlTag(flattenSkillText(claudeFm.description));
+  if (xmlTag) error(`${relPath}: ${xmlTagMessage(xmlTag)}`);
 
   // Check for unresolved placeholders (in .md files, not .tmpl)
   if (filePath.endsWith(".md") && !filePath.endsWith(".tmpl")) {
