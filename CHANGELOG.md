@@ -214,6 +214,16 @@ release process.
 ### Notes
 
 - Initial public release.
+## [2026.11.11.1] - 2026-11-11
+
+### What's Changed
+* fix(skills): drop XML-like tag from view-transitions description by @bravew in https://github.com/bravew/trove/pull/68
+* feat(discovery): align plugin and skill categories across hosts by @bravew in https://github.com/bravew/trove/pull/74
+* fix(release): give every same-day merge a new version by @bravew in https://github.com/bravew/trove/pull/75
+
+
+**Full Changelog**: https://github.com/bravew/trove/compare/v2026.11.11...v2026.11.11.1
+
 ## [2026.11.11] - 2026-11-11
 
 ### What's Changed
