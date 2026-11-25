@@ -81,9 +81,8 @@ jobs:
         # Prepend a new entry using the same auto-generated body GitHub
         # puts in the Release below, so CHANGELOG.md and the Releases
         # page stay in lockstep. Idempotent: skips if the entry already
-        # exists (handles same-day re-releases and reruns of partially
-        # failed workflows). Late same-day merges roll into the next
-        # day's entry, matching the GitHub Release semantics.
+        # exists (handles reruns of partially failed workflows). Every
+        # merge gets its own version, so every merge gets its own entry.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -123,11 +122,11 @@ jobs:
           echo "Prepended v${VERSION} entry to CHANGELOG.md."
 
       - name: Commit and tag
-        # CalVer (YYYY.M.D) means same-day merges share a tag. The first
-        # merge of the day creates and pushes the tag; later merges keep
-        # the tag at the first commit and only push the rebuilt outputs.
-        # The Create GitHub Release step below also no-ops on the second
-        # run, so the day's release reflects the first merge.
+        # `bump-version` gives every merge a new version (`YYYY.M.D`, then
+        # `YYYY.M.D.N` within a day), because hosts skip an update whose
+        # plugin.json version matches the installed one. Each version gets
+        # its own tag; the tag check below only fires on a rerun whose tag
+        # already landed.
         #
         # This push writes straight to the protected default branch. It
         # works only because the `main` ruleset lists the repository-admin
@@ -171,12 +170,9 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        # CalVer (YYYY.M.D) means same-day merges share a tag. The first run
-        # creates the release with auto-generated notes; subsequent same-day
-        # runs see the existing release and skip. The release for a busy day
-        # therefore reflects only the first merge of the day — edit the
-        # release manually after the day rolls over if richer narrative is
-        # wanted. See docs/contributing.md for the rationale.
+        # Each merge carries its own version, so each creates a release with
+        # auto-generated notes. The existence check handles a rerun whose
+        # release already landed. See docs/contributing.md for the rationale.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

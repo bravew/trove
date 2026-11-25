@@ -1,6 +1,6 @@
 {
   "name": "trove",
-  "version": "2026.11.11",
+  "version": "2026.11.11.1",
   "description": "Open-source plugin marketplace for AI coding assistants — write once, run everywhere",
   "license": "MIT",
   "private": true,
