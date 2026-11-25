@@ -387,14 +387,14 @@ sources:
       - id: trove-diagram-design
         upstream_path: skills/diagram-design
         local_path: skills/design/trove-diagram-design
-        base_sha: f2496acbde9f45ccb55c24d4f75210c8a1355df8
-        base_tree_digest: sha256:66a40a8f59fd5a98d07cf28a30a762f2a412464a1a90106107aa5700ebd0dea9
-        local_tree_digest: sha256:40daccfd74c81451b2cb657360f805dfce6f543c2598e0746139e7eaf24d9f0d
+        base_sha: 67dbb00176980741a909c84c124f86ef91bbf546
+        base_tree_digest: sha256:b74b7a70b17f0fd8e8473d4e18420249f5f773996aa8b589414949fed9b442fd
+        local_tree_digest: sha256:f324d4221a558f244a85da4f9fd82853d37ef67689fba8dba1621ebfc22d5c16
         patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        checked_sha: f2496acbde9f45ccb55c24d4f75210c8a1355df8
-        checked_at: 2026-11-09T22:22:38Z
+        checked_sha: 67dbb00176980741a909c84c124f86ef91bbf546
+        checked_at: 2026-11-25T00:32:58Z
         candidate_sha: null
-        imported_at: 2026-11-09T22:22:38Z
+        imported_at: 2026-11-25T00:32:58Z
         include:
           - SKILL.md
           - references/**
