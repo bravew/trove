@@ -36,16 +36,21 @@ audio stream is never silent.
 """
 import argparse
 import json
+import math
 import os
 import tempfile
 import sys
+from fractions import Fraction
 from typing import Any, Dict, List, Optional, Tuple
 
 from _common.probe import SILENT_PEAK_DBFS, signatures_match, stream_signature
-from _common import STATE, AUDIO_MEDIA_EXT, concat_list_line, guard_sidecar, place_output, refuse, sibling_temp, as_limited, draws_chroma, drawn_chain, label_chain, matrix_chain, range_chain, video_args, aac_args, add_common, apply_common, audio_codec_for, default_output, die, dry_run_input_pending, emit, ffmpeg_base, info, measured_level_dbfs, is_audio_output, probe, require_tool, run, validate_color, X264_PRESETS, fmt_secs
+from _common.runner import path_denied, read_text_or_die, run_analysis
+from _common import STATE, AUDIO_CODECS, AUDIO_MEDIA_EXT, concat_list_line, refuse_unwritten_output, guard_sidecar, refuse_output_is_input, place_output, refuse, sibling_temp, as_limited, draws_chroma, drawn_chain, label_chain, matrix_chain, range_chain, video_args, aac_args, add_common, apply_common, audio_codec_for, default_output, die, dry_run_input_pending, emit, ffmpeg_base, info, measured_level_dbfs, is_audio_output, probe, require_tool, run, validate_color, X264_PRESETS, fmt_secs
 from _common.emit import note, warn
-from _common.decision import av_clip_length, av_trim, stream_starts
+from _common.decision import av_clip_length, av_trim, stream_starts, warn_mostly_cropped
 from _common.probe import display_size, square_pixels, square_pixels_note
+from _common.timeline import exact_rate
+from _common.emit import input_length, refuse_still
 
 TRANSITIONS = ["fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown", "slideleft", "slideright",
                "circleopen", "circleclose", "fadeblack", "fadewhite", "smoothleft", "smoothright", "radial", "none"]
@@ -112,6 +117,81 @@ def clip_length(meta: Dict[str, Any], fps: float) -> float:
     return av_clip_length(meta, fps)
 
 
+# the video join's sound rate (every clip is resampled to it before the trims)
+JOIN_AUDIO_RATE = 48000
+
+
+def output_rate(fps: float, first: Dict[str, Any], asked: bool) -> Fraction:
+    """The join's frame rate as an exact fraction: the first clip's own r_frame_rate/avg_frame_rate
+    when `fps` is that clip's (30000/1001, not 29.97), else the NTSC fraction or the plain one
+    `fps` names (timeline.exact_rate). Every clip length, offset and sound length is counted in
+    frames of this rate, so the graph's fps filter runs at the same fraction."""
+    if not asked:
+        for key in ("r_frame_rate", "avg_frame_rate"):
+            try:
+                q = Fraction(str(first.get(key) or ""))
+            except (ValueError, ZeroDivisionError):
+                continue
+            # the declared rate also wins when the average was taken over a length that leaves out
+            # the last frame's duration (#475: 5 frames in 0.1333 s read 37.5 fps, and the whole
+            # join ran at 75/2)
+            if 0 < q <= 240 and (abs(float(q) - fps) < 1e-3 or short_last_frame(first, q)):
+                return q
+    return exact_rate(fps)
+
+
+def short_last_frame(video: Optional[Dict[str, Any]], q: Fraction) -> bool:
+    """Whether a picture's duration is its frame count less one frame at rate `q`: a container
+    that stores no duration for the last frame (MOV written with -fps_mode passthrough, seen on
+    FFmpeg 7.1) reads 5 frames as 0.1333 s at 30 fps (#475)."""
+    v = video or {}
+    nb, dur = v.get("nb_frames"), v.get("duration")
+    if not nb or nb < 2 or not dur or q <= 0:
+        return False
+    step = float(1 / q)
+    return abs(dur - (nb - 1) * step) < 0.25 * step and abs(dur - nb * step) > 0.25 * step
+
+
+def with_whole_picture(meta: Dict[str, Any], q: Fraction) -> Dict[str, Any]:
+    """`meta` with its picture counted as every frame it holds when its duration leaves out the
+    last one (short_last_frame), so the clip-length rule does not read the sound as running a
+    frame past the picture and hold the clip longer (#475). Other clips are returned as they are."""
+    v = meta.get("video") or {}
+    # each clip at its OWN declared rate: at the join's rate a complete 30 fps clip of 5 frames
+    # (5/30 s) also equals 4 frames at --fps 24 and would be stretched to 5/24 s
+    try:
+        own = Fraction(str(v.get("r_frame_rate") or ""))
+    except (ValueError, ZeroDivisionError):
+        own = q
+    if not 0 < own <= 240:
+        own = q
+    if not short_last_frame(v, own):
+        return meta
+    return dict(meta, video=dict(v, duration=float(v["nb_frames"] / own)))
+
+
+def clip_frames(meta: Dict[str, Any], length: float, q: Fraction) -> int:
+    """How many frames of rate `q` a clip of `length` seconds (clip_length) holds in the join: its
+    picture's frames, or, when the clip lasts as long as its sound, enough frames to cover that
+    sound (narration is never cut; a hundredth of a frame is rounding, not sound). A pending
+    dry-run stub's 0 s stays 0; a measured clip holds at least one frame (#455: a length in
+    milliseconds rounded up started every next clip late, and the errors added up)."""
+    exact = length * q.numerator / q.denominator
+    vlen = (meta.get("video") or {}).get("duration") or 0.0
+    frames = math.ceil(exact - 0.01) if vlen and length > vlen else round(exact)
+    return frames if meta.get("dry_run") else max(1, frames)
+
+
+def frame_time(frames: int, q: Fraction) -> str:
+    """The time of frame `frames` at rate `q` in seconds, rounded down to the microsecond: never
+    after that frame's own timestamp, so a filter that starts on the first frame at or after it
+    (xfade's offset) starts on that frame and not the next (#468: 2.566667 written 2.567 started
+    the transition a frame late). Trailing zeros are dropped (0.5, not 0.500000)."""
+    us = (frames * q.denominator * 1_000_000) // q.numerator
+    text = f"{us // 1_000_000}.{us % 1_000_000:06d}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def find_duplicates(paths: List[str]) -> List[Dict[str, Any]]:
     """Every path (compared by its resolved absolute form) listed more than once, with the 0-based
     list positions it appears at. A warning, not a refusal: repeating a clip can be intentional."""
@@ -165,8 +245,10 @@ def join_audio(args: argparse.Namespace, metas: List[dict]) -> int:
     if len(set(chans)) > 1:
         info(f"channel counts differ ({', '.join(str(c) for c in chans)}); every clip becomes {layout}")
     output = args.output or default_output(args.inputs[0], "joined")
+    refuse_list_as_output(args, output)
     if not is_audio_output(output):
-        die(f"audio-only inputs cannot fill a video container: give -o an audio extension (.wav, .flac, .mp3, .m4a, .ogg, .opus), not {output}")
+        refuse_unwritten_output(output)  # .wma is not a video container either (#517)
+        die(f"audio-only inputs cannot fill a video container: give -o an audio extension ({', '.join(AUDIO_CODECS)}), not {output}")
 
     cmd = ffmpeg_base()
     for p in args.inputs:
@@ -198,24 +280,52 @@ def join_audio(args: argparse.Namespace, metas: List[dict]) -> int:
     return 0
 
 
+# ffmpeg concat-demuxer directives other than `file`: they change what a `file` line plays
+CONCAT_DIRECTIVES = frozenset({"inpoint", "outpoint", "duration", "stream", "exact_stream_id", "file_packet_metadata",
+                               "file_packet_meta", "option", "stream_meta", "stream_codec", "stream_extradata", "chapter"})
+
+
+def refuse_list_as_output(args: argparse.Namespace, output: str) -> None:
+    """The --list file is read here and is never an -i of the join, so run()'s guard did not see
+    an output named like it (#522's sweep): refused once the output is known, before any write."""
+    if args.list:
+        refuse_output_is_input(output, args.list, why="the clip list would be replaced by the join")
+
+
 def read_list(path: str) -> List[str]:
     """--list FILE: one segment per line, in order, relative to the list file's own folder.
     Blank lines and # comments are ignored, and ffmpeg's concat-demuxer spelling
-    (`file 'part 01.wav'`) is accepted, so a list written for `ffmpeg -f concat` works as is."""
-    try:
-        text = open(path, encoding="utf-8").read()
-    except OSError as exc:
-        die(f"cannot read --list {path}: {exc}")
+    (`file 'part 01.wav'`, the `ffconcat version` header) is accepted, so a list written for
+    `ffmpeg -f concat` works as is unless it trims: `inpoint`, `outpoint`, `duration` and the other
+    directives are refused by name, since nothing here applies them."""
+    # the shared reader: a BOM, CRLF and a file that is not UTF-8 are read or refused as every
+    # other text input is, and a line ends at "\n" only
+    text = read_text_or_die(path, "--list")
     base = os.path.dirname(os.path.abspath(path))
     entries: List[str] = []
-    for line in text.splitlines():
+    ffconcat = False
+    for line in text.split("\n"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("file "):
+        # In a plain list an existing POSIX filename can contain a literal tab.
+        tab_directive = line.startswith("file\t") and (ffconcat or not os.path.isfile(os.path.join(base, line)))
+        if line.startswith("file ") or tab_directive:
             line = line[5:].strip()
             if len(line) >= 2 and line[0] == line[-1] and line[0] in "'\"":
                 line = line[1:-1].replace("'\\''", "'")
+        elif line.split()[0] == "ffconcat" and line.split()[1:2] == ["version"]:
+            ffconcat = True
+            continue  # the concat demuxer's header line names no file
+        elif line.split()[0] in CONCAT_DIRECTIVES and not os.path.exists(os.path.join(base, line)):
+            # only `file` lines are read: a directive was taken for a path, reported as a missing
+            # (or, under --dry-run, pending) input, and with --on-missing skip its trim was lost.
+            # `stream` takes no argument (FFmpeg 6.1's concat demuxer); a line naming a file that is
+            # there is a path, whatever its first word
+            die(f"--list {path}: `{line}` is an ffmpeg concat directive, which join.py does not apply: the list is "
+                "read for its `file` lines only", kind="input",
+                hint="trim a clip with cut.py first and list the cut file (inpoint/outpoint/duration), "
+                     "or remove the line")
         entries.append(line if os.path.isabs(line) else os.path.join(base, line))
     if not entries:
         # the failure this exists for: an upstream step produced nothing, and the join must
@@ -239,8 +349,9 @@ def preflight(paths: List[str], audible: Optional[List[int]] = None) -> Tuple[Li
         if dry_run_input_pending(p):
             pending.append({"index": i, "path": p})
             continue
-        if not os.path.exists(p):
-            problems.append({"index": i, "path": p, "reason": "missing"})
+        # a file that is there but unreadable is "permission denied" too, not ffprobe's line (#558)
+        if path_denied(p) or not os.path.exists(p):
+            problems.append({"index": i, "path": p, "reason": "permission denied" if path_denied(p) else "missing"})
             continue
         if os.path.isdir(p):
             problems.append({"index": i, "path": p, "reason": "a directory, not a file"})
@@ -342,6 +453,32 @@ def _video_packets(path: str, limit: "Optional[int]" = None) -> "List[str]":
     return (proc.stdout or "").split() if proc.returncode == 0 else []
 
 
+def _aac_priming_seconds(path: str, sample_rate: int) -> Optional[float]:
+    """Measure the samples to skip when decoding the input's first AAC packet."""
+    cmd = [require_tool("ffprobe"), "-v", "error", "-select_streams", "a:0",
+           "-read_intervals", "%+#1", "-show_entries", "packet=pts:packet_side_data=skip_samples",
+           "-of", "json", path]
+    proc = run(cmd, quiet=True, check=False)
+    if proc.returncode != 0 or not sample_rate:
+        return None
+    try:
+        packet = json.loads(proc.stdout or "{}")["packets"][0]
+        return sum(int(side.get("skip_samples", 0)) for side in packet.get("side_data_list", [])) / sample_rate
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _decoded_audio_seconds(path: str) -> Optional[float]:
+    """The length of the first sound stream as a decoder delivers it (priming already dropped),
+    by decoding it: packet spans miss the overhang a stream-copy join carries into the next clip.
+    One byte per 1/8000 s (8-bit mono at 8 kHz): only the length is wanted, so an hour of sound
+    is 29 MB in memory rather than 345 MB at 48 kHz 16-bit, and 0.125 ms is well under COPY_AV_GAP."""
+    cmd = ffmpeg_base() + ["-v", "error", "-i", path, "-map", "0:a:0", "-ac", "1", "-ar", "8000",
+                           "-f", "u8", "-"]
+    proc = run_analysis(cmd, check=False, text=False)
+    return len(proc.stdout or b"") / 8000 if proc.returncode == 0 else None
+
+
 SPAN_HEAD_PACKETS = 64     # enough to see the earliest presentation time past B-frame reordering
 SPAN_TAIL_SECONDS = 10.0   # read from this far before the end, so a seek that lands early still reaches it
 
@@ -378,7 +515,14 @@ def _stream_span(path: str, kind: str, duration: float = 0.0, start: float = 0.0
         times.append((t, t + d))
     if not times:
         return None
-    return min(t for t, _ in times), max(e for _, e in times)
+    first, last = min(t for t, _ in times), max(e for _, e in times)
+    if duration > 3 * SPAN_TAIL_SECONDS and (
+        len(packets) <= SPAN_HEAD_PACKETS or last < start + duration - SPAN_TAIL_SECONDS
+    ):
+        # Some ffprobe builds exit 0 after the head read. A sparse head can reach the tail
+        # window on its own, so require more packets than the head interval can return.
+        return _stream_span(path, kind, 0.0, start)
+    return first, last
 
 
 def join_copy(args, metas: List[Dict[str, Any]]) -> int:
@@ -397,7 +541,9 @@ def join_copy(args, metas: List[Dict[str, Any]]) -> int:
         die(f"--copy keeps every clip's own encoding: {', '.join(encoder)} choose(s) an encode, so drop --copy")
     output = args.output or default_output(args.inputs[0], "joined", os.path.splitext(args.inputs[0])[1].lstrip(".") or "mp4")
     guard_sidecar(output, *args.inputs)
+    refuse_list_as_output(args, output)
     ext = os.path.splitext(output)[1].lower()
+    mov_output = ext in (".mp4", ".mov", ".m4v")
     n = len(args.inputs)
     pending = any(m.get("dry_run") for m in metas)
     if pending:
@@ -455,6 +601,38 @@ def join_copy(args, metas: List[Dict[str, Any]]) -> int:
                    f"--copy: picture and sound start or end more than {COPY_AV_GAP * 1000:.0f} ms apart in {listing}; a copy join "
                    "would leave that gap at the next clip", hint="drop --copy, which trims both streams to one length",
                    clips=[{"path": g["path"], "differs": {"video_span": g["video"], "audio_span": g["audio"]}} for g in gaps])
+        if (metas[0].get("audio") or {}).get("codec") == "aac" and n > 1:
+            # A stream-copy join plays each later clip's AAC priming (the samples its first packet
+            # says to skip) at its seam, and carries the sound an earlier clip decodes to beyond its
+            # picture into the next one, whatever the container. Both streams' spans in the joined
+            # file still match, so only this sum shows it: on eight 4 s clips (21.3 ms priming,
+            # 10.7 ms overhang each) it predicted 32 ms more delay at every join, and the measured
+            # delay of a beep against a flash was 32, 64, ... 224 ms on FFmpeg 6.1 in .mp4, .mov
+            # and .mkv alike (#610). Beyond COPY_AV_GAP at any clip, --copy is refused.
+            drift, at, rows = 0.0, [], []
+            for index, (path, meta) in enumerate(zip(args.inputs, metas)):
+                priming = 0.0 if index == 0 else _aac_priming_seconds(path, (meta.get("audio") or {}).get("sample_rate") or 0)
+                decoded = _decoded_audio_seconds(path)
+                v_span = _stream_span(path, "V", float(meta.get("duration") or 0.0), float(meta.get("start_time") or 0.0))
+                if priming is None or decoded is None or v_span is None or v_span[1] is None:
+                    refuse("input", "join_copy_mismatch", f"--copy: could not measure the AAC priming or sound length of {path}, "
+                           "so the delay a copy join adds at its seams is unknown", hint="drop --copy to re-encode the join",
+                           clips=[{"index": index, "path": path, "differs": {"aac_drift_ms": None}}])
+                drift += priming
+                at.append(drift)
+                rows.append({"index": index, "path": path, "differs": {"aac_priming_ms": round(priming * 1000, 3),
+                                                                       "sound_delay_ms": round(drift * 1000, 3)}})
+                drift += decoded - (v_span[1] - v_span[0])
+            # either way: a clip whose sound ends before its picture pulls the next clips' sound ahead
+            worst = max(at, key=abs)
+            if abs(worst) > COPY_AV_GAP:
+                side = "behind" if worst > 0 else "ahead of"
+                refuse("input", "join_copy_mismatch",
+                       f"--copy: a copy join would put the sound {abs(worst) * 1000:.0f} ms {side} the picture by clip "
+                       f"{at.index(worst) + 1} (AAC priming played at each seam, plus the difference between each "
+                       "clip's sound and its picture)",
+                       hint="drop --copy, which decodes each clip and trims its sound to its picture",
+                       aac_drift_ms=round(worst * 1000, 3), tolerance_ms=COPY_AV_GAP * 1000, clips=rows)
     fps = (metas[0].get("video") or {}).get("fps") or 30.0
     note_short_segments(args.inputs, metas, MIN_SEGMENT_FRAMES / fps, f"{MIN_SEGMENT_FRAMES} frames at {fps:g} fps")
     place_silent([m.get("duration") or 0.0 for m in metas], 0.0)
@@ -465,7 +643,7 @@ def join_copy(args, metas: List[Dict[str, Any]]) -> int:
                 fh.write(concat_list_line(os.path.abspath(p)) + "\n")
         joined = sibling_temp(output, "join") if not STATE.dry_run else output
         cmd = ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile, "-map", "0:V:0", "-map", "0:a:0?", "-c", "copy"]
-        if ext in (".mp4", ".mov", ".m4v"):
+        if mov_output:
             cmd += ["-movflags", "+faststart"]
         try:
             run(cmd + [joined])
@@ -506,7 +684,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("inputs", nargs="*", help="two or more clips in order (or --list FILE)")
     ap.add_argument("--list", metavar="FILE", help="read the clips from FILE, one per line in order (paths relative to FILE; "
-                                                   "ffmpeg concat lines `file 'x.wav'` also accepted); an empty list is refused")
+                                                   "ffmpeg concat lines `file 'x.wav'` also accepted, other concat directives refused); an empty list is refused")
     ap.add_argument("--on-missing", choices=["fail", "skip"], default="fail",
                     help="a missing, empty or unreadable input: fail (default; every problem named at once) or skip "
                          "(join the rest; each skipped input is reported under `skipped`)")
@@ -522,7 +700,7 @@ def main() -> int:
     ap.add_argument("-o", "--output", help="output file (default: <first>_joined.mp4)")
     ap.add_argument("--transition", choices=TRANSITIONS, default="fade", help="transition between clips (default fade)")
     ap.add_argument("--duration", type=float, default=0.5, help="transition length in seconds (default 0.5)")
-    ap.add_argument("--width", type=int, help="output width (default: first clip)")
+    ap.add_argument("--width", type=int, help="output width (default: first clip); a size or resolution WxH is --width W --height H")
     ap.add_argument("--height", type=int, help="output height (default: first clip)")
     ap.add_argument("--fps", type=float, help="output frame rate (default: first clip)")
     ap.add_argument("--fit", choices=["pad", "crop"], default="pad", help="how clips of another aspect reach the frame (default pad)")
@@ -530,9 +708,15 @@ def main() -> int:
                     help="join by stream copy, no re-encode (needs --transition none): every clip must carry the same "
                          "video and audio parameters (codec, size, rate, pixel format, sample rate, channels); a clip "
                          "that does not is refused, by name, with what differs")
-    ap.add_argument("--pad-color", default="black")
+    ap.add_argument("--audio-lead", type=float, metavar="S",
+                    help="J-cut: at each boundary the next clip's sound starts S seconds (0.001..600, whole frames) before its picture; "
+                         "sync is kept, so each boundary costs S seconds (needs --transition none; not with --copy or --audio-lag)")
+    ap.add_argument("--audio-lag", type=float, metavar="S",
+                    help="L-cut: at each boundary the previous clip's sound runs S seconds (0.001..600, whole frames) past the picture "
+                         "change; sync is kept, so each boundary costs S seconds (needs --transition none; not with --copy or --audio-lead)")
+    ap.add_argument("--pad-color", default="black", help="pad colour when a clip's aspect differs, e.g. black, white, 0x101010 (default black)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
-    ap.add_argument("--preset", default="medium", choices=X264_PRESETS)
+    ap.add_argument("--preset", default="medium", choices=X264_PRESETS, help="x264 preset")
     aud = ap.add_argument_group("audio-only inputs")
     aud.add_argument("--sample-rate", type=int, help="output sample rate in Hz (default: first clip's)")
     aud.add_argument("--channels", type=int, choices=[1, 2, 6, 8], help="output channel count (default: the widest clip)")
@@ -543,6 +727,18 @@ def main() -> int:
     apply_common(args)
     if args.fps is not None and args.fps <= 0:
         die(f"--fps must be positive, got {args.fps:g}")
+    # nan and inf are refused by the parser (finite_float) and a negative length by apply_common: it
+    # was taken as the one-frame minimum and the join succeeded with a transition nobody asked for
+
+    cut_flag = "--audio-lead" if args.audio_lead is not None else "--audio-lag" if args.audio_lag is not None else None
+    hint = "a J-cut or an L-cut is a plain cut: --transition none, no --copy, one of the two flags"
+    if args.audio_lead is not None and args.audio_lag is not None:
+        refuse("input", "audio_cut_both_flags", "--audio-lead and --audio-lag are two different cuts: give one", hint=hint)
+    if cut_flag and args.transition != "none":
+        refuse("input", "audio_cut_transition", f"{cut_flag} needs --transition none: a transition already overlaps the picture of the two clips", hint=hint)
+    if cut_flag and args.copy:
+        refuse("input", "audio_cut_copy", f"{cut_flag} cuts picture and sound at different times, which a stream copy cannot do: drop --copy", hint=hint)
+    cut_s = args.audio_lead if args.audio_lead is not None else args.audio_lag
 
     if args.list:
         if args.inputs:
@@ -622,6 +818,11 @@ def main() -> int:
             skipped=skipped)
     validate_color(args.pad_color, "--pad-color")
     metas = [probe(p) for p in args.inputs]
+    for p, m in zip(args.inputs, metas):
+        input_length(m, p)  # every clip is placed by its length: one that states none is refused, not 0 s (#491)
+        # a still joined as one frame (--transition none, verified), was refused as "too short" for
+        # a transition, or as a stream mismatch by --copy: it has no length to place (#531)
+        refuse_still(m, p, "a join places each clip by its length, and a still has none")
     # A pending input's probe is the dry-run stub, whose (0x0) video stream says nothing about the
     # file an earlier step will write. Its extension stands in: a step names its output for what
     # it holds, so an audio extension (.wav, .m4a, .aiff, ... -- every audio file this skill
@@ -636,6 +837,8 @@ def main() -> int:
         for p, m in zip(args.inputs, metas):
             if not m.get("audio"):
                 die(f"{p} has neither a video nor an audio stream")
+        if cut_flag:
+            die(f"{cut_flag} moves the sound against a picture, and these clips have none")
         if args.copy:
             die("--copy joins video clips; an audio-only join resamples every clip to one format, which a copy cannot do")
         return join_audio(args, metas)
@@ -666,6 +869,9 @@ def main() -> int:
         w, h = fw, fh
     fps = args.fps or first.get("fps") or 30.0
     fps = round(fps) if abs(fps - round(fps)) < 0.02 else fps
+    # the exact rate every length below is counted in (30000/1001, not 29.97)
+    rate_q = output_rate(fps, first, bool(args.fps))
+    fps = float(rate_q)
     w, h = w - (w % 2), h - (h % 2)
     note_short_segments(args.inputs, metas, MIN_SEGMENT_FRAMES / fps, f"{MIN_SEGMENT_FRAMES} frames at {fps:g} fps")
     durs = [m.get("duration") or 0.0 for m in metas]
@@ -675,11 +881,42 @@ def main() -> int:
     # its picture and its sound together. The plain cut used to take the raw streams, and a sound
     # past the picture (a music bed padded to the container, even a 20 ms AAC tail) left a hole in
     # the video there.
-    lens = [clip_length(m, fps) for m in metas]
+    # Each length is a whole number of frames of the output rate, and each sound length the
+    # samples those frames last (#455): a length in milliseconds rounded 5 frames at 30 fps
+    # (0.166667 s) up to 0.167 s, the concat filter started the next clip after it, and 60 such
+    # clips left one-frame holes from about 8 s on. Sample counts come from the running frame
+    # total, so the sound never drifts from the picture by more than one sample.
+    lmetas = [with_whole_picture(m, rate_q) for m in metas]
+    frames = [clip_frames(m, clip_length(m, fps), rate_q) for m in lmetas]
+    # the transition is a whole number of frames too, so xfade's offsets (and acrossfade's
+    # overlap) land on frames of the output rate (#468). A transition is at least one frame:
+    # --duration 0 used to build acrossfade=ns=0, which FFmpeg refuses
+    tframes = max(1, round(d * fps)) if args.transition != "none" else 0
+    d = tframes / fps
+    lens = [f / fps for f in frames]
+    # the J-cut or L-cut offset: whole frames of the output rate, and a clip it takes from must be longer
+    cut_f = round(cut_s * fps) if cut_s else 0
+    if cut_s and (cut_f < 1 or any(0 < nf <= cut_f for nf in frames)):
+        refuse("input", "audio_cut_too_long", f"{cut_flag} {cut_s:g} is not between one frame ({1 / fps:.3f} s) and the length "
+               f"of the shortest clip ({min(frames) / fps:.3f} s): it takes that much of a clip", hint="give a shorter value", frames=frames)
     place_silent(lens, d)
-    for p, dur in zip(args.inputs, lens):
-        if d and dur <= d * 2 and not STATE.dry_run:
-            die(f"{p} is only {dur:.2f}s, too short for a {d:.2f}s transition; shorten --duration")
+    for p, nf in zip(args.inputs, frames):
+        if d and nf <= tframes * 2 and not STATE.dry_run:
+            die(f"{p} is only {nf / fps:.2f}s, too short for a {d:.2f}s transition; shorten --duration")
+    # every sample boundary is a frame position of the OUTPUT rounded once: clip i spans output
+    # frames [start_i, start_i + frames_i) and overlaps the clip before it over [start_i,
+    # start_i + tframes), so its samples and each overlap's are differences of rounded
+    # cumulative positions and their sum telescopes to the output's own length. Rounding each
+    # overlap on its own (14414.4 samples -> 14414 at 30000/1001 and 9 frames) left the sound
+    # 0.4 samples longer per transition.
+    def at(frame: int) -> int:
+        return round(frame * JOIN_AUDIO_RATE / rate_q)
+    starts, start = [], 0
+    for i, nf in enumerate(frames):
+        starts.append(start)
+        start += nf - tframes
+    samples = [at(s0 + nf) - at(s0) for s0, nf in zip(starts, frames)]
+    overlaps = [at(s0 + tframes) - at(s0) for s0 in starts]
 
     cmd = ffmpeg_base()
     extra_inputs: List[str] = []
@@ -729,6 +966,7 @@ def main() -> int:
         # every clip is squared at its display aspect before it is fitted (#411)
         sq = (square_pixels(metas[i].get("video")) + ",") if square_pixels(metas[i].get("video")) else ""
         if args.fit == "crop":
+            warn_mostly_cropped(metas[i].get("video"), w, h)
             return f"{sq}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
         pad = f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color="
         return (f"{sq}scale={w}:{h}:force_original_aspect_ratio=decrease,"
@@ -745,7 +983,10 @@ def main() -> int:
     if len(set(chans)) > 1:
         info(f"channel counts differ ({', '.join(str(c) for c in chans)}); every clip becomes {layout}")
     for i in range(n):
-        parts.append(f"[{i}:v]{convert[i]}{geo(i)},setsar=1,setpts=PTS-STARTPTS,fps={fps:g},format={pixfmt},settb=AVTB[v{i}]")
+        # the fps filter's time base is one frame (1/rate), so every timestamp downstream is a
+        # frame number and an offset in seconds is rounded to a whole frame, never a microsecond
+        # off it on any FFmpeg (AVTB left xfade to compare microseconds)
+        parts.append(f"[{i}:v]{convert[i]}{geo(i)},setsar=1,setpts=PTS-STARTPTS,fps={rate_q.numerator}/{rate_q.denominator},format={pixfmt}[v{i}]")
         # the sound is shifted by the picture's start, not to its own (#409): #338 started each
         # clip's picture at 0, and a per-stream PTS-STARTPTS then moved a sound that starts 0.3 s
         # after its picture 0.3 s early. Sound before the first frame is dropped and a late sound
@@ -755,23 +996,39 @@ def main() -> int:
 
     # pad the shorter stream to the clip's length: the audio with silence, the picture by holding
     # its last frame, then cut both there -- each clip boundary is then the same for both chains
+    # -- by frame and by sample, never by rounded seconds (#455)
     for i in range(n):
-        vlen = (metas[i].get("video") or {}).get("duration") or lens[i]
-        hold = f"tpad=stop_mode=clone:stop_duration={lens[i] - vlen:.3f}," if lens[i] > vlen else ""
-        parts.append(f"[v{i}]{hold}trim=duration={lens[i]:.3f}[vp{i}]")
-        parts.append(f"[a{i}]apad=whole_dur={lens[i]:.3f},atrim=duration={lens[i]:.3f}[ap{i}]")
-    if args.transition == "none":
+        vlen = (lmetas[i].get("video") or {}).get("duration") or lens[i]
+        have = round(vlen * fps)
+        # one frame more than the gap is held, and the trim cuts at the clip's last frame
+        hold = f"tpad=stop_mode=clone:stop={frames[i] - have + 1}," if frames[i] > have else ""
+        # J-cut: picture from frame cut_f of every clip but the first, sound without the last cut_f of
+        # every clip but the last; L-cut: the other way round (sync is kept, so both lose the same)
+        lead, last = args.audio_lead is not None and cut_f, i < n - 1
+        lag = args.audio_lag is not None and cut_f
+        vs, ve = (cut_f if lead and i else 0), frames[i] - (cut_f if lag and last else 0)
+        a0, a1 = (at(cut_f) if lag and i else 0), samples[i] - (at(cut_f) if lead and last else 0)
+        parts.append(f"[v{i}]{hold}trim={f'start_frame={vs}:' if vs else ''}end_frame={ve}{',setpts=PTS-STARTPTS' if vs else ''}[vp{i}]")
+        parts.append(f"[a{i}]apad=whole_len={samples[i]},atrim={f'start_sample={a0}:' if a0 else ''}end_sample={a1}"
+                     f"{',asetpts=PTS-STARTPTS' if a0 else ''}[ap{i}]")
+    if cut_f:  # one concat each, as the two streams are cut at different frames
+        parts.append("".join(f"[vp{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vout]")
+        parts.append("".join(f"[ap{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[aout]")
+    elif args.transition == "none":
         chain = "".join(f"[vp{i}][ap{i}]" for i in range(n))
         parts.append(f"{chain}concat=n={n}:v=1:a=1[vout][aout]")
     else:
         vprev, aprev = "vp0", "ap0"
-        offset = 0.0
+        start = 0
         for i in range(1, n):
-            offset += lens[i - 1] - d
+            # clip i starts on frame `start` of the output; xfade starts on the first frame at or
+            # after its offset, so the offset is that frame's time rounded down (#468)
+            start += frames[i - 1] - tframes
             vout = f"vx{i}" if i < n - 1 else "vout"
             aout = f"ax{i}" if i < n - 1 else "aout"
-            parts.append(f"[{vprev}][vp{i}]xfade=transition={args.transition}:duration={d:g}:offset={offset:.3f}[{vout}]")
-            parts.append(f"[{aprev}][ap{i}]acrossfade=d={d:g}:c1=tri:c2=tri[{aout}]")
+            parts.append(f"[{vprev}][vp{i}]xfade=transition={args.transition}:duration={frame_time(tframes, rate_q)}"
+                         f":offset={frame_time(start, rate_q)}[{vout}]")
+            parts.append(f"[{aprev}][ap{i}]acrossfade=ns={overlaps[i]}:c1=tri:c2=tri[{aout}]")
             vprev, aprev = vout, aout
 
     # A pending input's stub is unmeasured (0x0, 0 fps, 0 s -- #77 keeps it honest rather than
@@ -784,10 +1041,11 @@ def main() -> int:
                            "by its measured length")
     elif not d and any(m.get("dry_run") for m in metas):
         # the plain cut trims/holds every clip to clip_length too (2.4.1), so a pending clip's
-        # planned trim=duration=0.000 is the stub's placeholder, not the cut
+        # planned trim=end_frame=0 is the stub's placeholder, not the cut
         STATE_NOTES.append("the planned trim lengths count each pending input as 0 s long: a real run trims "
                            "or holds it to its measured length")
     output = args.output or default_output(args.inputs[0], "joined", "mp4")
+    refuse_list_as_output(args, output)
     cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "[aout]"]
     # the fps filter already made the picture constant-rate, and the per-clip trims (then xfade or
     # concat) place every frame: FFmpeg 5.1's default cfr output mode still duplicated the last one
@@ -797,6 +1055,8 @@ def main() -> int:
     cmd += video_args(hdr_meta or metas[0], args.crf, args.preset, convert_matrix=False) + aac_args() + [output]
     run(cmd)
     expected = unpending_length(lens, d)
+    if expected is not None and cut_f:
+        expected = round(expected - cut_f * (n - 1) / fps, 3)
     r = probe(output, role="output")
     # the picture is what the offsets place: measure the video stream, not the container (whose
     # length also counts the AAC tail), against the length the clips add up to
@@ -816,8 +1076,11 @@ def main() -> int:
         STATE_NOTES.append(f"{len(substituted)} clip(s) had no audio stream; their span of the join is generated "
                            "silence: " + ", ".join(os.path.basename(p) for p in substituted))
     info(f"wrote {output} ({fmt_secs(measured)}, {expected_text(expected)}, {w}x{h} @ {fps:g}fps, {n} clips, {args.transition})")
-    overlap = overlap_report(lens, expected)
+    overlap = {} if cut_f else overlap_report(lens, expected)
     emit(output, mode="video", **overlap, **reported(), clips=n, transition=args.transition, expected_duration=expected,
+         frame_rate=f"{rate_q.numerator}/{rate_q.denominator}", clip_frames=frames, transition_frames=tframes,
+         **({"audio_lead_seconds": cut_f / fps} if cut_f and args.audio_lead is not None else {}),
+         **({"audio_lag_seconds": cut_f / fps} if cut_f and args.audio_lag is not None else {}),
          verification=verification, expect_streams={"video": 1, "audio": 1}, stream_reference=metas,
          audio_substituted=substituted,
          dropped_non_av_streams=any(m.get("subtitle_streams") or m.get("data_streams") for m in metas))

@@ -9,7 +9,7 @@ why it is its own file.
 """
 from __future__ import annotations
 
-import json
+import math
 import os
 import re
 import unicodedata
@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from _common.decision import _unspaced_script, fmt_srt_time, parse_time
-from _common.emit import die, info, warn
-from _common.runner import read_text_or_die
+from _common.emit import die, info
+from _common.runner import parse_json, read_json, read_text_or_die
 
 # The engines this skill knows how to drive, and how to install each -- one string, so every
 # tool that needs a transcript refuses in the same words. The two Parakeet engines are
@@ -68,43 +68,86 @@ class Transcription:
       engine  the engine that produced them, or None
       facts   the result document's `transcription` block, in its key order:
               {routing, detected_language?, engine, model, language}
-      notes   sentences for the result document's top-level `notes`
     """
 
     def __init__(self, cues: Optional[List[Tuple[float, float, str]]] = None,
                  words: "Optional[List[Dict[str, Any]]]" = None, engine: Optional[str] = None,
-                 facts: Optional[Dict[str, Any]] = None, notes: Optional[List[str]] = None) -> None:
+                 facts: Optional[Dict[str, Any]] = None) -> None:
         self.cues: List[Tuple[float, float, str]] = list(cues or [])
         self.words: "List[Dict[str, Any]]" = [dict(w) for w in (words or [])]
         self.engine = engine
         self.facts: Dict[str, Any] = dict(facts or {})
-        self.notes: List[str] = list(notes or [])
 
     def __repr__(self) -> str:
         return (f"Transcription(engine={self.engine!r}, cues={len(self.cues)}, words={len(self.words)}, "
-                f"facts={self.facts!r}, notes={self.notes!r})")
+                f"facts={self.facts!r})")
+
+
+# A line that starts a cue even with no blank line before it: a clock time, "-->", a clock time,
+# then nothing or whitespace (ffmpeg's position fields, X1:.. Y1:..). ffmpeg's SRT demuxer starts
+# an event at every such line; the first line of a block holding "-->" is a timing line whatever
+# its shape.
+_SRT_CUE_START = re.compile(r"^\s*\d+:\d+[\d:.,]*\s*-->\s*\d+:\d+[\d:.,]*(\s|$)")
+
+
+def srt_blocks(text: str) -> List[Tuple[str, List[str]]]:
+    """(timing line, text lines) of every cue in SRT text whose line ends are already `\\n`.
+
+    A blank (or whitespace-only) line ends a cue, and the first line holding "-->" in a run of
+    lines is its timing line; the lines before it (the index) are not text. Inside a run, a later
+    line shaped like a timing line (_SRT_CUE_START) starts the next cue, and a bare number just
+    before it is that cue's index, so an SRT written without blank lines between cues reads as
+    ffmpeg reads it rather than as one cue. A later line that merely contains "-->" is text."""
+    out: List[Tuple[str, List[str]]] = []
+    for run in re.split(r"\n\s*\n", text):
+        lines = [ln for ln in run.split("\n") if ln.strip()]
+        first = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if first is None:
+            continue
+        timing, body = lines[first], []
+        for ln in lines[first + 1:]:
+            if _SRT_CUE_START.match(ln):
+                if body and body[-1].strip().isdigit():
+                    body.pop()
+                out.append((timing, body))
+                timing, body = ln, []
+            else:
+                body.append(ln)
+        out.append((timing, body))
+    return out
+
+
+def srt_timing_times(line: str) -> Tuple[str, str]:
+    """The start and end tokens of an SRT timing line: what is before the first "-->", and the
+    first word after it. ffmpeg reads the two times and ignores the rest (position fields
+    `X1:.. X2:.. Y1:.. Y2:..`, or a stray second "-->")."""
+    a, _sep, b = line.partition("-->")
+    words = b.split()
+    return a.strip(), words[0] if words else ""
+
+
+# WebVTT's inline word timestamps and its class, voice and language spans (YouTube's automatic
+# captions: `hello<00:00:01.500><c> world</c>`); <i>, <b> and <u> are SRT's too and stay
+_VTT_INLINE = re.compile(r"<\d{1,2}:\d{2}(?::\d{2})?\.\d{3}>|</?(?:c|v|lang)(?:[.\s][^>]*)?>")
 
 
 def parse_srt(path: str) -> List[Tuple[float, float, str]]:
     cues: List[Tuple[float, float, str]] = []
-    block: List[str] = []
-    content = read_text_or_die(path, "--srt").lstrip("\ufeff").replace("\r\n", "\n") + "\n\n"
-    for line in content.split("\n"):
-        if line.strip():
-            block.append(line)
-            continue
-        if block:
-            times = next((b for b in block if "-->" in b), None)
-            if times:
-                a, b = times.split("-->")
-                text = "\n".join(block[block.index(times) + 1:]).strip()
-                try:
-                    cues.append((parse_time(a), parse_time(b), text))
-                except ValueError as e:  # includes MissingFpsError: SRT timings are hh:mm:ss,ms, never frames
-                    die(f"{path}: cannot read the timing line {times.strip()!r}: {e}")
-            block = []
+    source = read_text_or_die(path, "--srt")
+    # only in a file that says it is WebVTT: ffmpeg's own WebVTT reader drops these tags, and the
+    # cues this function returns were burned with them in the text (#404)
+    vtt = source.lstrip().upper().startswith("WEBVTT")
+    for times, body in srt_blocks(source):
+        a, b = srt_timing_times(times)
+        text = "\n".join(body).strip()
+        if vtt:
+            text = _VTT_INLINE.sub("", text).strip()
+        try:
+            cues.append((parse_time(a), parse_time(b), text))
+        except ValueError as e:  # includes MissingFpsError: SRT timings are hh:mm:ss,ms, never frames
+            die(f"{path}: cannot read the timing line {times.strip()!r}: {e}", kind="input")
     if not cues:
-        die(f"no cues found in {path}")
+        die(f"no cues found in {path}", kind="input")
     return cues
 
 
@@ -147,11 +190,11 @@ def die_engines_failed(tried: "List[Dict[str, str]]", video: str, flag: str, alt
     `reason` is "english_only" when the only engines found were Parakeet engines auto passed over
     for a language that is not English, else "engine_failed"; `engines` lists them all."""
     failed = [t for t in tried if t["reason"] != ENGLISH_ONLY_REASON]
-    if failed:
-        hint = "fix the engine that failed (its own message is in engines[].detail)"
-    else:
-        hint = ("install a Whisper engine for this language (see --help), or name a Parakeet engine with --engine "
-                "and give it a multilingual (v3) model")
+    hints = ["fix the engine that failed (its own message is in engines[].detail)"] if failed else []
+    if len(failed) < len(tried):
+        hints.append("name the spoken language when it is not known (engines[].detail says with which flag), install a Whisper "
+                     "engine for this language (see --help), or name a Parakeet engine with --engine and give it a multilingual (v3) model")
+    hint = "; or ".join(hints)
     die(f"no installed speech-to-text engine could transcribe {video} for {flag}:\n"
         + "\n".join(f"  {t['engine']} {t['detail']}" for t in tried) + "\n" + alternative,
         kind="input", reason=ENGINE_FAILED_REASON if failed else ENGLISH_ONLY_REASON,
@@ -204,9 +247,13 @@ def write_srt(cues: List[Tuple[float, float, str]], path: str) -> None:
             # line with two adjacent pipes ("a||b") becomes "a\n\nb" -- and writing that blank line
             # raw would split one cue into two malformed half-blocks (the second missing its own
             # index/timecode). Collapse any run of blank lines within the cue text to a single
-            # newline so the cue's own text can never fake the format's block boundary.
-            t = re.sub(r"\n{2,}", "\n", t).strip("\n")
+            # newline so the cue's own text can never fake the format's block boundary. A line of
+            # only spaces or tabs is blank to every SRT reader too, so it goes the same way.
+            t = "\n".join(ln for ln in t.split("\n") if ln.strip())
             fh.write(f"{i}\n{fmt_srt_time(s)} --> {fmt_srt_time(e)}\n{t}\n\n")
+    # under batch.py: this SRT as written is the run's own (an edit made after it is not)
+    from _common.runner import report_committed
+    report_committed(path)
 
 
 def transcribe_result(video: str, out_srt: str, language: Optional[str], model: Optional[str], audio_stream: int = 0,
@@ -254,37 +301,28 @@ def _asr_run(cmd: List[str], subprocess, name: str, env: "Optional[Dict[str, str
     return None  # unreachable
 
 
-def assumed_english_note(language_flag: str = "--language", whisper_failed: bool = False,
-                         parakeet_model: bool = False) -> str:
-    """The top-level `notes` line for a transcript the English-only Parakeet model made from speech
-    whose language nobody named and nothing here could detect. The fix it names: the Whisper
-    engine that failed (`whisper_failed`), a multilingual Parakeet model when --model named a
-    Parakeet one (`parakeet_model`), else a Whisper engine to install."""
-    if whisper_failed:
-        fix = "or fix the Whisper engine that failed (the log names it)"
-    elif parakeet_model:
-        fix = "or name a multilingual (v3) Parakeet model with --model"
-    else:
-        fix = "or install a Whisper engine with a multilingual model, which --engine auto then uses for speech it cannot identify"
-    return (f"English was assumed: no {language_flag} was given and the spoken language could not be "
-            "detected here (that needs whisper.cpp with a multilingual ggml model), so the English-only "
-            "Parakeet model made this transcript. If the speech is not English the transcript is wrong: "
-            f"name the language with {language_flag}, " + fix)
-
-
 def _parakeet_attempt(engines: "List[str]", facts: Dict[str, Any], wanted: str, language: Optional[str],
                       wav: str, tmpdir: str, model: Optional[str], shutil, subprocess, video: str,
                       language_flag: str, need_words: bool = False,
                       tried: "Optional[List[Dict[str, str]]]" = None) -> Optional[Tuple[Transcription, str]]:
     """(Transcription, the model's file name) from the first of `engines` that transcribes, or None.
 
-    Under --engine auto with no language named or detected, the English-only model ran on an
-    assumption: the Transcription then carries assumed_english_note(), and a warning is logged. A
-    multilingual (v3) model assumed nothing, so it gets no note and its routing drops "assumed
-    English". `need_words`: an engine whose cues read but whose word times do not is passed over
+    Under --engine auto with no language named or detected, an English-only model does not run:
+    it would write English words for whatever was said, and a note in the result is read after the
+    captions are burned (4.0.0). It is added to `tried` as english_only, with the flag that names
+    the language, and the caller's refusal lists it. A multilingual (v3) model assumes nothing and
+    runs; its routing says so. `need_words`: an engine whose cues read but whose word times do not is passed over
     (silence.py --filler can cut nothing on cues), unless it was asked for by name. An engine that
     ran and did not transcribe is added to `tried`."""
+    unknown = wanted == "auto" and not language and not facts.get("detected_language")
     for eng in engines:
+        if unknown and _parakeet_available(eng, shutil, model) and not _parakeet_multilingual(_parakeet_model_for(eng, model, None)):
+            info(f"{eng} not run: its model is English-only and the spoken language is not known")
+            if tried is not None:
+                tried.append({"engine": eng, "reason": ENGLISH_ONLY_REASON,
+                              "detail": "is installed, but its model is English-only and the spoken language is not known here: "
+                                        f"name it with {language_flag} (en when the speech is English)"})
+            continue
         got = run_parakeet(eng, wav, tmpdir, model, language, shutil, subprocess, video, tried)
         if got and need_words and not got[1] and wanted not in PARAKEET_ENGINES:
             # cues read but no word times (a caption could use them; this caller cannot); a
@@ -298,13 +336,8 @@ def _parakeet_attempt(engines: "List[str]", facts: Dict[str, Any], wanted: str, 
         cues, words, chosen = got
         run = Transcription(cues=cues, words=words, engine=eng,
                             facts=dict(facts, engine=eng, model=chosen, language=language or facts.get("detected_language")))
-        if wanted == "auto" and not language and not facts.get("detected_language"):
-            if _parakeet_multilingual(chosen):
-                run.facts["routing"] = run.facts["routing"].replace(", assumed English", "; the Parakeet model is multilingual")
-            else:
-                run.notes.append(assumed_english_note(language_flag, whisper_failed=facts.get("routing") == ROUTING_LAST_RESORT,
-                                                      parakeet_model=facts.get("routing") == ROUTING_PARAKEET_MODEL))
-                warn(run.notes[-1], "asr_language_assumed")
+        if unknown:
+            run.facts["routing"] += ROUTING_MULTILINGUAL
         return run, os.path.basename(chosen)
     return None
 
@@ -433,7 +466,7 @@ def _transcribe_in(tmpdir: str, video: str, out_srt: str, language: Optional[str
         tried.append(_failed("openai-whisper", "found but failed: " + line))
     # 4. Parakeet after all, when the language was never known and every Whisper engine failed
     if route.last:
-        info("no Whisper engine transcribed it; trying Parakeet with English assumed")
+        info("no Whisper engine transcribed it; a multilingual Parakeet model may")
         done = parakeet(list(route.last), {"routing": ROUTING_LAST_RESORT})
         if done:
             return done
@@ -473,20 +506,24 @@ def whisper_word_timings(srt_path: Optional[str]) -> List[Tuple[float, float, st
         if not os.path.exists(cand):
             continue
         try:
-            data = json.loads(Path(cand).read_text(encoding="utf-8"))
+            data = read_json(cand)
         except (OSError, ValueError):
             continue
+        # the shape is not checked first: a segment that is a string or a list, or "segments" that
+        # is a number, is simply no words, as _dicts() reads every engine's JSON
         raw = []
         if isinstance(data, dict):
-            raw = list(data.get("words") or [])
-            for seg in data.get("segments") or []:
-                raw.extend((seg or {}).get("words") or [])
+            raw = _dicts(data.get("words"))
+            for seg in _dicts(data.get("segments")):
+                raw.extend(_dicts(seg.get("words")))
         words = []
         for w in raw:
             try:
                 text = str(w.get("word") or w.get("text") or "").strip()
-                if text:
-                    words.append((float(w["start"]), float(w["end"]), text))
+                start, end = float(w["start"]), float(w["end"])
+                # NaN / Infinity are valid to json.loads and place no word anywhere
+                if text and math.isfinite(start) and math.isfinite(end):
+                    words.append((start, end, text))
             except (AttributeError, KeyError, TypeError, ValueError):
                 continue
         if words:
@@ -516,12 +553,12 @@ def _words_from_whisper_cpp_json(path: str) -> "List[Dict[str, Any]]":
     boundaries). A token that is part of a character (U+FFFD) is still glued.
     """
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        doc = read_json(path)
     except (OSError, ValueError):
         return []
     out: "List[Dict[str, Any]]" = []
-    for seg in (doc.get("transcription") or []):
-        for tok in (seg.get("tokens") or []):
+    for seg in _dicts(doc.get("transcription")) if isinstance(doc, dict) else []:
+        for tok in _dicts(seg.get("tokens")):
             text = str(tok.get("text") or "")
             if not text.strip() or text.strip().startswith("[_"):
                 continue
@@ -549,7 +586,7 @@ def _whisper_json_language(path: str) -> Optional[str]:
     """The language a Whisper engine's JSON says it decoded: whisper.cpp's `result.language`, or
     openai-whisper's top-level `language`. None when the file has neither."""
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8")) or {}
+        doc = read_json(path) or {}
         lang = str(((doc.get("result") or {}).get("language")) or doc.get("language") or "").strip().lower()
     except (OSError, ValueError, AttributeError):
         return None
@@ -565,12 +602,12 @@ def _heard_language(heard: list) -> Optional[str]:
 def _words_from_openai_whisper_json(path: str) -> "List[Dict[str, Any]]":
     """openai-whisper --word_timestamps True --output_format json: segments[].words[]."""
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        doc = read_json(path)
     except (OSError, ValueError):
         return []
     out: "List[Dict[str, Any]]" = []
-    for seg in (doc.get("segments") or []):
-        for w in (seg.get("words") or []):
+    for seg in _dicts(doc.get("segments")) if isinstance(doc, dict) else []:
+        for w in _dicts(seg.get("words")):
             try:
                 out.append({"word": str(w.get("word") or w.get("text") or "").strip(),
                             "start": float(w["start"]), "end": float(w["end"])})
@@ -589,7 +626,7 @@ def _words_from_parakeet_mlx_json(path: str) -> "List[Dict[str, Any]]":
     after it starts a word too (" m" "is" "ter" " " "Q" "u" "il" "ter" -> "mister", "Quilter").
     """
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        doc = read_json(path)
     except (OSError, ValueError):
         return []
     out: "List[Dict[str, Any]]" = []
@@ -616,7 +653,7 @@ def _words_from_parakeet_mlx_json(path: str) -> "List[Dict[str, Any]]":
 def _cues_from_parakeet_mlx_json(path: str) -> List[Tuple[float, float, str]]:
     """parakeet-mlx's own sentence segmentation, as cues."""
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        doc = read_json(path)
     except (OSError, ValueError):
         return []
     cues: List[Tuple[float, float, str]] = []
@@ -639,7 +676,7 @@ def _dicts(value: Any) -> "List[Dict[str, Any]]":
 def _words_from_parakeet_cpp_json(text: str) -> "List[Dict[str, Any]]":
     """parakeet-cli transcribe --json: {"words": [{"w", "start", "end", "conf"}]}, times in seconds."""
     try:
-        doc = json.loads(text)
+        doc = parse_json(text)
     except ValueError:
         return []
     out: "List[Dict[str, Any]]" = []
@@ -772,10 +809,12 @@ def detect_language(wav: str, shutil, subprocess) -> Optional[str]:
     return m.group(1) if m else None
 
 
-ROUTING_ASSUMED_ENGLISH = "auto: language not detectable here and no Whisper engine, assumed English"
+ROUTING_ASSUMED_ENGLISH = "auto: language not detectable here and no Whisper engine"
 ROUTING_UNDETECTED_WHISPER = "auto: language not detectable here, Whisper first (Parakeet is English-only)"
-ROUTING_LAST_RESORT = "auto: language not detectable here and no Whisper engine transcribed it, assumed English"
-ROUTING_PARAKEET_MODEL = "auto: --model names a Parakeet model and the language is not detectable here, assumed English"
+ROUTING_LAST_RESORT = "auto: language not detectable here and no Whisper engine transcribed it"
+ROUTING_PARAKEET_MODEL = "auto: --model names a Parakeet model and the language is not detectable here"
+# appended to those three when a Parakeet engine ran: only a multilingual model does, with the language unknown
+ROUTING_MULTILINGUAL = "; the Parakeet model is multilingual"
 # appended to the routing auto chose Parakeet for, when no Parakeet engine transcribed it and a
 # Whisper engine did
 ROUTING_PARAKEET_FAILED = ", no Parakeet engine transcribed it"
@@ -798,8 +837,8 @@ def parakeet_route(engine: str, language: Optional[str], wav: str, shutil, subpr
     When neither can say, the English-only model is not trusted with it: a Whisper engine that
     can run (`whisper_model`, default `model`) goes first and Parakeet only after every Whisper
     engine failed; with no Whisper engine (or a --model that names a Parakeet model, which no
-    Whisper engine can load), Parakeet runs on English assumed and the caller's result carries
-    assumed_english_note(). A named Parakeet engine always runs; with a non-English --language it
+    Whisper engine can load), only a multilingual Parakeet model runs (_parakeet_attempt()): an
+    English-only one is refused, naming the flag for the language. A named Parakeet engine always runs; with a non-English --language it
     needs a multilingual (v3) model, which _parakeet_model_for() checks.
     """
     if engine in PARAKEET_ENGINES:
@@ -975,7 +1014,7 @@ def _heard_nothing(text: str, key: str) -> bool:
     Anything else that yields no words -- not JSON, the wrong shape, entries that do not parse --
     is output that could not be read, not a finding that nobody spoke."""
     try:
-        doc = json.loads(text)
+        doc = parse_json(text)
     except ValueError:
         return False
     return isinstance(doc, dict) and doc.get(key) == []
@@ -987,7 +1026,7 @@ def _whisper_heard_nothing(path: str, key: str) -> bool:
     no speech (#414). A document with text and no word timings is a build without them, not
     silence, and stays the "no word-level timings" refusal."""
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        doc = read_json(path)
     except (OSError, ValueError):
         return False
     if not isinstance(doc, dict) or not isinstance(doc.get(key), list):
@@ -1035,7 +1074,7 @@ def transcribe_words_result(video: str, language: "Optional[str]" = None, model:
     when the engine ran but its build produced no word-level timings, so the caller can refuse
     naming that engine instead of pretending the audio had no words in it. No engine at all
     raises through die_no_engine(), the same refusal caption.py gives. `language_flag` is the
-    caller's flag for the language, named in assumed_english_note(). `prompt` is passed to a
+    caller's flag for the language, named in the refusal of an English-only model. `prompt` is passed to a
     Whisper engine as its initial prompt (whisper.cpp --prompt, faster-whisper initial_prompt,
     openai-whisper --initial_prompt): Whisper writes clean text and leaves out "uh"/"um" unless
     the context shows it that they are wanted, so silence.py --filler primes it with its own list.
@@ -1045,7 +1084,7 @@ def transcribe_words_result(video: str, language: "Optional[str]" = None, model:
     _shutil = SafeShutil(_shutil)  # look engines up and launch them by full path, never from the working directory
     import subprocess as _subprocess
     import tempfile as _tempfile
-    from _common import require_tool, run_analysis, STATE
+    from _common import require_tool, STATE
     ffmpeg = require_tool("ffmpeg")
     wanted = requested_engine(engine)
     language = engine_language(language)
@@ -1179,7 +1218,7 @@ def transcribe_words_result(video: str, language: "Optional[str]" = None, model:
 
         # 4. Parakeet after all, when the language was never known and no Whisper engine gave words
         if route.last:
-            info("no Whisper engine produced word timings; trying Parakeet with English assumed")
+            info("no Whisper engine produced word timings; a multilingual Parakeet model may")
             done = parakeet(list(route.last), {"routing": ROUTING_LAST_RESORT})
             if done:
                 return done

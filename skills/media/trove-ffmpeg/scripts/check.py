@@ -3,7 +3,11 @@
 
 Checks duration, frame size / aspect, fps, codec, pixel format, colour tags,
 file size, integrated loudness and true peak against the chosen platform
-and prints a PASS/WARN/FAIL table. Exit code 1 when anything FAILs. Each
+and prints a PASS/WARN/FAIL table. Exit code 1 when anything FAILs. A length
+or file size over the platform table's limit is WARN (`basis: guidance`): upload
+limits change and the uploader checks the current one; --max-duration / --max-mb
+state the caller's own limit, which FAILs when a --platform is named (with none,
+an over-length is WARN, as every judgement row is). Each
 row's `fix` is the command that resolves it; a few of the less obvious FAILs
 (video codec, pixel format, HDR colour, loudness) also carry a plain-language
 `reason` -- "QuickTime and iOS commonly reject video that isn't 8-bit 4:2:0",
@@ -43,11 +47,13 @@ import sys
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Tuple
 
-from _platforms import PLATFORMS, PLATFORM_CHOICES, TP_TOLERANCE_DB, spec_of, resolve as resolve_platform
-from _common.probe import (LEGAL_RANGE_CHOICES, measure_signal_range, COMPARE_SSIM_WARN, CONTENT_FLAT_STD, SILENT_PEAK_DBFS, compare_pictures, detect_content,
+from _platforms import PLATFORMS, PLATFORM_CHOICES, TP_TOLERANCE_DB, spec_of, upload_limit_note, resolve as resolve_platform
+from _common.probe import (CHANGE_FLOOR, CHANGE_GRID, change_mask_tiles, change_tiles, LEGAL_RANGE_CHOICES, measure_signal_range, COMPARE_SSIM_WARN, CONTENT_FLAT_STD, SILENT_PEAK_DBFS, compare_pictures, detect_content,
                            detect_flashes, first_frame_stats, presentation_times, measured_level_dbfs)
-from _common.emit import file_identity
-from _common import STATE, add_common, apply_common, die, emit, info, probe, require_tool, run, run_analysis, dry_run_input_pending
+from _common.emit import file_identity, own_length
+from _common.probe import PROBED_AUDIO
+from _common.probe import display_size as shown_size, shorter_than_a_loudness_block
+from _common import STATE, add_common, apply_common, die, emit, probe, require_tool, run_analysis, dry_run_input_pending
 
 # The one delivery table (scripts/_platforms.py): check.py's rows, export.py's presets and the
 # render.py templates all read it, so a platform's loudness spec is stated once. Only the
@@ -61,7 +67,10 @@ def measure_loudness(path: str) -> Dict[str, float]:
     if dry_run_input_pending(path):
         return {}
     ffmpeg = require_tool("ffmpeg")
-    proc = run_analysis([ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-vn", "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json", "-f", "null", "-"], check=False, record=True)
+    # the first audio track, the one the audio row's probe facts describe (and the one export and
+    # loudness write): default selection measured the track with the most channels
+    proc = run_analysis([ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", f"0:{PROBED_AUDIO}", "-vn",
+                         "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json", "-f", "null", "-"], check=False, record=True)
     m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr, re.S)
     if not m:
         return {}
@@ -112,6 +121,103 @@ def display_size(v: Dict[str, Any]) -> "Tuple[int, int]":
     return (h, w) if int(v.get("rotation") or 0) % 180 == 90 else (w, h)
 
 
+def parse_expect_changed(values: "List[str]") -> "List[Dict[str, Any]]":
+    """--expect-changed values -> [{start, end, rect}] (rect [x, y, w, h] in displayed pixels, or
+    None for the whole frame); [] for `none`. Refuses anything it cannot read: a declaration that
+    was silently dropped would turn into a FAIL the caller cannot explain, or a PASS it did not earn."""
+    from _common.decision import parse_time
+    import math
+    if any(v.strip().lower() == "none" for v in values):
+        if len(values) > 1:
+            die("--expect-changed none says the picture must not change at all; it cannot be combined with a span")
+        return []
+    spans = []
+    for raw in values:
+        span, _, rect_text = raw.strip().partition("@")
+        start_text, sep, end_text = span.partition("-")
+        try:
+            if not sep or not start_text or not end_text:
+                raise ValueError(raw)
+            start, end = parse_time(start_text), parse_time(end_text)
+        except (ValueError, SystemExit):
+            die(f"--expect-changed takes START-END (seconds or H:MM:SS), optionally @X,Y,W,H, or none; got {raw!r}")
+        if not (math.isfinite(start) and math.isfinite(end)) or start < 0 or end < start:
+            die(f"--expect-changed {raw!r}: a span starts at 0 or later and ends at or after its start")
+        rect = None
+        if "@" in raw:
+            try:
+                rect = [int(n) for n in rect_text.split(",")]
+            except ValueError:
+                rect = []
+            if len(rect) != 4 or rect[0] < 0 or rect[1] < 0 or rect[2] <= 0 or rect[3] <= 0:
+                die(f"--expect-changed {raw!r}: the rectangle is X,Y,W,H in displayed pixels, whole numbers, W and H above 0")
+        spans.append({"start": start, "end": end, "rect": rect})
+    return spans
+
+
+def _runs(frames: "List[int]") -> "List[Tuple[int, int]]":
+    """Sorted frame indices -> [(first, last)] of consecutive runs."""
+    out: "List[Tuple[int, int]]" = []
+    for n in frames:
+        if out and n == out[-1][1] + 1:
+            out[-1] = (out[-1][0], n)
+        else:
+            out.append((n, n))
+    return out
+
+
+def change_scope(tiles: "Dict[str, Any]", declared: "List[Dict[str, Any]]", times: "List[float]",
+                 size: "Tuple[int, int]", floor: int) -> "Dict[str, Any]":
+    """The measured tiles against the declaration. `times` has one more entry than there are
+    frames (frame n is shown from times[n] until times[n+1]). A declared span is closed at both
+    ends and widened to whole frames: frame n is inside when its interval touches the span.
+    Inside a span with a rectangle, only the tiles the rectangle touches may change."""
+    gw, gh = CHANGE_GRID
+    w, h = size
+    tw, th = w / gw, h / gh
+
+    def allowed_mask(rect: "Optional[List[int]]") -> int:
+        if rect is None:
+            return (1 << gw * gh) - 1
+        x, y, rw, rh = rect
+        return sum(1 << (c + r * gw) for c in range(gw) for r in range(gh)
+                   if c * tw < x + rw and (c + 1) * tw > x and r * th < y + rh and (r + 1) * th > y)
+
+    spans = [dict(d, mask=allowed_mask(d["rect"]), seen=False) for d in declared]
+
+    def describe(frames: "Dict[int, int]") -> "List[Dict[str, Any]]":
+        out = []
+        for first, last in _runs(sorted(frames)):
+            union = 0
+            for n in range(first, last + 1):
+                union |= frames[n]
+            hit = change_mask_tiles(union)
+            c0, c1 = min(c for c, _ in hit), max(c for c, _ in hit)
+            r0, r1 = min(r for _, r in hit), max(r for _, r in hit)
+            x0, y0, x1, y1 = int(c0 * tw), int(r0 * th), int(round((c1 + 1) * tw)), int(round((r1 + 1) * th))
+            out.append({"start": round(times[first], 3), "end": round(times[last + 1], 3), "frames": last - first + 1,
+                        "rect": [x0, y0, x1 - x0, y1 - y0], "peak": max(tiles["peaks"][n] for n in range(first, last + 1))})
+        return out
+
+    outside: "Dict[int, int]" = {}
+    for n, changed in tiles["changed"].items():
+        left = changed
+        for d in spans:
+            if times[n] <= d["end"] and times[n + 1] > d["start"]:
+                # against the frame's own tiles, not what earlier declarations left of them: two
+                # declarations that overlap would otherwise depend on their order, and the later
+                # one would read as "nothing changed there"
+                if changed & d["mask"]:
+                    d["seen"] = True
+                left &= ~d["mask"]
+        if left:
+            outside[n] = left
+    return {"declared": [{"start": d["start"], "end": d["end"], "rect": d["rect"]} for d in declared],
+            "observed": describe(tiles["changed"]), "undeclared": describe(outside),
+            "declared_unchanged": [{"start": d["start"], "end": d["end"], "rect": d["rect"]} for d in spans if not d["seen"]],
+            "floor": floor, "tile": [gw, gh], "frames": tiles["frames"], "quiet_peak": tiles["quiet_peak"]}
+
+
 def _span_total(spans: Any) -> float:
     return sum(max(0.0, e - s) for s, e in spans)
 
@@ -158,16 +264,112 @@ def levels_row(args: argparse.Namespace, v: Dict[str, Any], row: Any) -> "Option
     return doc
 
 
+def encoding_differences(v: Dict[str, Any], rv: Dict[str, Any]) -> "List[str]":
+    """What makes two video streams "not encoded alike" for --expect-changed: part of a measured
+    difference is then the encoder's. The stored size is the file's own width and height, before
+    rotation: 1080x1920 turned to 1920x1080 against a stored 1920x1080 is the same displayed
+    picture stored another way (as is 1440x1080 at 4:3), compared and said."""
+    def stored(x: Dict[str, Any]) -> str:
+        return f"{x.get('width')}x{x.get('height')}"
+    pairs = (("codec", v.get("codec"), rv.get("codec")), ("pix_fmt", v.get("pix_fmt"), rv.get("pix_fmt")),
+             ("fps", v.get("fps"), rv.get("fps")), ("stored size", stored(v), stored(rv)))
+    return [f"{k} {a} against {b}" for k, a, b in pairs if a != b]
+
+
+def change_scope_row(args: Any, declared: "List[Dict[str, Any]]", meta: Dict[str, Any], v: Dict[str, Any], row: Any) -> "Optional[Dict[str, Any]]":
+    """--expect-changed: measure where the picture differs from the reference and grade it against
+    the declaration. A comparison that could not be made is a FAIL, never a WARN or a PASS: the
+    flag exists to stop a false "nothing else changed", and a check that did not run would be one."""
+    want = "a change only where declared" if declared else "no change in the picture"
+    look = f"look.py --compare {args.compare} --at "
+
+    def not_compared(why: str, fix: str) -> None:
+        row("change_scope", "FAIL", f"not compared: {why}", want, fix,
+            reason="nothing was measured, so this does not say the rest of the picture is unchanged")
+
+    ref = probe(args.compare)
+    rv = ref.get("video") or {}
+    if not v or not rv:
+        return not_compared("one of the files has no picture", "--expect-changed needs a video stream in both files")
+    # the displayed picture: rotation applied and non-square pixels squared (a 1440x1080 file at
+    # 4:3 is 1920x1080), which is the frame a caller measures a rectangle on and the frame both
+    # pictures are brought to before they are subtracted
+    from _common.probe import display_size as shown_size, square_pixels
+    size = shown_size(v)
+    if size != shown_size(rv):
+        return not_compared("%dx%d against %dx%d (as displayed)" % (size + shown_size(rv)),
+                            "compare two renders of the same frame size")
+    for d in declared:
+        if d["rect"] and (d["rect"][0] + d["rect"][2] > size[0] or d["rect"][1] + d["rect"][3] > size[1]):
+            # a rectangle that runs past the edge is a wrong size or a wrong file, and clipping it
+            # quietly would allow less than the caller believes it declared
+            die(f"--expect-changed: the rectangle {','.join(map(str, d['rect']))} does not fit inside the {size[0]}x{size[1]} picture")
+    origin = float(meta.get("start_time") or 0.0)
+    pts = presentation_times(args.input, float(v.get("start_time") or 0.0))
+    ref_pts = presentation_times(args.compare, float(rv.get("start_time") or 0.0))
+    nout, nref = v.get("nb_frames") or len(pts) or None, rv.get("nb_frames") or len(ref_pts) or None
+    if not nout or not nref:
+        return not_compared("a frame count could not be read", "remux the file that has no readable frame count (export.py --preset copy)")
+    if int(nout) != int(nref):
+        return not_compared(f"{nout} frames against the reference's {nref}",
+                            "an edit that changes the length cannot be paired frame by frame; compare the parts separately")
+    tiles = change_tiles(args.input, args.compare, args.change_floor, squares=(square_pixels(v), square_pixels(rv)))
+    if tiles is None:
+        return not_compared("the comparison pass failed", look + "0")
+    n = tiles["frames"]
+    fps = float(v.get("fps") or 0.0)
+    if pts and len(pts) >= n:
+        times = [max(0.0, t - origin) for t in pts[:n]]
+        times.append(times[-1] + ((times[-1] - times[-2]) if n > 1 else (1.0 / fps if fps else 0.0)))
+    else:
+        # a span is placed by each frame's own time, and a change is reported at one; an average
+        # rate would put a frame near a span's edge on the wrong side of it, and is simply wrong
+        # on variable-rate video. `none` too: its FAIL names where the change is
+        return not_compared("the frame times could not be read", "remux the file (export.py --preset copy) and check it again")
+    doc = change_scope(tiles, declared, times, size, args.change_floor)
+
+    def span(d: "Dict[str, Any]") -> str:
+        return f"{d['start']:.2f}-{d['end']:.2f}"
+
+    def place(d: "Dict[str, Any]") -> str:
+        x, y, w, h = d["rect"]
+        return f"{span(d)} ({d['frames']} frame{'s' if d['frames'] != 1 else ''}, around x {x}-{x + w}, y {y}-{y + h})"
+
+    idle = "; ".join(f"declared {span(d)} but nothing changed there" for d in doc["declared_unchanged"])
+    differ = encoding_differences(v, rv)
+    if differ:
+        STATE_NOTES.append("--expect-changed: the two files are not encoded alike (" + ", ".join(differ) + "), so part of "
+                           "what was measured is the encoder's difference, not the edit")
+    floor_note = f"floor {doc['floor']}, largest unchanged tile {doc['quiet_peak']}"
+    if doc["undeclared"]:
+        first = doc["undeclared"][0]
+        more = len(doc["undeclared"]) - 1
+        value = "changed " + place(first) + (f" and {more} more span{'s' if more != 1 else ''}" if more else "") + ": not declared"
+        row("change_scope", "FAIL", value + (f"; {idle}" if idle else "") + f" ({floor_note})", want,
+            look + f"{first['start']:g}", reason="the picture changed where the edit was not meant to reach")
+    elif idle:
+        row("change_scope", "WARN", idle + f" ({floor_note})", want, "look at that span: the edit probably did not apply",
+            reason="a declared change was not found")
+    else:
+        seen = ", ".join(span(d) for d in doc["observed"]) or "nothing"
+        value = (f"changed {seen} inside the declared span{'s' if len(declared) != 1 else ''}; nothing else above the floor"
+                 if declared else "no tile above the floor in any frame") + f" ({floor_note}, {n} frames)"
+        row("change_scope", "WARN" if differ else "PASS", value, want,
+            "compare two renders made with the same encoder settings" if differ else "",
+            reason="the two files are not encoded alike: " + ", ".join(differ) if differ else "")
+    return doc
+
+
 def main() -> int:
     STATE_NOTES.clear()  # module state: a second main() in one process starts without the first's notes
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("--platform", choices=PLATFORM_CHOICES, default=None, help="delivery spec to check against (default: youtube, with judgement rows reported as WARN because no platform was named)")
-    ap.add_argument("--max-duration", type=float, help="override max duration in seconds")
+    ap.add_argument("--max-duration", type=float, help="the caller's own maximum length in seconds: over it FAILs when a --platform is named, WARNs with none (the platform table's limit is guidance, WARN)")
     ap.add_argument("--aspect", help="override allowed aspect (e.g. 9:16 or 16:9,1:1)")
-    ap.add_argument("--lufs", type=float, help="override loudness target")
-    ap.add_argument("--tp", type=float, help="override true-peak ceiling")
-    ap.add_argument("--max-mb", type=float, help="override max file size in MB")
+    ap.add_argument("--lufs", type=float, help="override loudness target, in LUFS (-14 for most platforms)")
+    ap.add_argument("--tp", type=float, help="override true-peak ceiling, in dBTP (-1 for most platforms)")
+    ap.add_argument("--max-mb", type=float, help="the caller's own maximum file size in MB: over it FAILs (the platform table's limit is guidance, WARN)")
     ap.add_argument("--no-loudness", action="store_true", help="skip the loudness measurement (faster)")
     ap.add_argument("--content", action="store_true",
                     help="also check the content (one decode pass, plus an audio-only and a video-only one): black, frozen, silence, dropouts, flashes and first frame rows")
@@ -183,6 +385,14 @@ def main() -> int:
     ap.add_argument("--compare", metavar="REFERENCE",
                     help="also measure the picture against REFERENCE, frame by frame (SSIM and PSNR, one pass): a "
                          "similarity row, WARN when the mean SSIM is under 0.98, with the worst frame's time")
+    ap.add_argument("--expect-changed", action="append", metavar="SPAN[@X,Y,W,H]|none",
+                    help="with --compare: where the picture is allowed to differ from REFERENCE, as START-END in this "
+                         "file's time (repeatable), optionally only inside a rectangle of displayed pixels, or `none`. A "
+                         "change_scope row FAILs on a change anywhere else (with its time and place) or when the two "
+                         "could not be compared, and WARNs when a declared span did not change")
+    ap.add_argument("--change-floor", type=int, default=CHANGE_FLOOR, metavar="N",
+                    help="--expect-changed: a 60x60-ish tile (the frame in %dx%d) counts as changed when its largest "
+                         "channel difference is above N of 255 (default %%(default)d)" % CHANGE_GRID)
     ap.add_argument("--expect-identity", metavar="SIZE:MTIME_NS",
                     help="the output_identity a writing tool reported ({size}:{mtime_ns}): an identity row FAILs when "
                          "the file at INPUT is not that file (a later run replaced it, or a failed run left an older one)")
@@ -211,6 +421,14 @@ def main() -> int:
     if not 0 <= args.levels_tolerance <= 100:
         die(f"--levels-tolerance {args.levels_tolerance:g} is outside 0..100 (percent of a frame's samples)")
 
+    declared_changes = None
+    if args.expect_changed:
+        if not args.compare:
+            die("--expect-changed says where the picture may differ from a reference, so it needs --compare REFERENCE")
+        declared_changes = parse_expect_changed(args.expect_changed)
+    if not 1 <= args.change_floor <= 254:
+        die(f"--change-floor {args.change_floor} is outside 1..254 (a difference of 0-255 per channel)")
+
     expected_identity = None
     if args.expect_identity is not None:
         # parsed before any measurement; "" (an unset shell variable) is malformed, not absent
@@ -234,6 +452,11 @@ def main() -> int:
 
     # first frame / flashes: a fade from black or a strobe can be the edit, so neither is a mechanical fix
     JUDGEMENT = {"duration", "aspect", "loudness", "true peak", "fps", "resolution", "first frame", "flashes"}
+    # #485: the rows whose limit is the platform table's upload limit rather than one the caller
+    # stated (--max-duration, --max-mb). Those are guidance: WARN at worst, never counted as failed.
+    guidance = {name for name, stated, limit in (("duration", args.max_duration, spec["max_duration"]),
+                                                 ("file size", args.max_mb, spec["max_bytes"]))
+                if stated is None and limit}
 
     def row(name: str, status: str, value: Any, expect: Any, fix: str = "", reason: str = "") -> None:
         # "format" rows are safe to fix mechanically; "judgement" rows change the content
@@ -242,13 +465,29 @@ def main() -> int:
         # person would ask "so what?" about) is why it matters in plain terms, not the spec clause.
         if status == "FAIL" and not named and name in JUDGEMENT:
             status = "WARN"
+        # "basis" is where the expected value comes from: "requirement" (the delivery format, or a
+        # limit the caller stated) can FAIL; "guidance" (the table's upload limit) cannot.
+        basis = "guidance" if name in guidance else "requirement"
+        if basis == "guidance" and status != "PASS":
+            status = "WARN"
+            reason = (reason + "; " if reason else "") + upload_limit_note(args.platform)
         rows.append({"check": name, "status": status, "value": value, "expected": expect, "fix": fix,
                      "reason": reason if status != "PASS" else "",
-                     "kind": "judgement" if name in JUDGEMENT else "format"})
+                     "kind": "judgement" if name in JUDGEMENT else "format", "basis": basis})
 
-    dur = meta.get("duration") or 0.0
-    if spec["max_duration"]:
-        row("duration", "PASS" if dur <= spec["max_duration"] else "FAIL", f"{dur:.2f}s", f"<= {spec['max_duration']:g}s", "decide with the user: cut.py keeps quality but drops content; fit.py --duration speeds up (audio pitch-preserved, motion faster)")
+    # A113: a length ffprobe did not report is not a length of 0 s that fits under every limit.
+    # The row says it was not measured (FAIL under a length limit the caller stated, WARN under the
+    # platform table's or without one), and the
+    # --content rows that are shares of the running time say so too instead of disappearing.
+    dur_read = meta.get("duration")
+    dur = dur_read or 0.0
+    if dur_read is None:
+        row("duration", "FAIL" if spec["max_duration"] else "WARN", "could not measure",
+            f"<= {spec['max_duration']:g}s" if spec["max_duration"] else "any",
+            "remux the file (export.py --preset copy) so the container states its length, then check again",
+            reason="the file does not state its length, so whether it is within the limit is unknown")
+    elif spec["max_duration"]:
+        row("duration", "PASS" if dur <= spec["max_duration"] else "FAIL", f"{dur:.2f}s", f"<= {spec['max_duration']:g}s", "choose what to keep with cut.py, or explicitly retime with fit.py --duration N --method speed")
     else:
         row("duration", "PASS", f"{dur:.2f}s", "any")
 
@@ -256,7 +495,9 @@ def main() -> int:
         w, h = v["width"], v["height"]
         if v.get("rotation") in (90, -90, 270, -270):
             w, h = h, w
-        asp = aspect_name(w, h)
+        # A114: the aspect a viewer sees is the displayed frame's (rotation and SAR applied), not
+        # the stored grid's: 1440x1080 at SAR 4:3 is a 16:9 picture
+        asp = aspect_name(*shown_size(v)) if all(shown_size(v)) else aspect_name(w, h)
         if spec["aspects"]:
             row("aspect", "PASS" if asp in spec["aspects"] else "FAIL", asp, "/".join(spec["aspects"]), f"fit.py --aspect {spec['aspects'][0]} --fit pad (keeps everything, adds bars) or crop (fills the frame, loses the edges: check the subject with look.py)")
         else:
@@ -265,7 +506,11 @@ def main() -> int:
         if spec["min_height"]:
             row("resolution", "PASS" if short >= spec["min_height"] else "WARN", f"{w}x{h}", f"short side >= {spec['min_height']}", "upscaling will not add detail; re-export from the master")
         fps = v.get("fps") or 0
-        if spec["fps_max"]:
+        if spec["fps_max"] and not fps:
+            # a rate ffprobe did not report is not 0 fps under every limit (the class of A113)
+            row("fps", "WARN", "could not measure", f"<= {spec['fps_max']}", "re-encode at a fixed rate (fit.py --fps N)",
+                reason="the stream states no frame rate, so whether it is within the limit is unknown")
+        elif spec["fps_max"]:
             row("fps", "PASS" if fps <= spec["fps_max"] + 0.01 else "FAIL", f"{fps:g}", f"<= {spec['fps_max']}", "fit.py --fps 30 (drops half the frames of 60 fps motion; fine for talking heads, visible on sports/gaming)")
         row("vfr", "PASS" if not v.get("variable_frame_rate_suspected") else "WARN", "variable" if v.get("variable_frame_rate_suspected") else "constant", "constant", "fit.py --fps N (any re-encode conforms it)")
         if spec["codecs"]:
@@ -304,7 +549,10 @@ def main() -> int:
         row("video", "FAIL", "none", "video stream", "")
 
     size = meta.get("size_bytes") or 0
-    if spec["max_bytes"]:
+    if spec["max_bytes"] and meta.get("size_bytes") is None:
+        row("file size", "FAIL", "could not measure", f"<= {spec['max_bytes'] / 1024 / 1024:.0f} MB", "",
+            reason="the file's size could not be read, so whether it is within the limit is unknown")
+    elif spec["max_bytes"]:
         row("file size", "PASS" if size <= spec["max_bytes"] else "FAIL", f"{size / 1024 / 1024:.1f} MB", f"<= {spec['max_bytes'] / 1024 / 1024:.0f} MB", "export.py --crf 24 or lower resolution")
 
     if a:
@@ -316,7 +564,7 @@ def main() -> int:
             # comes back at a level nobody checked.
             ch = a.get("channels") or 0
             row("channels", "PASS" if ch in (1, 2) else "WARN", f"{ch}ch", "1 (mono) or 2 (stereo)",
-                "audio.py --downmix (5.1/7.1 to stereo with the standard weights) or audio.py --mono",
+                "audio.py --downmix (5.1/7.1 to stereo with the ITU-R BS.775 weights) or audio.py --mono",
                 reason="podcast players downmix 5.1 unpredictably")
     if args.platform == "podcast":
         chapters = meta.get("chapters") or []
@@ -356,12 +604,30 @@ def main() -> int:
         loudness_ran = False
         if a.get("sample_rate") and a["sample_rate"] not in (44100, 48000):
             row("sample rate", "WARN", a["sample_rate"], "44100 or 48000", "loudness.py --sample-rate 48000")
-        if not args.no_loudness and spec["lufs"] is not None:
+        # A117: --tp alone (custom has no loudness target) asks for the true-peak row, which
+        # needs the same measurement pass; without it the run reported 0 failed having measured nothing
+        tp_only = spec["lufs"] is None and args.tp is not None
+        if not args.no_loudness and (spec["lufs"] is not None or tp_only):
             lm = measure_loudness(args.input)
             loudness_ran = bool(lm)
             if lm and lm["tp"] <= SILENT_PEAK_DBFS:
                 silent_audio(lm["tp"])
-            if lm:
+            if lm and tp_only:
+                row("true peak", "PASS" if lm["tp"] <= spec["tp"] + TP_TOLERANCE_DB else "FAIL", f"{lm['tp']:.1f} dBTP", f"<= {spec['tp']:g} dBTP (+{TP_TOLERANCE_DB:g} dB tolerance)", f"loudness.py --tp {spec['tp']:g}")
+            elif not lm and tp_only:
+                row("true peak", "WARN", "could not measure", f"<= {spec['tp']:g} dBTP", "re-run check.py, or verify true peak manually",
+                    reason="ffmpeg's loudness measurement didn't produce a readable result -- this was not actually checked")
+            elif (lm and lm["lufs"] == float("-inf") and lm["tp"] > SILENT_PEAK_DBFS
+                  and shorter_than_a_loudness_block(own_length(a) or dur_read)):
+                # A257: shorter than one 400 ms gating block: a true peak but no integrated
+                # loudness. Not silence, and not a -inf LUFS that FAILs the target. Decided on
+                # the sound's length: a longer track whose every block is under the gate reads
+                # -inf too, and that one still FAILs the target below
+                row("loudness", "WARN", "could not measure (shorter than one 400 ms loudness block)",
+                    f"{spec['lufs']:g} ± {spec['lufs_tol']:g} LUFS", "",
+                    reason="integrated loudness is gated over 400 ms blocks; a clip this short has none")
+                row("true peak", "PASS" if lm["tp"] <= spec["tp"] + TP_TOLERANCE_DB else "FAIL", f"{lm['tp']:.1f} dBTP", f"<= {spec['tp']:g} dBTP (+{TP_TOLERANCE_DB:g} dB tolerance)", f"loudness.py --tp {spec['tp']:g}")
+            elif lm:
                 diff = abs(lm["lufs"] - spec["lufs"])
                 row("loudness", "PASS" if diff <= spec["lufs_tol"] else "FAIL", f"{lm['lufs']:.1f} LUFS", f"{spec['lufs']:g} ± {spec['lufs_tol']:g} LUFS", f"loudness.py -I {spec['lufs']:g} for speech or music; leave ambience/near-silence (<= -40 LUFS) alone and say so",
                     reason="the platform will auto-normalise it to its own target anyway, which can pump or duck the mix in ways you did not choose")
@@ -387,6 +653,14 @@ def main() -> int:
     if args.content:
         cd = detect_content(args.input, dur, video=bool(v), audio=bool(a))
         span = dur if dur > 0 else 0.0
+        if not span and not dry_run_input_pending(args.input):
+            # A113: black, frozen and silence are shares of the running time; with no length
+            # read there is nothing to divide by, and dropping the rows read as nothing to report
+            for name, stream in (("black", v), ("frozen", v), ("silence", a)):
+                if stream:
+                    row(name, "WARN", "could not measure", "a share of the running time",
+                        "remux the file (export.py --preset copy) so the container states its length, then check again",
+                        reason="the file does not state its length, so this share of it could not be worked out")
         if "black" in cd and span:
             share = _span_total(cd["black"]) / span
             row("black", "FAIL" if share >= BLACK_FAIL else ("WARN" if share > BLACK_WARN else "PASS"),
@@ -478,6 +752,9 @@ def main() -> int:
                     STATE_NOTES.append(f"--compare: {nout} frames against the reference's {nref}; frames were paired in "
                                        f"order, so an added or dropped frame shifts every later pair, and only the "
                                        f"first {min(int(nref), int(nout))} were compared")
+    scope_doc = None
+    if declared_changes is not None and not dry_run_input_pending(args.input) and not dry_run_input_pending(args.compare):
+        scope_doc = change_scope_row(args, declared_changes, meta, v, row)
     # read after every measurement, --compare's included, so a replacement at any point shows
     identity = None if dry_run_input_pending(args.input) else file_identity(args.input)
     if identity is not None and identity != identity_before and expected_identity is None:
@@ -509,6 +786,8 @@ def main() -> int:
             line = f"  {r['status']:4s} {r['check']:{width}s}  {r['value']}  (expected {r['expected']})"
             if r["status"] != "PASS" and r["kind"] == "judgement":
                 line += "  [judgement]"
+            if r["status"] != "PASS" and r["basis"] == "guidance":
+                line += "  [guidance]"
             if r["status"] != "PASS" and r["reason"]:
                 line += f"  ({r['reason']})"
             if r["status"] != "PASS" and r["fix"]:
@@ -520,6 +799,8 @@ def main() -> int:
     extra: Dict[str, Any] = {"notes": notes} if notes else {}
     if levels_doc is not None:
         extra["levels"] = levels_doc
+    if scope_doc is not None:
+        extra["change_scope"] = scope_doc
     if identity is not None:
         extra["input_identity"] = identity
     if failed:

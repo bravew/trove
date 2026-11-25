@@ -32,10 +32,11 @@ import os
 import sys
 import tempfile
 
-from _common import STATE, concat_list_line, add_common, aac_args, apply_common, cfr_args, default_output, die, emit, ffmpeg_base, info, parse_time, probe, refuse_output_is_input, require_filter, require_tool, run, video_args, X264_PRESETS, time_arg, fmt_secs
+from _common import STATE, concat_list_line, add_common, aac_args, apply_common, cfr_args, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, refuse_output_is_input, require_filter, require_tool, run, video_args, X264_PRESETS, time_arg, fmt_secs
 from _common.emit import warn
-from _common.decision import av_trim
+from _common.decision import HELD_FRAMES_WARN_BYTES, av_trim, held_frames_bytes, length_output_t, stream_starts
 from _common.probe import decode_gray_frames, decode_pcm_mono
+from _common.emit import input_length, own_length, refuse_still
 
 
 # The loop filter's size is capped at 32767 frames, so one boomerang cycle (2N-2 frames) must fit.
@@ -59,9 +60,8 @@ def _boomerang_graph(meta, src_dur: float, times) -> str:
             f"-- cut the clip shorter first (cut.py)")
     # reverse holds the clip's decoded frames; split, trim and loop pass references to the same
     # frames, so the peak is about one clip (measured: the same max RSS as a plain reverse)
-    bytes_per_frame = v["width"] * v["height"] * 1.5 * (2 if (v.get("bit_depth") or 8) > 8 else 1)
-    held = bytes_per_frame * frames
-    if held > 2 * 1024 ** 3:
+    held = held_frames_bytes(v, frames)
+    if held > HELD_FRAMES_WARN_BYTES:
         warn(f"--boomerang holds about {held / 1024 ** 3:.1f} GiB of decoded frames in memory "
              f"({frames} frames of {v['width']}x{v['height']}) -- cut the clip shorter first (cut.py) if RAM is tight",
              "memory_heavy", bytes=int(held))
@@ -131,7 +131,7 @@ def _conformed_frames(v, rate: float, src_dur: float) -> int:
     its length are counted in these, or a repeat is a frame or more off the length planned."""
     # the video stream's length, else Matroska's tag, else the container's (main() refuses a source
     # without one): never the stored frame count, which is what fps= does not keep
-    d = v.get("duration") or v.get("tagged_duration") or src_dur
+    d = own_length(v) or src_dur
     return int(round(float(d) * rate))
 
 
@@ -159,7 +159,12 @@ def _seamless_unit_cmd(meta, src: str, unit: str, rate: str, frames: int, fade_f
     if has_audio:
         # acrossfade writes nothing when its first input is exactly the fade long (FFmpeg 6.1 and
         # 7.1, measured), so the fade is built by hand: tail faded out + head faded in, summed
-        graph += (f";[0:a:0]aresample=async=1:first_pts=0,apad,atrim=end={length:.6f},asplit=3[at][ah][ab];"
+        # the sound is shifted by the picture's start, the constant setpts=PTS-STARTPTS takes off the
+        # picture: rebased to its own start (aresample's first_pts=0 alone), a picture that starts
+        # 0.2 s after its sound came out 200 ms behind it in every repeat (A168)
+        v0 = stream_starts(meta)[0]
+        graph += (f";[0:a:0]atrim=start={v0:.6f},asetpts=PTS-{v0:.6f}/TB,aresample=async=1:first_pts=0,"
+                  f"apad,atrim=end={length:.6f},asplit=3[at][ah][ab];"
                   f"[at]atrim=start={cut:.6f},asetpts=PTS-STARTPTS,afade=t=out:d={fade:.6f}:curve=tri[ta];"
                   f"[ah]atrim=end={fade:.6f},asetpts=PTS-STARTPTS,afade=t=in:d={fade:.6f}:curve=tri[ha];"
                   f"[ta][ha]amix=inputs=2:normalize=0:duration=longest[xa];"
@@ -232,7 +237,7 @@ def main() -> int:
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_loop.<ext>)")
     group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--times", type=int, help="repeat the whole clip this many times (2 = original + 1 repeat)")
+    group.add_argument("--times", "--count", type=int, help="repeat the whole clip this many times (2 = original + 1 repeat)")
     group.add_argument("--duration", help="loop (and trim the last repeat) to hit exactly this target duration (seconds or mm:ss)")
     ap.add_argument("--boomerang", action="store_true",
                     help="play forward then backward (--times counts round trips; 1 is allowed); drops audio")
@@ -248,7 +253,8 @@ def main() -> int:
     meta = probe(args.input)
     if not meta.get("video"):
         die("input has no video stream")
-    src_dur = meta.get("duration") or 0.0
+    refuse_still(meta, args.input, "a loop repeats a clip's length, and a still has none")  # #531
+    src_dur = input_length(meta)  # no stated length: refused with the way out (#491)
     if src_dur <= 0:
         die("input has no measurable duration to loop")
     has_audio = bool(meta.get("audio")) and not args.boomerang
@@ -291,6 +297,10 @@ def main() -> int:
             die(f"--duration ({target:g}s) must be longer than one repeat ({unit:.3f}s) -- use cut.py to trim instead")
         stream_loop = math.ceil(target / unit) - 1
 
+    # a variable-rate source is conformed to the rate cfr_args() delivers, by the fps filter in the
+    # picture's chain (below) and the output's -fps_mode cfr -r; the fps stage for a sound that
+    # outlasts the picture is for a constant-rate clip only, so the two never meet
+    forced_rate = cfr_args(meta, fps if fade_frames and v.get("variable_frame_rate_suspected") else None)
     if args.boomerang:
         cmd = ffmpeg_base() + ["-i", args.input, "-filter_complex", _boomerang_graph(meta, src_dur, args.times), "-map", "[v]"]
         if meta.get("audio"):
@@ -312,18 +322,34 @@ def main() -> int:
         with open(listfile, "w", encoding="utf-8") as fh:
             fh.write((concat_list_line(repeat) + "\n") * (stream_loop + 1))
         vtrim, atrim = av_trim(concat_first_frame(listfile), None, fill_gaps=True)
+        # the conform of a VFR source is the fps filter at the end of the picture's chain, at the
+        # rate cfr_args() below delivers (#512)
+        vtrim = with_cfr(vtrim, meta, fps if fade_frames and v.get("variable_frame_rate_suspected") else None)
         cmd = ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile]
+        v_end = stream_starts(meta)[0] + (v.get("duration") or 0.0)
+        if has_audio and not forced_rate and not fade_frames and src_dur - v_end > 0.5 / fps:
+            # A repeat is as long as the file, so where the sound outlasts the picture by more
+            # than half a frame the next repeat's first frame comes later than one frame after
+            # the last. What stood in that gap was left to the output's frame-rate handling:
+            # FFmpeg 6.1 repeated the last frame and showed the next repeat's first frame twice,
+            # from a frame before its time (a 1 s 25 fps clip with 1.23425 s of sound: frame 0 of
+            # the second repeat at 1.20 s and 1.24 s, its sound from 1.23425 s); FFmpeg 7.1 and 8
+            # held the last frame (50 packets for 56). The graph ends on the clip's own rate, so
+            # the gap is the last frame repeated and each later repeat's frames sit on the grid
+            # once. A clip without that gap has nothing to fill and keeps the command it had.
+            vtrim += f",fps={rate}"
         if has_audio:
             cmd += ["-filter_complex", f"[0:v:0]{vtrim}[v];[0:a:0]{atrim}[a]",
                     "-map", "[v]", "-map", "[a]"]
         else:
             cmd += ["-map", "0:v:0", "-vf", vtrim]
     if target is not None:
-        cmd += ["-t", f"{target:.3f}"]
+        # the sound ends at --duration to the sample, not to the millisecond (length_output_t)
+        cmd += ["-t", length_output_t(target, (meta.get("audio") or {}).get("sample_rate") if has_audio else None, runs_on=True)]
     cmd += video_args(meta, args.crf, args.preset)
     # a crossfade's repeat is already constant at `rate` (its graph's fps=): the loop keeps that rate,
     # not a variable-rate source's average, which re-timed every repeat by a frame or two
-    cmd += ["-fps_mode", "passthrough"] if args.boomerang else cfr_args(meta, fps if fade_frames and v.get("variable_frame_rate_suspected") else None)
+    cmd += ["-fps_mode", "passthrough"] if args.boomerang else forced_rate
     if has_audio:
         cmd += aac_args()
     else:

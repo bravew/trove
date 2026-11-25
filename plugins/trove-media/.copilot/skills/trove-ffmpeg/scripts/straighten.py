@@ -22,7 +22,7 @@ import argparse
 import math
 import sys
 
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, drawn_chain, emit, ffmpeg_base, info, probe, run_keeping_subtitles, validate_color, video_args, X264_PRESETS, fmt_secs
+from _common import add_common, apply_common, aac_args, cfr_args, with_cfr, default_output, die, drawn_chain, emit, ffmpeg_base, info, probe, run_keeping_subtitles, validate_color, video_args, X264_PRESETS, fmt_secs
 from _common.emit import note
 from _common.probe import display_size, square_pixels, square_pixels_note
 
@@ -31,10 +31,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_straighten.<ext>)")
-    ap.add_argument("--degrees", type=float, required=True, help="rotation angle in degrees, -45..45, positive = clockwise")
+    ap.add_argument("--angle", "--degrees", dest="degrees", type=float, required=True, help="rotation angle in degrees, -45..45, positive = clockwise")
     ap.add_argument("--fit", choices=["crop", "pad"], default="crop",
-                     help="crop (default): scale up to fill the frame, no visible corner gap; pad: keep the full picture, fill the corner gaps with --fill-color")
-    ap.add_argument("--fill-color", default="black", help="corner fill colour with --fit pad (default black)")
+                     help="crop (default): scale up to fill the frame, no visible corner gap; pad: keep the full picture (no crop), fill the corner gaps with --fill-color")
+    ap.add_argument("--pad-color", "--fill-color", dest="fill_color", default="black", help="corner fill colour with --fit pad (default black)")
     ap.add_argument("--audio-stream", type=int, default=0,
                      help="which audio stream of the input to keep, 0-based in file order (default 0)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
@@ -46,8 +46,6 @@ def main() -> int:
     if args.fps is not None and args.fps <= 0:
         die(f"--fps must be positive, got {args.fps:g}")
 
-    if not -45 <= args.degrees <= 45:
-        die(f"--degrees must be -45..45, got {args.degrees:g}")
     if args.degrees == 0:
         die("--degrees must be nonzero (nothing to straighten)")
     validate_color(args.fill_color, "--fill-color")
@@ -80,16 +78,27 @@ def main() -> int:
         dw, dh = display_size(meta["video"])
         aspect = max(dw / dh, dh / dw) if dw and dh else 1.0
         s = abs(math.cos(radians)) + aspect * abs(math.sin(radians))
-        # crop dimensions must round down to even (4:2:0 chroma); trunc(.../2)*2 floors to the
-        # nearest even value instead of leaving an odd width/height that the encoder would refuse.
-        rotate = f"scale=iw*{s:.8f}:ih*{s:.8f},rotate={radians:.8f},crop=trunc(iw/{s:.8f}/2)*2:trunc(ih/{s:.8f}/2)*2"
+        # The window is the displayed frame's own size, to even (4:2:0 chroma), and the scaled frame
+        # is rounded UP to even so it still covers it. Scaling to iw*s and cropping back to
+        # trunc(iw/s/2)*2 lost to two roundings: 1920x1080 came out 1918x1078, and the scale's
+        # rounding left a non-square SAR such as 6112:6111 (A235).
+        cw, ch = (dw // 2 * 2, dh // 2 * 2) if dw and dh else (0, 0)
+        if cw and ch:
+            # the margin on each axis is a multiple of 4, so the centred crop's offset is even:
+            # crop floors an odd one to the chroma grid, which moved the window a pixel up and
+            # left and could bring the fill into the top-left corner
+            sw, sh = (c + math.ceil(max(0.0, c * s - c) / 4) * 4 for c in (cw, ch))
+            rotate = (f"scale={sw}:{sh},setsar=1,"
+                      f"rotate={radians:.8f},crop={cw}:{ch},setsar=1")
+        else:  # a dry run's pending input has no size yet: the old expression, planned only
+            rotate = f"scale=iw*{s:.8f}:ih*{s:.8f},rotate={radians:.8f},crop=trunc(iw/{s:.8f}/2)*2:trunc(ih/{s:.8f}/2)*2"
 
     # a rotation of non-square pixels is a shear on screen: the picture is squared at its
     # display aspect first (#411)
     if square_pixels(meta["video"]):
         rotate = square_pixels(meta["video"]) + "," + rotate
         note(square_pixels_note(meta["video"]))
-    cmd = ffmpeg_base() + ["-i", args.input, "-vf", rotate, "-map", "0:v:0"]
+    cmd = ffmpeg_base() + ["-i", args.input, "-vf", with_cfr(rotate, meta, args.fps), "-map", "0:v:0"]
     if has_audio:
         cmd += ["-map", f"0:a:{args.audio_stream}?"]
     cmd += video_args(meta, args.crf, args.preset)

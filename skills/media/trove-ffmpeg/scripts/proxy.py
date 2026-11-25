@@ -5,7 +5,8 @@ editing-decision workflows that only need to look at (or feed a model) a
 much smaller stand-in for the original.
 
 Resizes to --width (default 640px, height follows the source aspect) or by
---scale factor, re-encodes at a proxy-grade --quality (default 30 - well above any
+--scale factor, never wider than the source (a proxy is not upscaled) and
+never under 2px, re-encodes at a proxy-grade --quality (default 30 - well above any
 delivery preset's 18-24 in export.py, since a proxy trades visual quality for
 size and speed), and always uses the fastest x264/x265 preset. Keeps the
 source's own dynamic range (an HDR source proxies to HEVC10, same as every
@@ -25,7 +26,7 @@ Examples:
 import argparse
 import sys
 
-from _common import add_common, apply_common, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, fmt_secs
+from _common import add_common, apply_common, cfr_args, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, fmt_secs
 from _common.emit import note
 from _common.probe import display_size, square_pixels, square_pixels_note
 
@@ -39,7 +40,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_proxy.<ext>)")
-    ap.add_argument("--width", type=int, default=640, help="output width in px, height follows the source aspect (default 640)")
+    ap.add_argument("--width", type=int, default=640, help="output width in px, 1..16384, height follows the source aspect (default 640)")
+    ap.add_argument("--height", type=int, help="output height in px, 2..16384, instead of --width: the width follows the source aspect")
     ap.add_argument("--scale", type=float, help="scale factor applied to the source dimensions instead of --width (0 < scale <= 1)")
     ap.set_defaults(crf=30)  # --quality's default (the --crf alias was removed in 2.0)
     ap.add_argument("--fps", type=float, help="force a constant output frame rate")
@@ -50,8 +52,6 @@ def main() -> int:
 
     if args.scale is not None and not 0.0 < args.scale <= 1.0:
         die(f"--scale must be > 0 and <= 1, got {args.scale}")
-    if args.width <= 0:
-        die(f"--width must be > 0, got {args.width}")
     if args.fps is not None and args.fps <= 0:
         die(f"--fps must be > 0, got {args.fps}")
 
@@ -59,16 +59,24 @@ def main() -> int:
     if not meta.get("video"):
         die("input has no video stream")
     # the displayed width: rotation applied, non-square pixels squared first (#411)
-    sw = display_size(meta["video"])[0]
+    sw, sh = display_size(meta["video"])
     square = square_pixels(meta["video"])
     if square:
         note(square_pixels_note(meta["video"]))
     has_audio = bool(meta.get("audio")) and not args.no_audio
 
-    out_w = even(sw * args.scale) if args.scale is not None else even(args.width)
+    # A proxy is never wider than its source, and never under 2 px: through 3.8.8 the default
+    # --width 640 upscaled a smaller source, and a --scale that rounded to 0 became scale=0, which
+    # ffmpeg reads as "the input's width" (a full-size proxy, audit A162)
+    asked = even(sw * args.scale) if args.scale is not None else even(args.height * sw / sh) if args.height and sh else even(args.width)
+    ceiling = max(2, sw - sw % 2) if sw else asked
+    out_w = max(2, min(asked, ceiling))
+    if out_w != asked:
+        note(f"proxy width {out_w}px, not {asked}px: "
+             + (f"the source is {sw}px wide and a proxy is not upscaled" if asked > ceiling else "2px is the smallest width"))
     output = args.output or default_output(args.input, "proxy")
 
-    cmd = ffmpeg_base() + ["-i", args.input, "-vf", (square + "," if square else "") + f"scale={out_w}:-2"]
+    cmd = ffmpeg_base() + ["-i", args.input, "-vf", with_cfr((square + "," if square else "") + f"scale={out_w}:-2", meta, args.fps)]
     cmd += video_args(meta, args.crf, "veryfast")
     cmd += cfr_args(meta, args.fps)
     cmd += ["-map", "0:v:0"] + (["-map", "0:a:0", "-c:a", "aac", "-b:a", "96k"] if has_audio else ["-an"])

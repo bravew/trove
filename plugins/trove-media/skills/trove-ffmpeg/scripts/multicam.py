@@ -28,13 +28,15 @@ Examples:
 import argparse
 import json
 import math
+import os
 import sys
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from _common import guard_sidecar, label_chain, matrix_chain, range_chain, video_args, aac_args, add_common, apply_common, default_output, die, emit, ffmpeg_base, info, time_arg, probe, run, x264_args, X264_PRESETS, fmt_secs, decode_pcm_mono, rms_envelope, STATE
-from _common.emit import note, record_fallback, warn
-from _common.decision import av_trim
+from _common import guard_sidecar, label_chain, matrix_chain, range_chain, video_args, aac_args, add_common, apply_common, default_output, die, emit, ffmpeg_base, info, time_arg, probe, run, X264_PRESETS, fmt_secs, decode_pcm_mono, rms_envelope, STATE
+from _common.emit import note, record_fallback, record_skip, warn
+from _common.decision import av_trim, conform_output_t, conform_to_length, rebase_project_paths
 from _common.probe import display_size, square_pixels, square_pixels_note
+from _common.emit import input_length
 from sync import measure_offset
 
 ENERGY_WINDOW_S = 0.25  # --switch energy: loudness measured over this window on the reference timeline
@@ -58,8 +60,19 @@ def parse_switch(spec: str, n: int) -> List[Tuple[float, float, int]]:
             die(f"camera {c} does not exist (inputs are 0..{n - 1})")
         if e <= s:
             die(f"switch entry '{raw}': end must be after start")
+        if round(e, 3) <= round(s, 3):
+            # the cut list (--edl, `cuts`) is written to the millisecond: this range was its
+            # "0.000-0.000", a line cut.py --segments refuses (the scenes.py --edl sibling)
+            die(f"switch entry '{raw}': shorter than a millisecond, the precision the cut list is written in",
+                kind="input")
         out.append((s, e, c))
     out.sort()
+    # A132: ranges on one timeline cannot overlap. The fill below kept both, so the picture of the
+    # overlap played twice while the sound played once, and every later cut ran behind it
+    for (s0, e0, _c0), (s1, e1, _c1) in zip(out, out[1:]):
+        if s1 < e0:
+            die(f"--switch ranges overlap: {fmt_secs(s0)}-{fmt_secs(e0)} and {fmt_secs(s1)}-{fmt_secs(e1)} "
+                "(on the reference timeline each moment has one camera)", kind="input")
     return out
 
 
@@ -141,14 +154,14 @@ def main() -> int:
                                             "output above is still written as usual.")
     ap.add_argument("--audio", type=int, default=0, help="input index to take audio from (default 0 = reference)")
     ap.add_argument("--offsets-only", action="store_true", help="print the measured offsets and exit")
-    ap.add_argument("--max-offset", type=float, default=30.0)
-    ap.add_argument("--analyze-seconds", type=float, default=120.0)
+    ap.add_argument("--max-offset", type=float, default=30.0, help="largest offset to search in seconds (default 30)")
+    ap.add_argument("--analyze-seconds", type=float, default=120.0, help="how much audio to analyse from each file (default 120, at most 900)")
     ap.add_argument("--fix-drift", action="store_true", help="also correct clock drift of each source (long recordings)")
     ap.add_argument("--width", type=int, help="output width (default: reference)")
     ap.add_argument("--height", type=int, help="output height (default: reference)")
     ap.add_argument("--fps", type=float, help="output fps (default: reference)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
-    ap.add_argument("--preset", default="medium", choices=X264_PRESETS)
+    ap.add_argument("--preset", default="medium", choices=X264_PRESETS, help="x264 preset")
     add_common(ap)
     args = ap.parse_args()
     apply_common(args)
@@ -156,7 +169,7 @@ def main() -> int:
         media_out = args.output or default_output(args.inputs[0], "multicam", "mp4")
         guard_sidecar(args.edl, *args.inputs, siblings=(args.write_project, media_out))
         guard_sidecar(args.write_project, *args.inputs, siblings=(media_out,))
-        if args.edl or args.write_project:  # they are written before the cut: refuse its output first
+        if args.edl or args.write_project:  # refused up front with them, before any decode
             guard_sidecar(media_out, *args.inputs)
     if args.analyze_seconds > 900:
         die(f"--analyze-seconds {args.analyze_seconds:g}: the window is decoded into memory; 900 s is the ceiling")
@@ -178,17 +191,25 @@ def main() -> int:
     offsets = [0.0]
     ratios = [1.0]
     conf = [1.0]
+    # A131: per camera, why --fix-drift measured no drift (too_short / low_confidence, as sync.py
+    # says it); None when it was measured, and for the reference, which is the clock (0 by definition)
+    drift_skipped: List[object] = [None]
     for p in args.inputs[1:]:
         off, score = measure_offset(args.inputs[0], p, 0.0, args.analyze_seconds, 20.0, args.max_offset, 1.0)
         ratio = 1.0
+        skipped_reason = None
         if args.fix_drift:
-            ref_dur = metas[0]["duration"] or 0.0
-            sec_dur = probe(p)["duration"] or 0.0
+            ref_dur = input_length(metas[0])
+            sec_dur = input_length(probe(p))
             overlap_end = min(ref_dur, sec_dur + off)
             window = 60.0
             head_len = min(args.analyze_seconds, overlap_end)
             tail_start = overlap_end - window
-            if tail_start > head_len / 2 + 5:
+            if tail_start <= head_len / 2 + 5:
+                skipped_reason = "too_short"
+                record_skip(f"{p} too short to measure drift reliably; skipping drift correction", "drift_correction_skipped",
+                            path=p, reason=skipped_reason, overlap_seconds=round(overlap_end, 3), drift_window=window)
+            else:
                 ref_start, sec_start = tail_start, tail_start - off
                 if sec_start < 0:
                     ref_start -= sec_start
@@ -203,10 +224,18 @@ def main() -> int:
                 if elapsed > 0 and sc > 0.1:
                     ratio = 1.0 - residual / elapsed
                     off = off + (ratio - 1.0) * (head_len / 2)
+                else:
+                    skipped_reason = "low_confidence"
+                    record_skip(f"could not measure drift with confidence for {p}; skipping drift correction",
+                                "drift_correction_skipped", path=p, reason=skipped_reason,
+                                confidence=round(max(0.0, sc), 3), measured_over_seconds=round(elapsed, 2))
+        drift_skipped.append(skipped_reason)
         offsets.append(off)
         ratios.append(ratio)
         conf.append(score)
-        info(f"{p}: offset {off:+.3f}s (confidence {score:.2f})" + (f", drift {(ratio - 1) * 1e6:+.0f} ppm" if args.fix_drift else ""))
+        info(f"{p}: offset {off:+.3f}s (confidence {score:.2f})"
+             + (f", drift {(ratio - 1) * 1e6:+.0f} ppm" if args.fix_drift and not skipped_reason else
+                f", drift not measured ({skipped_reason})" if args.fix_drift else ""))
         if score < 0.1:
             warn(f"{p} has low correlation confidence ({score:.2f}); check that it shares an audio event with the reference before "
                  "trusting this offset", "sync_low_confidence", path=p, confidence=round(score, 3))
@@ -214,7 +243,8 @@ def main() -> int:
     report = {"inputs": args.inputs, "offsets_seconds": [round(o, 4) for o in offsets],
               "confidence": [round(c, 3) for c in conf]}
     if args.fix_drift:
-        report["drift_ppm"] = [round((r - 1) * 1e6, 1) for r in ratios]
+        report["drift_ppm"] = [None if why else round((r - 1) * 1e6, 1) for r, why in zip(ratios, drift_skipped)]
+        report["drift_skipped_reason"] = drift_skipped
     if args.offsets_only:
         emit(None, **report)
         if not args.json:
@@ -224,7 +254,7 @@ def main() -> int:
 
     if args.min_shot <= 0:
         die(f"--min-shot must be positive, got {args.min_shot:g}")
-    ref_dur = metas[0]["duration"] or 0.0
+    ref_dur = input_length(metas[0])
     energy_mode = args.switch == "energy"
     if energy_mode:
         cuts = energy_switch(args.inputs, metas, offsets, ratios, ref_dur, args.min_shot)
@@ -253,16 +283,25 @@ def main() -> int:
         cursor = max(cursor, e)
     if cursor < ref_dur:
         filled.append((cursor, ref_dur, 0))
+    # a gap or a clipped range under a millisecond is nothing at the precision the cut list is
+    # written in (--switch "0.0004-3:1" left a leading "0.000-0.000", the line cut.py --segments
+    # refuses, and a 0.4 ms trim in the render): its neighbour takes it, so the timeline stays whole
+    whole: List[Tuple[float, float, int]] = []
+    carry: Optional[float] = None
+    for s, e, c in filled:
+        if carry is not None:
+            s, carry = carry, None
+        if round(e, 3) <= round(s, 3):
+            if whole:
+                whole[-1] = (whole[-1][0], e, whole[-1][2])
+            else:
+                carry = s
+            continue
+        whole.append((s, e, c))
+    filled = whole
     for s, e, c in filled:
         if not metas[c].get("video"):
             die(f"camera {c} ({args.inputs[c]}) has no video; it can only be used with --audio")
-
-    if args.edl:
-        if not STATE.dry_run:
-            with open(args.edl, "w", encoding="utf-8") as fh:
-                for s, e, _c in filled:
-                    fh.write(f"{s:.3f}-{e:.3f}\n")
-        info(f"wrote {args.edl}")
 
     v0 = metas[0]["video"]
     # camera 0's displayed frame: rotation applied, non-square pixels squared (#411)
@@ -303,9 +342,18 @@ def main() -> int:
             c, src_s, src_e = 0, s, e
         rendered.append((s, e, c))
         sq = (square_pixels(metas[c]["video"]) + ",") if square_pixels(metas[c]["video"]) else ""
-        parts.append(f"[{c}:v]trim=start={src_s:.4f}:end={src_e:.4f},setpts=PTS-STARTPTS,{convert[c]}{sq}{geo}[v{i}]")
+        # A130: a drift-corrected camera's range is (e - s) * ratio of its own time; played at that
+        # rate it lasts e - s on the reference, as its sound does (asetrate) -- at its own rate the
+        # picture ran (ratio - 1) * (e - s) long and every later cut fell behind the sound
+        retime = f"(PTS-STARTPTS)/{ratios[c]:.9f}" if abs(ratios[c] - 1.0) > 1e-7 else "PTS-STARTPTS"
+        parts.append(f"[{c}:v]trim=start={src_s:.4f}:end={src_e:.4f},setpts={retime},{convert[c]}{sq}{geo}[v{i}]")
         labels.append(f"[v{i}]")
-        project_clips.append({"src": args.inputs[c], "in": round(src_s, 3), "out": round(src_e, 3)})
+        clip = {"src": args.inputs[c], "in": round(src_s, 3), "out": round(src_e, 3)}
+        if abs(ratios[c] - 1.0) > 1e-7:
+            # render.py plays a clip at clips[].speed (its length / speed), as the retime above
+            # does: without it a drift-corrected camera's clip ran (ratio - 1) * (e - s) long
+            clip["speed"] = round(ratios[c], 9)
+        project_clips.append(clip)
     parts.append("".join(labels) + f"concat=n={len(filled)}:v=1:a=0[vout]")
     a = args.audio
     a_start = -offsets[a] if offsets[a] < 0 else 0.0
@@ -321,12 +369,17 @@ def main() -> int:
         afx += [f"asetrate={sr * ratios[a]:.6f}", f"aresample={sr}"]
     if offsets[a] > 0:
         afx.append(f"adelay={int(round(offsets[a] * 1000))}:all=1")
-    afx += [f"atrim=0:{ref_dur:.3f}", "aformat=sample_rates=48000:channel_layouts=stereo"]
+    # the sound ends with the reference, to the sample (#493), counted at the 48 kHz it is written
+    # in; `atrim=0:{:.3f}` and `-t {:.3f}` cut it to the millisecond. A dry run's pending reference
+    # has no length to count, and keeps the old filter.
+    conformed = ref_dur > 0
+    afx += [conform_to_length(ref_dur, 48000) if conformed else f"atrim=0:{ref_dur:.3f}",
+            "aformat=sample_rates=48000:channel_layouts=stereo"]
     parts.append(f"[{a}:a]{','.join(afx)}[aout]")
 
     output = args.output or default_output(args.inputs[0], "multicam", "mp4")
     cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "[aout]"]
-    cmd += video_args(metas[0], args.crf, args.preset, convert_matrix=False) + aac_args() + ["-t", f"{ref_dur:.3f}", output]
+    cmd += video_args(metas[0], args.crf, args.preset, convert_matrix=False) + aac_args() + ["-t", conform_output_t(ref_dur, 48000) if conformed else f"{ref_dur:.3f}", output]
 
     if args.write_project:
         # Same cut decision as the combined render above (project_clips was built alongside the
@@ -334,13 +387,29 @@ def main() -> int:
         # render.py project instead of the direct render this tool already does -- additive, not
         # a replacement: the combined output below is still written as usual.
         project = {"output": default_output(args.inputs[0], "multicam_project", "mp4"),
-                   "clips": project_clips}
+                   "clips": project_clips,
+                   # a switch is a cut: render.py's default is a 0.5 s crossfade at every join,
+                   # which shortens the timeline by 0.5 s a switch and moves every later one
+                   "transition": {"type": "none"}}
+        # the inputs are named as given, relative to the working directory, and render.py reads a
+        # project's relative paths against the project file's directory: written elsewhere
+        # (--write-project out/cut.json), they named files that are not there
+        project = rebase_project_paths(project, os.getcwd())
+
+    run(cmd)
+    # the EDL and the project record the cut: written once it exists, not before an encode that then
+    # failed (#462 A41, the silence.py --edl sibling)
+    if args.edl:
+        if not STATE.dry_run:
+            with open(args.edl, "w", encoding="utf-8") as fh:
+                for s, e, _c in filled:
+                    fh.write(f"{s:.3f}-{e:.3f}\n")
+        info(f"wrote {args.edl}")
+    if args.write_project:
         if not STATE.dry_run:
             with open(args.write_project, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(project, indent=2) + "\n")
         info(f"wrote {args.write_project}")
-
-    run(cmd)
     r = probe(output, role="output")
     info(f"wrote {output} ({fmt_secs(r['duration'])}, {len(filled)} cuts, audio from input {a})")
     extra = {"switch_mode": "energy", "min_shot": args.min_shot} if energy_mode else {}

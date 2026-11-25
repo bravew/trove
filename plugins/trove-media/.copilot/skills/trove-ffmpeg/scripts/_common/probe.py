@@ -9,37 +9,70 @@ import json
 import math
 import os
 import re
+import stat
 import statistics
+import sys
+from array import array
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from _common.emit import die, warn
-from _common.runner import STATE, dry_run_input_pending, require_tool, run, run_analysis, still_input_args
+from _common.emit import die, refuse, warn
+from _common.runner import ffmpeg_failure_extra, refuse_denied_input, STATE, dry_run_input_pending, register_plan_input, require_tool, run, run_analysis, still_input_args
+
+# The streams probe() describes, as stream specifiers: its `video` is the first picture that is not
+# a cover (`V`), its `audio` the first sound stream. Without a -map, FFmpeg picks the largest
+# picture and the sound with the default disposition or the most channels, so on a file with two
+# of either a tool measured one stream and wrote another: loudness measured track 1 and applied the
+# gain to track 0, cut and crop wrote the larger picture they never probed (A110, A118, A128, A258).
+PROBED_VIDEO = "V:0"
+PROBED_AUDIO = "a:0"
 
 
-def fingerprint(path: str) -> Dict[str, Any]:
+def fingerprint(path: str, *, complete: bool = False) -> Dict[str, Any]:
     """Size plus a sha256 over the first and last 8 MiB: enough to notice a re-export, a re-trim
     or a swapped file, cheap enough for a multi-GB source (hashing a whole master would make
-    planning slower than the edit)."""
+    planning slower than the edit). Sequence plans also request a full-file hash."""
     import hashlib
-    st = os.stat(path)
     h = hashlib.sha256()
     chunk = 8 * 1024 * 1024
-    with open(path, "rb") as f:
+    # A file could have been replaced by a FIFO since the caller checked its type.
+    def open_without_waiting(name, flags):
+        return os.open(name, flags | getattr(os, "O_NONBLOCK", 0))
+
+    with open(path, "rb", opener=open_without_waiting) as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{path!r} is not a regular file")
         h.update(f.read(chunk))
         if st.st_size > 2 * chunk:
             f.seek(-chunk, os.SEEK_END)
             h.update(f.read(chunk))
         elif st.st_size > chunk:
             h.update(f.read())
-    return {"path": os.path.abspath(path), "size": st.st_size, "sha256_head_tail": h.hexdigest()}
+        result = {"path": os.path.abspath(path), "size": st.st_size, "sha256_head_tail": h.hexdigest()}
+        if complete:
+            if st.st_size > 2 * chunk:
+                whole = hashlib.sha256()
+                f.seek(0)
+                for data in iter(lambda: f.read(chunk), b""):
+                    whole.update(data)
+                result["sha256_full"] = whole.hexdigest()
+            else:
+                result["sha256_full"] = result["sha256_head_tail"]
+    return result
 
 
 def decode_pcm_mono(path: str, sample_rate: int, seconds: Optional[float] = None, start: float = 0.0,
-                    *, check: bool = True) -> List[float]:
+                    *, check: bool = True) -> "Sequence[float]":
     """Decode (part of) a file's audio to mono float samples in [-1, 1) at `sample_rate` via a
     single ffmpeg pass under --timeout. Shared by scenes.py (audio envelope for cut scoring) and
     sync.py (cross-correlation); an undecodable input is kind ffmpeg when check=True, else [].
-    The samples are on the file's clock: a sound that starts late is padded at its head."""
+    The samples are on the file's clock: a sound that starts late is padded at its head.
+
+    The samples are an array('f'), 4 bytes each: a list of Python floats took about 32 (24 for the
+    float, 8 for the slot), so scenes.py held ~2.3 GB per hour of audio at 8 kHz + 22.05 kHz and
+    multicam --switch energy one such list per camera (A140). An s16 sample divided by 32768 is
+    exact in a float32, so every value read back is the double the list held."""
+    register_plan_input(path)
     ffmpeg = require_tool("ffmpeg")
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
     if start:
@@ -50,15 +83,20 @@ def decode_pcm_mono(path: str, sample_rate: int, seconds: Optional[float] = None
     # first_pts=0 pads a sound that starts after the file's start (or after `start`) with silence,
     # so sample i is at start + i / sample_rate on the file's clock: sync.py measured a track that
     # starts 0.3 s late 0.279 s off, and --replace-audio placed it that far late (#409)
-    cmd += ["-vn", "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"]
+    # the first audio track, the one probe() describes (default selection takes the most channels)
+    cmd += ["-map", f"0:{PROBED_AUDIO}", "-vn", "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"]
     proc = run_analysis(cmd, check=False, text=False)
     if proc.returncode != 0 or not proc.stdout:
         if check:
-            die(f"could not decode audio from {path}:\n{proc.stderr.decode(errors='replace').strip()}", kind="ffmpeg")
+            die(f"could not decode audio from {path}:\n{proc.stderr.decode(errors='replace').strip()}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr.decode(errors="replace")))
         return []
-    n = len(proc.stdout) // 2
-    import struct
-    return [v / 32768.0 for v in struct.unpack(f"<{n}h", proc.stdout[: n * 2])]
+    data, proc = proc.stdout, None
+    pcm = array("h")
+    pcm.frombytes(memoryview(data)[: len(data) // 2 * 2])
+    del data
+    if sys.byteorder == "big":
+        pcm.byteswap()  # s16le on the pipe
+    return array("f", (v / 32768.0 for v in pcm))
 
 
 def rms_envelope(samples: Sequence[float], step: int, *, full_blocks_only: bool = False, remove_mean: bool = False) -> List[float]:
@@ -79,8 +117,9 @@ def rms_envelope(samples: Sequence[float], step: int, *, full_blocks_only: bool 
 
 
 # the audio members of MEDIA_EXT: every audio file this skill reads, a wider set than the audio
-# outputs it writes (AUDIO_CODECS / is_audio_output() -- no .aif, .aiff, .caf or .wma there)
-AUDIO_MEDIA_EXT = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".aif", ".aiff", ".caf", ".wma"}
+# outputs it writes (AUDIO_CODECS / is_audio_output() -- no .wma there: an output named so is
+# refused, decision.UNWRITTEN_AUDIO_EXT)
+AUDIO_MEDIA_EXT = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".aif", ".aiff", ".caf", ".mka", ".wma"}
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".ts", ".mts", ".m2ts", ".mxf", ".3gp", ".wmv", ".gif",
              ".png", ".jpg", ".jpeg", ".webp"} | AUDIO_MEDIA_EXT
 
@@ -99,12 +138,12 @@ def decode_gray_frames(path: str, fps: float, width: int, height: int, *, start:
     cmd += ["-i", path]
     if seconds is not None:
         cmd += ["-t", f"{max(0.0, seconds):.3f}"]
-    cmd += ["-vf", f"fps={fps:g},scale={width}:{height}:flags=area,format=gray",
+    cmd += ["-map", f"0:{PROBED_VIDEO}", "-vf", f"fps={fps:g},scale={width}:{height}:flags=area,format=gray",
             "-f", "rawvideo", "-"]
     proc = run_analysis(cmd, check=False, text=False)
     if proc.returncode != 0 or not proc.stdout:
         if check:
-            die(f"could not decode frames from {path}:\n{proc.stderr.decode(errors='replace').strip()}", kind="ffmpeg")
+            die(f"could not decode frames from {path}:\n{proc.stderr.decode(errors='replace').strip()}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr.decode(errors="replace")))
         return []
     frame_size = width * height
     data = proc.stdout
@@ -127,7 +166,7 @@ def verify_output(path: str) -> Dict[str, Any]:
     """The success criterion for every writing tool: the file exists, is not empty and ffprobe
     can read at least one stream from it. Non-media artifacts (srt, edl, html, md) only need to
     exist and be non-empty. Returns the probe (empty dict for non-media)."""
-    if not os.path.exists(path):
+    if not os.path.isfile(path):
         _output_failed(path, "not written")
     if os.path.getsize(path) == 0:
         _output_failed(path, "0 bytes")
@@ -184,15 +223,72 @@ def start_timecode(streams: List[Dict[str, Any]], fmt: Dict[str, Any],
     return {"value": None, "drop_frame": None, "source": None}
 
 
-def probe(path: str, role: str = "input") -> Dict[str, Any]:
+# EBU R128 integrated loudness is gated over 400 ms blocks: sound shorter than one has a true peak
+# and no integrated loudness. A longer track can read -inf too (every block under the absolute
+# gate), so "too short" is decided on the sound's length, never on a finite peak alone.
+LOUDNESS_BLOCK_SECONDS = 0.4
+
+
+def shorter_than_a_loudness_block(length: "Optional[float]") -> bool:
+    return length is not None and 0 < length < LOUDNESS_BLOCK_SECONDS
+
+
+# ffmpeg's log prefix for a component, with the address of its context: `[mov,mp4,m4a @ 0x55d1]`
+# (no `0x` on Windows). It differs on every run and tells a caller nothing.
+_LOG_CONTEXT_RE = re.compile(r"\[[^\]\n]*@ (?:0x)?[0-9A-Fa-f]+\]\s*")
+
+
+def _refuse_unusable_input(path: str) -> None:
+    """Say what an input that cannot be media is, before ffprobe is asked (#558): a directory, an
+    empty file (the usual trace of a recording, download or TTS step that failed after creating
+    its file) or a file the user may not read. Each reached ffprobe and came back as its raw
+    text ("moov atom not found", "Is a directory") with no reason and no hint; join.py's
+    preflight has worded the first two itself since 2.2."""
+    if os.path.isdir(path):
+        refuse("input", "input_is_directory", f"input is a directory, not a file: {path}",
+               hint="pass one media file; verify.py and batch.py take a folder", path=path)
+    if not os.path.isfile(path):
+        return  # a pipe or a device: run() refuses it (media_path_not_a_file)
+    refuse_denied_input(path)
+    try:
+        empty = os.path.getsize(path) == 0
+    except OSError:
+        return
+    if empty:
+        refuse("input", "input_empty", f"input is empty (0 bytes): {path}",
+               hint="the step that should have written it wrote nothing: record, download or render it again", path=path)
+
+
+def _refuse_not_media(path: str, stderr: str) -> "None":
+    """ffprobe could not read an input: `input_not_media`, with ffprobe's own lines as the detail
+    (their `[demuxer @ 0x...]` prefixes removed, #558) and a hint. The message still opens with
+    "ffprobe failed on PATH", which verify.py's report rows and callers have matched since 1.x."""
+    lines = [_LOG_CONTEXT_RE.sub("", ln).strip() for ln in (stderr or "").strip().splitlines()]
+    detail = "; ".join(dict.fromkeys(ln for ln in lines if ln)) or "ffprobe gave no reason"
+    hint = ("pass a video, audio or picture file; a recording or a copy that was cut short reads this way too "
+            "(\"moov atom not found\") and has to be copied again from its source")
+    refuse("input", "input_not_media", f"ffprobe failed on {path}: not a media file ffprobe can read ({detail})",
+           hint=hint, path=path)
+
+
+def probe(path: str, role: str = "input", *, required: bool = True) -> Dict[str, Any]:
     """Return a compact, script-friendly description of a media file.
 
     role="output" marks a file this tool just wrote: a read failure is then reported as an
-    output-verification failure (kind "output") instead of an input problem."""
-    if not os.path.exists(path):
+    output-verification failure (kind "output") instead of an input problem.
+    For an aggregate's evidence check, required=False returns {} on an unreadable file."""
+    if not os.path.exists(path) or (role == "output" and STATE.dry_run):
+        if not required:
+            return {}
         if role == "output" and not STATE.dry_run:
             _output_failed(path, "not written")
+        if role == "input":
+            # a file behind a directory the user may not search is not "not found", and not an
+            # earlier dry-run stage's output either (#558)
+            refuse_denied_input(path)
         if STATE.dry_run:
+            # also for an output path that holds a file: a dry run did not write it, and reading it
+            # reported an earlier run's file as this plan's result (#403: cut.py's output_duration)
             # width/height/fps are honestly 0/0/0.0 -- "not measured", matching duration/size_bytes
             # below -- because this is a dry run: the file doesn't exist yet, so there is nothing to
             # probe. Earlier this stub used plausible-looking placeholders (1920x1080x30.0) instead,
@@ -206,18 +302,28 @@ def probe(path: str, role: str = "input") -> Dict[str, Any]:
                               "color_transfer": None, "color_primaries": None, "rotation": 0, "variable_frame_rate_suspected": False},
                     "audio": {"codec": None, "channels": 0, "sample_rate": 0}, "subtitle_streams": 0, "data_streams": 0}
         die(f"input not found: {path}")
+    if role == "input":
+        if not required and (os.path.isdir(path) or (os.path.isfile(path) and os.path.getsize(path) == 0)):
+            return {}  # an optional probe reports "not usable" as {} (as a failed ffprobe did), never exits
+        _refuse_unusable_input(path)
     ffprobe = require_tool("ffprobe")
     proc = run(
-        [ffprobe, "-v", "error", *still_input_args(path),
+        [ffprobe, "-v", "error",
          "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", path],
         quiet=True,
         check=False,
     )
     if proc.returncode != 0:
+        if not required:
+            return {}
         if role == "output":
             _output_failed(path, f"ffprobe cannot read it:\n{proc.stderr.strip()}")
-        die(f"ffprobe failed on {path}:\n{proc.stderr.strip()}")
+        _refuse_not_media(path, proc.stderr)
+    if role == "input":
+        register_plan_input(path)
     if not (proc.stdout or "").strip():
+        if not required:
+            return {}
         # ffprobe exited 0 and printed nothing we could read. Before 1.17.1 that produced a
         # SUCCESS document of nulls -- "?s | no video | no audio", exit 0 -- which is how #234
         # showed up on a Windows cp932 machine: the capture decoded ffprobe's UTF-8 JSON with the
@@ -234,6 +340,8 @@ def probe(path: str, role: str = "input") -> Dict[str, Any]:
     try:
         raw = json.loads(proc.stdout or "{}")
     except ValueError as e:
+        if not required:
+            return {}
         if role == "output":
             _output_failed(path, f"ffprobe printed unreadable JSON: {e}")
         die(f"ffprobe printed unreadable JSON for {path}: {e}", kind="ffmpeg")
@@ -288,6 +396,9 @@ def probe(path: str, role: str = "input") -> Dict[str, Any]:
             "codec": s.get("codec_name"),
             "language": (s.get("tags") or {}).get("language"),
             "title": (s.get("tags") or {}).get("title"),
+            # the stream's default disposition as the file states it (caption.py --mode mux
+            # reports a kept track's from here, A60)
+            "default": bool((s.get("disposition") or {}).get("default")),
         } for n, s in enumerate(subs)],
     }
     if video:
@@ -296,6 +407,20 @@ def probe(path: str, role: str = "input") -> Dict[str, Any]:
         fps = float(avg_rate) if avg_rate else (float(r_rate) if r_rate else None)
         vfr = bool(r_rate and avg_rate and abs(float(r_rate) - float(avg_rate)) > 0.01)
         w, h = _to_int(video.get("width")), _to_int(video.get("height"))
+        if not (w and h) and _is_still(fmt, video):
+            if not required:
+                return {}
+            # audit A184 (#465): a text file named .png reaches the image demuxer, which lists a
+            # png stream it could not decode as 0x0. That was reported as a measured picture
+            # (probe.py exit 0) and divided by in insert.py and check.py (tracebacks, no JSON).
+            # A video container's stream with no size is left to the tool that reads it.
+            msg = (f"{path} is not a picture ffmpeg can decode: its image demuxer ({fmt.get('format_name')}) found a "
+                   f"{video.get('codec_name') or 'picture'} stream with no frame size"
+                   + (f"\n{proc.stderr.strip()}" if proc.stderr.strip() else ""))
+            if role == "output":
+                _output_failed(path, msg)
+            refuse("input", "still_unreadable", msg, path=path, format=fmt.get("format_name"),
+                   codec=video.get("codec_name"))
         rotation = 0
         for sd in video.get("side_data_list", []) or []:
             if "rotation" in sd:
@@ -402,7 +527,58 @@ def probe(path: str, role: str = "input") -> Dict[str, Any]:
                              (out.get("video") or {}).get("hdr10_static"))
     if role == "input" and out["timecode"].get("value") and getattr(STATE, "source_timecode", None) is None:
         STATE.source_timecode = (out["timecode"]["value"], duration)
+    # what a source carries besides its picture and sound, for emit()'s source_carry comparison:
+    # kept beside the probe, not in it, so no probe document changes
+    lang = (audio.get("tags") or {}).get("language") if audio else None
+    _CARRY[os.path.realpath(path)] = {
+        "subtitles": len(subs),
+        "chapters": len(raw.get("chapters") or []),
+        "cover_art": sum(1 for s in streams if s.get("codec_type") == "video" and s.get("disposition", {}).get("attached_pic", 0)),
+        # Matroska attachments (a subtitle track's fonts, A256) and the playable pictures beside
+        # the one probe() describes, which a tool that writes one picture leaves out (A258)
+        "attachments": sum(1 for s in streams if s.get("codec_type") == "attachment"),
+        "video_streams": sum(1 for s in streams if s.get("codec_type") == "video"
+                             and not s.get("disposition", {}).get("attached_pic", 0)),
+        "creation_time": 1 if any(k.lower() == "creation_time" for k in (fmt.get("tags") or {})) else 0,
+        "audio_language": 1 if lang and lang.lower() != "und" else 0,
+        "timecode": 1 if out["timecode"].get("value") else 0,
+        "timecode_value": out["timecode"].get("value"),
+        "audio_channels": (_to_int(audio.get("channels")) or 0) if audio else 0,
+        "has_video": bool(video), "has_audio": bool(audio),
+        # the guard on time-bearing items (emit.source_carry): the length, and where the chapters are
+        "duration": out.get("duration"),
+        "chapter_times": [(round(_to_float(c.get("start_time")) or 0.0, 2), round(_to_float(c.get("end_time")) or 0.0, 2))
+                          for c in (raw.get("chapters") or [])],
+    }
     return out
+
+
+_CARRY: Dict[str, Dict[str, Any]] = {}
+
+
+def probed_maps(meta: Optional[Dict[str, Any]], *, video: bool = True, audio: bool = True,
+                audio_stream: int = 0, input_index: int = 0) -> List[str]:
+    """`-map` arguments for the picture and sound probe() describes in `meta` (audio track
+    `audio_stream` where a tool takes --audio-stream). A kind the file does not have is left out,
+    so the same call serves a silent clip and an audio-only file."""
+    out: List[str] = []
+    if video and (meta or {}).get("video"):
+        out += ["-map", f"{input_index}:{PROBED_VIDEO}"]
+    if audio and (meta or {}).get("audio"):
+        out += ["-map", f"{input_index}:a:{audio_stream}"]
+    return out
+
+
+def several_av_streams(meta: Optional[Dict[str, Any]]) -> bool:
+    """True when FFmpeg's default stream selection could pick a picture or a sound other than the
+    one probe() describes: more than one playable video stream or more than one audio stream."""
+    counts = (meta or {}).get("stream_counts") or {}
+    return (counts.get("video") or 0) > 1 or (counts.get("audio") or 0) > 1
+
+
+def carry_inventory(path: str) -> "Optional[Dict[str, Any]]":
+    """The carry-over items probe() last read off `path` (see emit()'s source_carry), or None."""
+    return _CARRY.get(os.path.realpath(path)) if path else None
 
 
 def _hdr10_static(ffprobe: str, path: str, stream: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
@@ -606,10 +782,11 @@ def measured_level_dbfs(path: str, seconds: Optional[float] = 120.0,
                         audio_stream: Optional[int] = None) -> Optional[Dict[str, float]]:
     """Mean and peak level of the first `seconds` of audio (volumedetect), in dBFS; None if unmeasurable.
     Cheap enough to run once as a hint when a threshold-based tool found nothing. seconds=None
-    measures the whole file; audio_stream picks the Nth audio stream (default: ffmpeg's choice)."""
+    measures the whole file; audio_stream picks the Nth audio stream (default: the first, the one
+    probe() describes; FFmpeg's own choice was the track with the most channels)."""
     ffmpeg = require_tool("ffmpeg")
     head = ["-t", f"{seconds:.0f}"] if seconds is not None else []
-    pick = ["-map", f"0:a:{audio_stream}"] if audio_stream is not None else []
+    pick = ["-map", f"0:a:{audio_stream or 0}"]
     proc = run_analysis([ffmpeg, "-hide_banner", "-nostdin", *head, "-i", path, *pick, "-vn",
                          "-af", "volumedetect", "-f", "null", "-"], check=False)
     m_mean = re.search(r"mean_volume:\s*(-?[0-9.]+) dB", proc.stderr)
@@ -729,7 +906,7 @@ def measure_signal_range(path: str, standard: str, window: float = 10.0,
         stats_file = os.path.join(tmp, "stats.txt")
         vf = (f"signalstats=stat=brng,metadata=print:file={escape_filter_path(stats_file)},"
               f"{mask},signalstats,metadata=print:file=-")
-        cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", vf, "-f", "null", "-"]
+        cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", f"0:{PROBED_VIDEO}", "-an", "-sn", "-dn", "-vf", vf, "-f", "null", "-"]
         proc = run_analysis(cmd, check=False, record=True)
         try:
             with open(stats_file, encoding="utf-8", errors="replace") as f:
@@ -775,6 +952,38 @@ def measure_signal_range(path: str, standard: str, window: float = 10.0,
     return doc
 
 
+def refuse_not_a_still(path: str, meta: Dict[str, Any], flag: str, instead: str) -> None:
+    """`flag` takes a still image and is read with `-loop 1`, an option of the image demuxers only:
+    a video or a GIF (one frame or many: the gif demuxer has no such option) given there failed as
+    "Option loop not found" / "Option framerate not found", naming neither the file nor the flag
+    (#404). `instead` says what takes a video."""
+    fmt = str(meta.get("format") or "")
+    if STATE.dry_run and meta.get("dry_run"):
+        return  # a pending input: nothing was read
+    if fmt == "image2" or fmt.endswith("_pipe"):
+        return
+    if fmt == "gif":
+        die(f"{flag} {path} is a GIF, and {flag} reads a still image through the image demuxers, which do not "
+            "open GIF: convert it to PNG first (`look.py FILE --at 0 -o still.png` writes its first frame)", kind="input")
+    length = meta.get("duration")
+    die(f"{flag} {path} is not a still image: it is a {fmt.split(',')[0] or 'media'} file"
+        + (f" ({length:.3f}s)" if length else "") + f", and {flag} is read as one picture", kind="input", hint=instead)
+
+
+def is_still_input(meta: Dict[str, Any]) -> bool:
+    """A probe document of one picture read by an image demuxer (_is_still()'s rule, on the
+    document): a still given where a clip is taken. Read with a plain `-i` it is one frame, so a
+    tool that shows it for a while opens it with still_loop_args() (#510)."""
+    fmt = str((meta or {}).get("format") or "")
+    return not (meta or {}).get("dry_run") and (fmt == "image2" or fmt.endswith("_pipe"))
+
+
+def still_loop_args(path: str, seconds: float) -> List[str]:
+    """The input options that show a still picture for `seconds`: `-loop 1` repeats its one frame
+    (the image demuxers' option) and `-t` ends the repeat, so the input is bounded."""
+    return ["-loop", "1", *still_input_args(path), "-t", f"{max(seconds, 0.001):.3f}"]
+
+
 def analyze_levels(path: str, seconds: float = 20.0) -> Dict[str, Any]:
     """Sample luma/saturation statistics (signalstats) and guess whether the picture is Log-encoded.
 
@@ -782,7 +991,7 @@ def analyze_levels(path: str, seconds: float = 20.0) -> Dict[str, Any]:
     white below ~235 with low saturation: the image looks grey and flat but is tagged as plain SDR.
     """
     ffmpeg = require_tool("ffmpeg")
-    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-t", f"{seconds:.1f}", "-i", path, "-an",
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-t", f"{seconds:.1f}", "-i", path, "-map", f"0:{PROBED_VIDEO}", "-an",
            "-vf", "fps=2,signalstats,metadata=print:file=-", "-f", "null", "-"]
     proc = run_analysis(cmd, check=False)
     vals: Dict[str, List[float]] = {}
@@ -954,11 +1163,11 @@ def detect_silences(path: str, threshold: float, min_silence: float) -> "List[Tu
     if dry_run_input_pending(path):
         return []
     ffmpeg = require_tool("ffmpeg")
-    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-vn", "-af",
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", f"0:{PROBED_AUDIO}", "-vn", "-af",
            f"silencedetect=noise={threshold}dB:d={min_silence}", "-f", "null", "-"]
     proc = run_analysis(cmd, check=False, record=True)
     if proc.returncode != 0:
-        die(f"silencedetect failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg")
+        die(f"silencedetect failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr))
     silences: "List[Tuple[float, float]]" = []
     start = None
     for kind, val in SIL_RE.findall(proc.stderr):
@@ -1020,7 +1229,7 @@ def detect_content(path: str, duration: float, *, video: bool = True, audio: boo
         cmd += ["-map", "0:a:0", "-af", f"silencedetect=noise={SILENT_PEAK_DBFS:g}dB:d={CONTENT_SILENCE_MIN}"]
     proc = run_analysis(cmd + ["-f", "null", "-"], check=False, record=True)
     if proc.returncode != 0:
-        die(f"content detection failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg")
+        die(f"content detection failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr))
     end = max(duration, 0.0)
     out: Dict[str, Any] = {}
     if video:
@@ -1064,7 +1273,7 @@ def _detect_dropouts(path: str, end: float) -> "List[Tuple[float, float]]":
                          f"silencedetect=noise={CONTENT_DROPOUT_DB:g}dB:d={CONTENT_DROPOUT_MIN}", "-f", "null", "-"],
                         check=False, record=True)
     if proc.returncode != 0:
-        die(f"dropout detection failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg")
+        die(f"dropout detection failed:\n{proc.stderr.strip()[-800:]}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr))
     gaps: "List[Tuple[float, float]]" = []
     start = None
     for kind, val in SIL_RE.findall(proc.stderr):
@@ -1166,7 +1375,7 @@ def detect_scenes(path: str, threshold: float, min_len: float, duration: float, 
     a real cut is a one-frame spike. On real footage this roughly doubles precision at
     equal recall compared with the raw scdet threshold."""
     ffmpeg = require_tool("ffmpeg")
-    proc = run_analysis([ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-an", "-vf",
+    proc = run_analysis([ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", f"0:{PROBED_VIDEO}", "-an", "-vf",
                          "scale=320:-2,scdet=threshold=0,metadata=print:file=-", "-f", "null", "-"])
     # No `sc_pass=1` on scdet: on FFmpeg 5.x that option means "pass only the frames whose
     # score exceeds the threshold", so every truly static frame (score exactly 0 -- a title
@@ -1260,7 +1469,7 @@ def signatures_match(sigs: list, ext: str) -> bool:
                     return False
             else:
                 codec = str(a.get("codec_name") or "")
-                if not (codec.startswith("pcm_") or codec in IN_BAND_CONFIG or ext in TS_EXTS):
+                if not (codec.startswith("pcm_") or codec in IN_BAND_CONFIG or ext.lower() in TS_EXTS):
                     return False
     return True
 
@@ -1307,3 +1516,96 @@ def compare_pictures(path: str, reference: str) -> "Optional[Dict[str, Any]]":
     mean_psnr = psnr.group(1) if psnr else None
     return {"ssim": float(ssim.group(1)), "worst_ssim": worst[1], "worst_frame": worst[0] - 1, "frames": len(frames),
             "psnr": None if mean_psnr is None else (float("inf") if mean_psnr == "inf" else float(mean_psnr))}
+
+
+# check.py --compare --expect-changed (#439): where the picture differs from the reference.
+CHANGE_GRID = (32, 18)   # tiles across and down: one is 60x60 px at 1080p
+CHANGE_FLOOR = 24        # a tile whose largest channel difference (0-255, area mean) is above this changed
+
+
+def change_tiles(path: str, reference: str, floor: int, grid: "Tuple[int, int]" = CHANGE_GRID,
+                 squares: "Tuple[str, str]" = ("", "")) -> "Optional[Dict[str, Any]]":
+    """Which tiles of which frames of `path` differ from `reference`, frame i against frame i in
+    decode order (as compare_pictures() pairs them; the caller checks sizes and frame counts).
+    Both pictures go to 8-bit RGB planes, are subtracted, and each frame of the difference is
+    area-scaled to `grid`; a tile's value is the largest of its three channels. `squares` is each
+    file's square_pixels() filter, so the grid covers the displayed picture (display_size()) and a
+    caller's rectangle in displayed pixels names the tiles it means on a non-square-pixel file.
+    {frames, changed {frame index: a bit mask of the tiles above `floor`, bit column + row * columns;
+    change_mask_tiles() lists them}, peaks {frame index: its largest tile}, quiet_peak (the largest
+    tile at or under the floor)}. A mask and not a list: two unrelated hours differ in every tile
+    of every frame, which as tuples is tens of millions of objects.
+    None when the pass fails, times out of its bytes mid-frame, or decodes no frame: nothing was
+    compared, which the caller must not read as "nothing changed"."""
+    import subprocess
+    import threading
+    from _common import runner as _runner
+    gw, gh = grid
+    sq_a, sq_b = (s + "," if s else "" for s in squares)
+    graph = (f"[0:V:0]{sq_a}settb=1/1000,setpts=N,format=gbrp[a];[1:V:0]{sq_b}settb=1/1000,setpts=N,format=gbrp[b];"
+             f"[a][b]blend=all_mode=difference:shortest=1,scale={gw}:{gh}:flags=area[o]")
+    # passthrough: the frames carry index timestamps, and a constant-rate muxer would drop
+    # nearly all of them as duplicates (12 of 300 came out without it)
+    cmd = [require_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-i", path, "-i", reference,
+           "-filter_complex", graph, "-map", "[o]", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    # read frame by frame as ffmpeg writes them: 1728 bytes a frame is 187 MB for an hour at
+    # 30 fps, and only the frames with a changed tile are kept. Same wall-clock limit as run_analysis()
+    _runner._refuse_url_media(cmd)
+    cmd = _runner.guard_input_names(cmd)
+    limit = _runner._limit_for(cmd)
+    size, tiles = gw * gh * 3, gw * gh
+    changed: Dict[int, int] = {}
+    peaks: Dict[int, int] = {}
+    quiet, n, pending = 0, 0, b""
+    child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **_runner.child_kwargs())
+    _runner._watch(child, cmd)
+    expired = threading.Event()
+
+    def _expire() -> None:
+        expired.set()
+        child.kill()
+
+    timer = threading.Timer(limit, _expire) if limit else None
+    if timer:
+        timer.daemon = True
+        timer.start()
+    try:
+        while True:
+            chunk = child.stdout.read(size * 64)
+            if not chunk:
+                break
+            pending += chunk
+            whole = len(pending) - len(pending) % size
+            for i in range(0, whole, size):
+                frame = pending[i:i + size]
+                top = max(frame)
+                if top <= floor:
+                    quiet = max(quiet, top)
+                else:
+                    mask = 0
+                    for t in range(tiles):
+                        value = max(frame[3 * t:3 * t + 3])
+                        if value > floor:
+                            mask |= 1 << t
+                        elif value > quiet:
+                            quiet = value
+                    changed[n], peaks[n] = mask, top
+                n += 1
+            pending = pending[whole:]
+        child.wait()
+    finally:
+        if timer:
+            timer.cancel()
+        _runner._unwatch(child)
+        child.stdout.close()
+    if expired.is_set():
+        _runner._timed_out(cmd, limit or 0)
+    if child.returncode != 0 or not n or pending:
+        return None
+    return {"frames": n, "changed": changed, "peaks": peaks, "quiet_peak": quiet}
+
+
+def change_mask_tiles(mask: int, grid: "Tuple[int, int]" = CHANGE_GRID) -> "List[Tuple[int, int]]":
+    """change_tiles()'s bit mask as [(column, row)], row by row."""
+    gw = grid[0]
+    return [(t % gw, t // gw) for t in range(grid[0] * grid[1]) if mask >> t & 1]

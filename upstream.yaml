@@ -321,14 +321,14 @@ sources:
       - id: trove-ffmpeg
         upstream_path: .
         local_path: skills/media/trove-ffmpeg
-        base_sha: 6e42a79247909659b3d80833120b272fb5e46aba
-        base_tree_digest: sha256:1c83ba83462d8cc73a45bc129357503ef38010a5c79931c92d40e6c612abafd8
-        local_tree_digest: sha256:213ca92966c855b1c22baf4a9e92ed0cc6da1a244f984293ac5fb97bf861491d
+        base_sha: c7dad34c846099e7cf606ef943abe5e12d1ab0f9
+        base_tree_digest: sha256:c5d5cad73e3f409b4f04c47e4a4ce6afec392f700315ede46d14336b09ec844b
+        local_tree_digest: sha256:35ff88159aae1023e81f01a12a391650befe82d2224f183856d5d7bd67949823
         patch_digest: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        checked_sha: 6e42a79247909659b3d80833120b272fb5e46aba
-        checked_at: 2026-11-07T13:24:07Z
+        checked_sha: c7dad34c846099e7cf606ef943abe5e12d1ab0f9
+        checked_at: 2026-11-24T09:13:54Z
         candidate_sha: null
-        imported_at: 2026-11-07T13:24:07Z
+        imported_at: 2026-11-24T09:13:54Z
         include:
           - SKILL.md
           - references/**

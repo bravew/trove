@@ -10,14 +10,16 @@ generated fresh, there is no source picture involved.
 --style waveform draws the amplitude over time; --style spectrum draws a
 frequency-over-time heatmap instead, which reads more information out of
 dense mixes at the cost of being less immediately readable to a general
-audience. Both accept --width/--height and --color; waveform additionally
-takes --waveform-mode (how each sample is drawn) and --split-channels
-(stereo drawn as two separate lanes instead of summed to one).
+audience. Both accept --width/--height and --split-channels (stereo drawn as
+two separate lanes instead of summed to one); waveform additionally takes
+--color and --waveform-mode (how each sample is drawn). The spectrum is drawn
+in showspectrum's own colour map, so --color with --style spectrum is refused.
 
 Examples:
   python3 waveform.py podcast.wav -o waveform.mp4
   python3 waveform.py track.wav --style spectrum --width 1920 --height 1080 -o spectrum.mp4
   python3 waveform.py interview.mp4 --split-channels --color cyan|magenta
+  python3 waveform.py interview.mp4 --at 12.4 --at 35.1 --window 2 -o cuts.png
 
 An *audiogram* is the same render over a picture: --image cover.png puts a
 still behind the visualisation, --platform sizes the frame for a
@@ -31,29 +33,111 @@ invented: give an image or a colour.
 """
 import argparse
 import json
+import math
 import os
 import sys
+from pathlib import Path
 
 from _platforms import PLATFORMS, PLATFORM_CHOICES, resolve as resolve_platform
-from _common.probe import SILENT_PEAK_DBFS, square_pixels, square_pixels_note
+from _common.probe import SILENT_PEAK_DBFS, refuse_not_a_still, square_pixels, square_pixels_note
 from _common import still_input_args  # noqa: E402
-from _common import (add_common, apply_common, aac_args, default_output, die, draws_chroma, emit, ffmpeg_base,
+from _common import (add_common, apply_common, aac_args, color_hex, default_output, die, draws_chroma, emit, ffmpeg_base,
                      info, load_brand, pad_filters, probe, rgb_chain_to_bt709, run, STATE, validate_color, video_args, X264_PRESETS,
                      fmt_secs, child_args, run_tool, measured_level_dbfs, sibling_temp)
-from _common.emit import absorb_stage_hw, note, warn
+from _common import (default_font_file, drawtext_fontfile, input_length, refuse_existing_outputs,
+                     refuse_output_is_input, require_filter, time_arg)
+from _common.emit import absorb_stage_hw, note, refuse, warn
+from _common.runner import absent_word, refuse_missing_components_first
+from _common.decision import length_output_t
+from _common.probe import AUDIO_MEDIA_EXT
 
 WAVEFORM_MODES = ["point", "line", "p2p", "cline"]
+# flags that shape the video output and mean nothing to --at's PNGs
+WAVEFORM_VIDEO_ONLY = {"fps", "silence_threshold", "preset", "image_fit", "position", "vis_height", "opacity",
+                       "fast", "codec", "quality", "hw", "no_hw"}
+
+
+def _waveform_stills(args, meta: dict, rate: int) -> int:
+    if (args.style != "waveform" or args.image or args.srt or args.text or args.title
+            or args.platform or args.background != "black" or args.waveform_mode != "line"
+            or args.on_silent != "warn"):
+        die("--at draws waveform PNGs; use the default waveform style and background, without audiogram or silence-check options")
+    if not 0 < args.window <= 30 or not math.isfinite(args.window):
+        die("--window must be a positive number of seconds up to 30")
+    if args.width < 240 or args.height < 64:
+        die("--at needs at least 240x64 pixels for the waveform and its label")
+    duration = input_length(meta)
+    if duration <= 0:
+        die("--at needs a source with a known positive duration")
+    if not rate:
+        die("--at needs a known sample rate for the selected audio stream")
+    marked = [time_arg(t, "--at", (meta.get("video") or {}).get("fps")) for t in args.at]
+    output = Path(args.output or default_output(args.input, "waveform_review", "png"))
+    if output.suffix.lower() != ".png":
+        die("--at writes PNG images; name a .png output")
+    rows = []
+    for index, time in enumerate(marked, start=1):
+        if not 0 <= time <= duration:
+            die(f"--at {time:g}: outside the input's 0–{duration:g}s timeline")
+        start = round(max(0.0, time - args.window / 2), 6)
+        end = round(min(duration, time + args.window / 2), 6)
+        length = round(end - start, 6)
+        # showwavespic uses fixed integer sample bins and puts the remainder in the final bin.
+        samples_per_column = round(length * rate) // args.width
+        if not samples_per_column:
+            die(f"--at {time:g}: window holds fewer samples than the image has columns; increase --window or reduce --width")
+        image = output if len(marked) == 1 else output.with_name(f"{output.stem}_{index:02d}.png")
+        marker = min(args.width - 1, round((time - start) * rate) // samples_per_column)
+        rows.append({"output": str(image), "time": round(time, 6), "start": start, "end": end,
+                     "window_seconds": length, "marker_x": marker})
+    paths = [row["output"] for row in rows]
+    for out in paths:
+        refuse_output_is_input(out, args.input)
+    refuse_existing_outputs(paths)
+    require_filter("showwavespic", "rendering a still waveform")
+    require_filter("drawtext", "labeling a still waveform")
+    font = default_font_file("DejaVu Sans")
+    face = f"{drawtext_fontfile(font)}:" if font else ""
+    steps = []
+    for row in rows:
+        out, start, length = row["output"], row["start"], row["window_seconds"]
+        label = f"Cut {row['time']:.3f} s  |  Window {length:.3f} s"
+        chain = (
+            f"[0:a:{args.audio_stream}]aresample=async=1:first_pts=0,apad,atrim=end_sample={round(length * rate)},"
+            f"showwavespic=s={args.width}x{args.height - 32}:split_channels={int(args.split_channels)}:colors={args.color},"
+            "format=rgb24,pad=iw:ih+32:0:32:color=black,"
+            f"drawbox=x={row['marker_x']}:y=32:w=2:h=ih-32:c=0xFFAA44:t=fill,"
+            f"drawtext={face}text='{label}':fontsize=14:fontcolor=white:x=8:y=8[still]"
+        )
+        run(ffmpeg_base() + ["-ss", f"{start:.6f}", "-t", f"{length:.6f}", "-i", args.input,
+                             "-filter_complex", chain, "-map", "[still]", "-frames:v", "1", "-update", "1", out])
+        if not STATE.dry_run:
+            video = probe(out, role="output").get("video") or {}
+            expected = [args.width, args.height]
+            measured = [video.get("width"), video.get("height")]
+            ok = video.get("codec") == "png" and measured == expected
+            steps.append({"step": "waveform_image", "output": out, "ok": ok,
+                          "expected": expected, "measured": measured, "codec": video.get("codec")})
+            if not ok:
+                die(f"waveform image verification failed: {out}", kind="verification",
+                    output=out, verification=steps, verified=False)
+            info(f"wrote {out} (cut {row['time']:.3f}s; window {start:.3f}–{row['end']:.3f}s)")
+    fields = {"planned_waveforms" if STATE.dry_run else "waveforms": rows}
+    emit(paths[0], outputs=paths, verification=steps, **fields)
+    return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
-    ap.add_argument("-o", "--output", help="output file (default: <name>_waveform.<ext>)")
+    ap.add_argument("-o", "--output", help="output video, or a .png path with --at")
+    ap.add_argument("--at", action="append", metavar="TIME", help="write a waveform PNG around this time (repeat for several points)")
+    ap.add_argument("--window", type=float, default=None, metavar="SECONDS", help="total waveform time around each --at (default 2, up to 30)")
     ap.add_argument("--style", choices=["waveform", "spectrum"], default="waveform", help="waveform (default) or spectrum visualization")
-    ap.add_argument("--width", type=int, default=1920, help="output width in px, must be even (default 1920)")
-    ap.add_argument("--height", type=int, default=1080, help="output height in px, must be even (default 1080)")
+    ap.add_argument("--width", type=int, default=1920, help="output width in px, 2..16384, must be even (default 1920)")
+    ap.add_argument("--height", type=int, default=1080, help="output height in px, 2..16384, must be even (default 1080)")
     ap.add_argument("--fps", type=float, default=25.0, help="output frame rate (default 25)")
-    ap.add_argument("--color", default="lime", help="channel colour(s), pipe-separated per channel, e.g. 'lime' or 'cyan|magenta' (default lime)")
+    ap.add_argument("--color", default="lime", help="--style waveform only: channel colour(s), pipe-separated per channel, e.g. 'lime' or 'cyan|magenta' (default lime)")
     ap.add_argument("--background", default="black", help="background colour (default black)")
     ap.add_argument("--waveform-mode", choices=WAVEFORM_MODES, default="line", help="--style waveform only: how each sample is drawn (default line)")
     ap.add_argument("--split-channels", action="store_true", help="draw each channel in its own lane instead of summing to one")
@@ -96,23 +180,36 @@ def main() -> int:
         args.width, args.height = frame["w"], frame["h"]
         args.fps = float(PLATFORMS[args.platform].get("fps") or args.fps)
         info(f"--platform {args.platform}: {args.width}x{args.height} @ {args.fps:g}fps")
+    if args.style == "spectrum" and args.color != ap.get_default("color"):
+        # A144: showspectrum takes no colour, so the flag was accepted and the heatmap drawn in
+        # its own colour map (a brand's primary colour is a default and is not refused)
+        die(f"--color {args.color} colours the waveform's channels; --style spectrum is drawn in showspectrum's own "
+            "colour map and takes no colour", hint="drop --color, or use --style waveform")
+    if args.style == "spectrum" and args.waveform_mode != ap.get_default("waveform_mode"):
+        die(f"--waveform-mode {args.waveform_mode} is how --style waveform draws each sample; --style spectrum has no "
+            "such mode", hint="drop --waveform-mode, or use --style waveform")
     brand = load_brand(args.brand) if args.brand else None
     if brand:
         bc = brand.get("colors") or {}
+        # read as caption.py, graphics.py and overlay.py read a brand colour (#535): a brand file
+        # writes six hex digits with or without # or 0x
         if args.color == "lime" and bc.get("primary"):
-            args.color = bc["primary"]
+            args.color = color_hex(bc["primary"])
         if args.background == "black" and bc.get("background"):
-            args.background = bc["background"]
+            args.background = color_hex(bc["background"])
     if args.image:
         if "://" in args.image:
             die("--image must be a readable local file; this skill has no network access, so save "
                 "the image locally and pass its path", kind="input")
         if not os.path.exists(args.image):
-            die(f"--image file not found: {args.image}", kind="input")
-        if not STATE.dry_run:
-            plate = probe(args.image, role="input")
-            if not (plate.get("video") or {}).get("width"):
-                die(f"--image is not an image ffmpeg can decode: {args.image}", kind="input")
+            die(f"--image file {absent_word(args.image)}: {args.image}", kind="input")
+        # read under --dry-run too (the file exists, checked above): a plate the real run refuses
+        # is refused by the plan (#404: a dry run completed on a video given as --image)
+        plate = probe(args.image, role="input")
+        if not (plate.get("video") or {}).get("width"):
+            die(f"--image is not an image ffmpeg can decode: {args.image}", kind="input")
+        refuse_not_a_still(args.image, plate, "--image",
+                           "`look.py FILE --at T` writes one frame of a video as a PNG")
         if args.background != "black":
             die("--image and a non-default --background exclude each other: the plate is either "
                 "the picture or the colour", kind="input")
@@ -126,10 +223,8 @@ def main() -> int:
     # encoded: check it here, before any encode, and name the flag the caller gave
     for flag, path in (("--srt", args.srt), ("--text", args.text)):
         if path and not os.path.isfile(path):
-            die(f"{flag} file not found: {path}", kind="input")
+            die(f"{flag} file {absent_word(path)}: {path}", kind="input")
 
-    if args.width <= 0 or args.height <= 0:
-        die(f"--width/--height must be > 0, got width={args.width} height={args.height}")
     if args.width % 2 or args.height % 2:
         die(f"--width/--height must be even (4:2:0 chroma), got width={args.width} height={args.height}")
     for token in args.color.split("|"):
@@ -141,11 +236,39 @@ def main() -> int:
     meta = probe(args.input)
     if not meta.get("audio"):
         die("input has no audio stream")
-    audio_streams = meta.get("audio_streams") or []
-    if audio_streams and not (0 <= args.audio_stream < len(audio_streams)):
+    audio_streams = meta.get("audio_streams") or [meta["audio"]]
+    if not (0 <= args.audio_stream < len(audio_streams)):
         die(f"--audio-stream {args.audio_stream}: input has {len(audio_streams)} audio stream(s), 0..{len(audio_streams) - 1}")
+    if args.at:
+        # a video-only flag would be accepted and ignored: refused by name (a flag the tool cannot
+        # honour is refused, docs/design-decisions.md)
+        video_only = [a for a in ap._actions if a.option_strings and a.dest in WAVEFORM_VIDEO_ONLY
+                      and getattr(args, a.dest) != a.default
+                      and not (a.dest == "preset" and args.fast)]  # --fast sets the preset itself
+        if video_only:
+            die(f"--at draws waveform PNGs; {', '.join(a.option_strings[-1] for a in video_only)} "
+                "only applies to the video output")
+        args.window = 2.0 if args.window is None else args.window
+        return _waveform_stills(args, meta, audio_streams[args.audio_stream].get("sample_rate") or 0)
+    if args.window is not None:
+        die("--window needs --at")
     if args.silence_threshold >= 0:
         die(f"--silence-threshold is a peak level in dBFS and must be negative, got {args.silence_threshold:g}")
+    # A137: the output always holds a picture, so an audio input's extension is not the default:
+    # talk.wav made talk_waveform.wav, which the WAV muxer refused (kind ffmpeg), and talk.m4a an
+    # H.264 video named .m4a
+    in_ext = os.path.splitext(args.input)[1].lower()
+    output = args.output or default_output(args.input, "waveform", "mp4" if in_ext in AUDIO_MEDIA_EXT else None)
+    # every audio-only extension this skill reads, not only those it writes (is_audio_output():
+    # .aif, .aiff, .caf and .wma are not there, and passed this to fail in ffmpeg, or in a dry run not at all)
+    if os.path.splitext(output)[1].lower() in AUDIO_MEDIA_EXT:
+        # the reason every tool that writes a picture gives (runner._check_picture_into_audio_extension,
+        # #539), from here because it comes before the measuring passes: the level measurement
+        # below runs ffmpeg over the whole input, and a silent input stopped there first (#554 review)
+        refuse("input", "output_extension_audio_only",
+               f"{output}: waveform.py writes a video, and {os.path.splitext(output)[1].lower()} holds sound only; "
+               "name a video file (.mp4, .mov, .mkv)",
+               output=output, extension=os.path.splitext(output)[1].lower(), encoders=[])
     # silent input draws a flat line that used to be reported as verified; a writing tool's dry
     # run runs no ffmpeg (docs/contract.md), so only the real run measures
     silent_peak = None
@@ -157,7 +280,6 @@ def main() -> int:
                 die(f"{args.input} is silent (audio stream {args.audio_stream} peaks at {silent_peak:g} dBFS, at or below "
                     f"--silence-threshold {args.silence_threshold:g}): the visualisation would be a flat line",
                     kind="input", hint="check the audio, or pass --on-silent warn to render it anyway")
-    output = args.output or default_output(args.input, "waveform")
 
     # The visualisation's own band. Without --image/--position it fills the frame, which is what
     # every 1.15 command line did, so the graph below is byte-identical when no new flag is given.
@@ -232,8 +354,14 @@ def main() -> int:
     # audio ends (a 12 s source came out 14.08 s on 5.1.1, #146), so the output is also capped
     # at the source's own duration when probe knows it.
     if meta.get("duration"):
-        cmd += ["-t", f"{float(meta['duration']):.3f}"]
+        # to the sample of the drawn track when the millisecond would cut it (length_output_t)
+        drawn_track = audio_streams[args.audio_stream] if audio_streams else meta["audio"]
+        cmd += ["-t", length_output_t(float(meta["duration"]), drawn_track.get("sample_rate"))]
     cmd += ["-shortest", render]
+    if args.title or args.srt or args.text:
+        # #510: the title and captions are later stages; one that needs a filter this build lacks
+        # (drawtext, subtitles) is refused before the visualisation is encoded, as the dry run is
+        refuse_missing_components_first(os.path.abspath(__file__), "stage's filters and encoders")
     titled_tmp = sibling_temp(output, "titled")
     intermediates = [p for p in (render, titled_tmp) if p != output]
     try:
@@ -363,8 +491,12 @@ def _child(script_name: str, argv: "list") -> None:
         extra = {"hint": err["hint"]} if err.get("hint") else {}
         if doc.get("encoder"):
             extra["encoder"] = doc["encoder"]
+        # the stage's own reason and details ride along (#402: a caller keyed on error.reason saw
+        # filter_missing from caption.py and graphics.py run by hand, and nothing from here)
+        why = {k: err[k] for k in ("reason", "details") if err.get(k) is not None}
         die(f"{script_name} failed: {err.get('message') or (proc.stderr.strip().splitlines() or ['?'])[-1][:300]}",
-            code=int(doc.get("exit_code") or 1), kind=err.get("kind") or "input", stage=script_name, **extra)
+            code=int(doc.get("exit_code") or 1), kind=err.get("kind") or "input", stage=script_name,
+            error_extra=why or None, **extra)
 
 if __name__ == "__main__":
     sys.exit(main())

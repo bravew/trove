@@ -7,7 +7,7 @@ from __future__ import annotations
 import unicodedata
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from _common.emoji import emoji_clusters
-from _common.fonts import char_script
+from _common.fonts import char_script, detect_script
 
 
 # --------------------------------------------------------------------------- text measurement (1.12)
@@ -29,8 +29,11 @@ ADVANCE_EM = {"ja": 1.0, "zh": 1.0, "ko": 1.0, "th": 1.0, "hi": 0.7, "ar": 0.6, 
 # a word. A Thai run is therefore one atom, broken only at the spaces (or the manual `|`) the
 # writer put there; an over-long run stays long on its own line, the rule long Latin words
 # already follow.
-NO_SPACE_SCRIPTS = ("ja", "zh", "ko")
-NO_BOUNDARY_SCRIPTS = ("th",)   # per-character breaking would chop words: keep the run whole
+# Korean is NOT here: it is written with spaces between words (eojeol), so a Hangul run is a word
+# like a Latin one -- broken at its spaces, and cut inside only by _slice_atom's escape hatch.
+# Per-character atoms broke `시작|합니다` and, once a pass moved the break, joined the halves
+# with no space (`늦지마세요`) while the result said text_unchanged.
+NO_SPACE_SCRIPTS = ("ja", "zh")
 
 
 # Per-character Latin advances in em, read off DejaVu Sans (the default caption family, and close
@@ -141,11 +144,14 @@ JA_PARTICLES = "はがをにでとのへもや"              # a break AFTER one
 # text on each side of a candidate break -- putting them in the character string above turned
 # か, ら, ま, で, よ and り into one-character particles of their own, which none of them is.
 JA_PARTICLE_WORDS = ("から", "まで", "より")
-JA_SENTENCE_END = "。、！？」』）"                  # a break AFTER one of these is preferred
+JA_SENTENCE_END = "。、！？」』），；："            # a break AFTER one of these is preferred (A54: ，；： too)
 # Characters that may never start a line: small kana, the prolonged sound mark, closing brackets
 # and the Japanese punctuation that hangs on the end of the line before it.
-JA_NO_LINE_START = "ぁぃぅぇぉっゃゅょァィゥェォッャュョーヽヾゝゞ、。！？）」』】〕》’”％"
-JA_NO_LINE_END = "（「『【〔《‘“"                   # ... and the ones that may never end a line
+# A54 (#457): the fullwidth comma, semicolon, colon and full stop Chinese uses, and the closing
+# brackets of both, are on the same table: a line that opens with '，' is the same fault as one
+# that opens with '、'.
+JA_NO_LINE_START = "ぁぃぅぇぉっゃゅょァィゥェォッャュョーヽヾゝゞ、。！？）」』】〕》’”％，；：．〉］｝〗"
+JA_NO_LINE_END = "（「『【〔《‘“〈［｛〖"           # ... and the ones that may never end a line
 
 # R4. Function words belong to the phrase that FOLLOWS them: an article or preposition begins the
 # noun phrase it governs, so a break before one is the good break (the word opens the next line
@@ -184,7 +190,18 @@ PENALTY_SENTENCE_END = 0.0    # R3: after 。、！？ -- the one break a reader
 _HYPHENS = ("-", "‐")    # ‑ (non-breaking hyphen) is deliberately NOT here
 
 
-def _atoms(line: str) -> "List[Tuple[str, bool]]":
+# Common caption vocabulary with a clear internal boundary. Keep this small: it is
+# a phrase-wrap hint, not a dictionary or a general Chinese segmenter.
+_CHINESE_WORDS = frozenset(("视频", "視頻", "影片", "效果", "功能", "字幕", "剪辑", "剪輯",
+                            "画面", "畫面", "音频", "音頻", "声音", "聲音"))
+
+
+def _protect_chinese_words(text: str, mode: str, lang: "Optional[str]") -> bool:
+    return (mode == "phrase" and any(word in text for word in _CHINESE_WORDS)
+            and detect_script(text, lang) == "zh")
+
+
+def _atoms(line: str, *, chinese: bool = False) -> "List[Tuple[str, bool]]":
     """Break a line into the smallest pieces a wrap may separate -- one atom per CJK/Thai
     character, one per emoji cluster, one per whitespace-delimited word otherwise -- each with
     whether a space stood before it in the original. The flag is what puts the text back together
@@ -215,7 +232,20 @@ def _atoms(line: str) -> "List[Tuple[str, bool]]":
             if word:
                 out.append((word, spaced))
                 word = ""
-            if out and not pending and _is_katakana_run(ch) and _is_katakana_run(out[-1][0][-1]):
+            if (out and not pending and _is_ideograph(ch) and out[-1][0][-1:] == ch
+                    and out[-1][0][-2:-1] != ch):
+                # a repeated ideograph is one word -- Chinese verb reduplication (看看 "have a look",
+                # 试试 "give it a try", 想想 "think it over") and words like 人人: the pair is one atom,
+                # as a katakana run already is (a reader of 3.10.0 saw 看|看 split across two lines).
+                # The merge is capped at TWO characters: an uncapped run (哈哈哈哈哈哈 in a caption) was
+                # one unbreakable atom, hard-sliced at the column edge. A longer run is pairs (哈哈|哈哈|哈),
+                # and break_penalty still scores a break between them PENALTY_FORBIDDEN, so it is a cost
+                # the wrapper may pay, not a wall. Compared on the atom's tail, so an opening bracket the
+                # pair carries (（看 + 看) still merges, and a closing mark between the two (「看」看) does not
+                out[-1] = (out[-1][0] + ch, out[-1][1])
+            elif chinese and out and not pending and out[-1][0][-1:] + ch in _CHINESE_WORDS:
+                out[-1] = (out[-1][0] + ch, out[-1][1])
+            elif out and not pending and _is_katakana_run(ch) and _is_katakana_run(out[-1][0][-1]):
                 # a katakana word (タイミング, コンピューター) is one atom: eval 17 saw タイ|ミング
                 out[-1] = (out[-1][0] + ch, out[-1][1])
             elif out and (attach_next or _is_mark(ch)):
@@ -275,16 +305,32 @@ def _slice_atom(atom: str, max_em: float) -> "List[str]":
     No dictionary, no hyphenation library: an existing hyphen is preferred as the cut (the same
     break R1 already allows), then whatever is left is cut again at exactly the widest prefix
     that still measures within `max_em`, one character at a time. The characters themselves are
-    never rewritten -- every piece concatenates back to the original atom exactly."""
-    if text_width_em(atom) <= max_em:
-        return [atom]
-    for i in range(len(atom) - 2, 0, -1):
-        # latest hyphen whose left side still fits -- keeps the left half as large as possible
-        if atom[i] in _HYPHENS and text_width_em(atom[:i + 1]) <= max_em:
-            return [atom[:i + 1]] + _slice_atom(atom[i + 1:], max_em)
+    never rewritten -- every piece concatenates back to the original atom exactly.
+
+    Iterative, and each piece measures only the prefixes up to the first that is too wide (a
+    prefix is never narrower than a shorter one): the recursive form measured every prefix of the
+    remaining atom for each piece it cut, so a 1 KB hyphenated cue took seconds and 4 KB minutes
+    (A11, #465), in caption.py's own process, which --timeout (a limit on each ffmpeg call) does
+    not bound. The pieces are the ones the recursive form cut."""
     pieces: "List[str]" = []
+    rest = atom
+    while True:
+        # latest hyphen whose left side still fits -- keeps the left half as large as possible;
+        # a rest whose every prefix fits, itself included, is the last piece
+        cut = 0
+        for end in range(1, len(rest) + 1):
+            if text_width_em(rest[:end]) > max_em:
+                break
+            if 1 <= end - 1 <= len(rest) - 2 and rest[end - 1] in _HYPHENS:
+                cut = end
+        else:
+            return pieces + [rest]
+        if not cut:
+            break
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
     cur = ""
-    for ch in atom:
+    for ch in rest:
         candidate = cur + ch
         if cur and text_width_em(candidate) > max_em:
             pieces.append(cur)
@@ -304,9 +350,11 @@ def _join(left: str, atom: str, spaced: bool) -> str:
 
 
 def _break_spaced(first: str, second: str) -> bool:
-    """Did a space stand at the break between these two wrapped lines? Only spaced scripts put one
-    there -- a CJK/Thai break sits between two characters that were written with nothing between
-    them, and re-joining them with a space would insert a character the cue never had."""
+    """A guess at whether a space stood at the break between these two wrapped lines, from the
+    scripts on each side. The wrapper's own passes do not use it: the greedy fill records the real
+    answer per break (`gaps`) and every pass carries it along, because a script cannot tell -- a
+    Japanese cue written with spaces (`はい そうです`) lost one whenever a pass moved a break that
+    stood at a space. Kept as the fallback for a caller that has only the two strings."""
     if not first or not second:
         return False
     return char_script(first[-1]) not in NO_SPACE_SCRIPTS and char_script(second[0]) not in NO_SPACE_SCRIPTS \
@@ -359,7 +407,7 @@ def _function_words(lang: "Optional[str]") -> "frozenset":
     """R4's table for this language. An unknown or absent language gets the union of the six sets:
     a token that appears in several of them is the same kind of word in each, which is why the
     rule is a penalty and not a refusal."""
-    key = (lang or "").strip().lower().split("-")[0]
+    key = (lang or "").strip().lower().replace("_", "-").split("-")[0]
     if key in FUNCTION_WORDS:
         return frozenset(FUNCTION_WORDS[key])
     return _FUNCTION_WORDS_ANY
@@ -398,7 +446,7 @@ def break_penalty(prev_char: str, next_char: str, lang: "Optional[str]" = None,
     single-character table applies."""
     if not prev_char or not next_char:
         return PENALTY_NEUTRAL
-    script = (lang or "").strip().lower().split("-")[0]
+    script = (lang or "").strip().lower().replace("_", "-").split("-")[0]
     if script not in ("ja", "zh"):
         # A kana on either side settles it: only Japanese has them, and char_script() reads a bare
         # Han character as Chinese, which used to switch the particle rules off for exactly the
@@ -410,6 +458,12 @@ def break_penalty(prev_char: str, next_char: str, lang: "Optional[str]" = None,
             if script not in ("ja", "zh"):
                 script = char_script(prev_char)
     if next_char in JA_NO_LINE_START or prev_char in JA_NO_LINE_END or _is_mark(next_char):
+        return PENALTY_FORBIDDEN
+    if prev_char == next_char and _is_ideograph(prev_char):
+        # a repeated ideograph is one word (reduplication: 看看, 试试, 想想): a break inside it is a
+        # break inside a word, whatever language the cue declares. The atomiser keeps a pair
+        # together (capped at two); this scores a break between the pairs of a longer run, and
+        # covers callers that score a break directly
         return PENALTY_FORBIDDEN
     if script not in ("ja", "zh"):
         return PENALTY_NEUTRAL
@@ -477,63 +531,85 @@ def best_break(atoms: "Sequence[Tuple[str, bool]]", max_em: float,
     return None if best is None else best[1]
 
 
-def _fix_orphans(lines: "List[str]", max_em: float) -> "List[str]":
+def _gaps(lines: "List[str]", gaps: "Optional[List[bool]]") -> "List[bool]":
+    """The per-break space flags a pass reads and updates: the caller's list (updated in place, so
+    the next pass sees the moved breaks), or the _break_spaced() guess when the caller has none."""
+    if gaps is None:
+        return [_break_spaced(a, b) for a, b in zip(lines, lines[1:])]
+    if len(gaps) != max(len(lines) - 1, 0):
+        raise ValueError("gaps must hold one flag per break")
+    return gaps
+
+
+def _fix_orphans(lines: "List[str]", max_em: float,
+                 gaps: "Optional[List[bool]]" = None, kinsoku: bool = False,
+                 *, chinese: bool = False) -> "List[str]":
     """No last line that is a single stranded atom.
 
     Greedy wrapping leaves one character alone whenever the line before it filled exactly: eval 14
     produced a Thai cue ending in a lone `ล` and a Japanese one ending in a lone `行`. While the
     last line is one atom narrower than ORPHAN_MIN_EM, the last atom of the line above moves down
     onto it -- but only while the result still fits and the line above does not become an orphan
-    itself, so a two-word cue is never made worse."""
+    itself, so a two-word cue is never made worse. `kinsoku` (phrase mode) moves a punctuation
+    mark down only with the character it closes (_kinsoku_atoms)."""
     lines = list(lines)
+    gaps = _gaps(lines, gaps)
     for _ in range(len(lines)):
         if len(lines) < 2:
             break
-        tail = _atoms(lines[-1])
+        tail = _atoms(lines[-1], chinese=chinese)
         if len(tail) != 1 or text_width_em(lines[-1]) >= ORPHAN_MIN_EM:
             break
-        prev = _atoms(lines[-2])
+        prev = _atoms(lines[-2], chinese=chinese)
+        if kinsoku:
+            prev = _kinsoku_atoms(prev)
         if len(prev) < 2:
             break
         moved, spaced = prev[-1]
         new_prev = ""
         for atom, sp in prev[:-1]:
             new_prev = _join(new_prev, atom, sp)
-        new_last = _join(moved, tail[0][0], _break_spaced(lines[-2], lines[-1]))
+        new_last = _join(moved, tail[0][0], gaps[-1])
         if text_width_em(new_last) > max_em or text_width_em(new_prev) < ORPHAN_MIN_EM:
             break
         lines[-2], lines[-1] = new_prev, new_last
+        gaps[-1] = spaced
     return lines
 
 
-def _fix_weak_lines(lines: "List[str]", max_em: float) -> "List[str]":
+def _fix_weak_lines(lines: "List[str]", max_em: float,
+                    gaps: "Optional[List[bool]]" = None, *, chinese: bool = False) -> "List[str]":
     """R2, generalised: _fix_orphans run at *every* boundary, against _is_weak_line.
 
     1.15 only ever looked at the last line, so a stranded digit or kana in the middle of a
     three-line cue survived. Walking upward from the last line, while a line is weak the last atom
     of the line above moves down onto it -- with 1.15's two guards intact (the result must still
-    fit, and the line above must not itself become weak), so the line count never changes."""
+    fit, and the line above must not itself become weak), so the line count never changes. A
+    punctuation mark moves down only with the character it closes (_kinsoku_atoms, A54)."""
     lines = list(lines)
+    gaps = _gaps(lines, gaps)
     for i in range(len(lines) - 1, 0, -1):
         for _ in range(len(lines)):
             if not _is_weak_line(lines[i]):
                 break
-            prev = _atoms(lines[i - 1])
+            prev = _kinsoku_atoms(_atoms(lines[i - 1], chinese=chinese))
             if len(prev) < 2:
                 break
-            moved, _spaced = prev[-1]
+            moved, spaced = prev[-1]
             new_prev = ""
             for atom, sp in prev[:-1]:
                 new_prev = _join(new_prev, atom, sp)
-            new_last = _join(moved, lines[i], _break_spaced(lines[i - 1], lines[i]))
+            new_last = _join(moved, lines[i], gaps[i - 1])
             if text_width_em(new_last) > max_em or _is_weak_line(new_prev) \
                     or text_width_em(new_prev) < ORPHAN_MIN_EM:
                 break
             lines[i - 1], lines[i] = new_prev, new_last
+            gaps[i - 1] = spaced
     return lines
 
 
-def _rebalance(lines: "List[str]", max_em: float) -> "List[str]":
+def _rebalance(lines: "List[str]", max_em: float,
+               gaps: "Optional[List[bool]]" = None) -> "List[str]":
     """Move each break to the one that minimises the widest line of the pair, without changing the
     line count.
 
@@ -544,11 +620,12 @@ def _rebalance(lines: "List[str]", max_em: float) -> "List[str]":
     if len(lines) < 2:
         return lines
     out = list(lines)
+    gaps = _gaps(out, gaps)
     for i in range(len(out) - 1):
         first, second = out[i], out[i + 1]
         tail_atoms = _atoms(second)
         if tail_atoms:
-            tail_atoms[0] = (tail_atoms[0][0], _break_spaced(first, second))
+            tail_atoms[0] = (tail_atoms[0][0], gaps[i])
         atoms = _atoms(first) + tail_atoms
         if not atoms or any(char_script(ch) in NO_SPACE_SCRIPTS for ch in first + second):
             continue
@@ -568,13 +645,15 @@ def _rebalance(lines: "List[str]", max_em: float) -> "List[str]":
                 continue
             key = (max(wa, wb), abs(wa - wb))
             if best is None or key < best[0]:
-                best = (key, a, b)
+                best = (key, a, b, atoms[cut][1])
         if best is not None:
             out[i], out[i + 1] = best[1], best[2]
+            gaps[i] = best[3]
     return out
 
 
-def _rebalance_phrase(lines: "List[str]", max_em: float, lang: "Optional[str]") -> "Tuple[List[str], int]":
+def _rebalance_phrase(lines: "List[str]", max_em: float, lang: "Optional[str]",
+                      gaps: "Optional[List[bool]]" = None, *, chinese: bool = False) -> "Tuple[List[str], int]":
     """_rebalance with R1-R4 deciding, for every script rather than spaced ones only.
 
     Returns the new lines and how many breaks a phrase rule moved away from the position 1.15's
@@ -582,13 +661,16 @@ def _rebalance_phrase(lines: "List[str]", max_em: float, lang: "Optional[str]") 
     if len(lines) < 2:
         return list(lines), 0
     out = list(lines)
+    gaps = _gaps(out, gaps)
     moved = 0
     for i in range(len(out) - 1):
         first, second = out[i], out[i + 1]
-        tail_atoms = _atoms(second)
+        tail_atoms = _atoms(second, chinese=chinese)
         if tail_atoms:
-            tail_atoms[0] = (tail_atoms[0][0], _break_spaced(first, second))
-        atoms = _split_hyphens(_atoms(first) + tail_atoms)
+            tail_atoms[0] = (tail_atoms[0][0], gaps[i])
+        atoms = _split_hyphens(_atoms(first, chinese=chinese) + tail_atoms)
+        if chinese:
+            atoms = _kinsoku_atoms(atoms)
         if len(atoms) < 2:
             continue
         cut = best_break(atoms, max_em, lang)
@@ -602,11 +684,41 @@ def _rebalance_phrase(lines: "List[str]", max_em: float, lang: "Optional[str]") 
         if (a, b) != (first, second):
             moved += 1
         out[i], out[i + 1] = a, b
+        gaps[i] = atoms[cut][1]
     return out, moved
 
 
+def _kinsoku_atoms(atoms: "List[Tuple[str, bool]]") -> "List[Tuple[str, bool]]":
+    """The atom list with each no-line-start character joined to the atom before it, and each
+    no-line-end character to the atom after it, where no space stands between them.
+
+    The phrase passes only ever choose among breaks that fit, so a forbidden break the greedy fill
+    had already taken stayed whenever no pass reconsidered it: a cue of three lines or more, or
+    the pieces of a cue split past --max-lines, opened a line with '、', '，' or '。' (A54, #457).
+    Joined, the fill carries the character before the punctuation onto the next line with it."""
+    split: "List[Tuple[str, bool]]" = []
+    for atom, spaced in atoms:
+        # the atomiser reads a run of CJK punctuation as one Latin word ('。（'): part it where a
+        # closing mark meets an opening one, so each half can join its own neighbour
+        start = 0
+        for k in range(1, len(atom)):
+            if atom[k - 1] in JA_NO_LINE_START and atom[k] in JA_NO_LINE_END:
+                split.append((atom[start:k], spaced if start == 0 else False))
+                start = k
+        split.append((atom[start:], spaced if start == 0 else False))
+    out: "List[Tuple[str, bool]]" = []
+    for atom, spaced in split:
+        if out and not spaced and (atom[0] in JA_NO_LINE_START or out[-1][0][-1] in JA_NO_LINE_END):
+            out[-1] = (out[-1][0] + atom, out[-1][1])
+        else:
+            out.append((atom, spaced))
+    return out
+
+
 def _greedy_chunks(raw: str, max_em: float, *, slice_overlong: bool = False,
-                   sliced: "Optional[List[int]]" = None) -> "List[str]":
+                   sliced: "Optional[List[int]]" = None,
+                   gaps: "Optional[List[bool]]" = None, kinsoku: bool = False,
+                   chinese: bool = False) -> "List[str]":
     """The greedy fill on its own: the line count every mode must keep.
 
     `slice_overlong` (off by default -- only caption.py's final burn-in pass turns it on, never
@@ -615,47 +727,70 @@ def _greedy_chunks(raw: str, max_em: float, *, slice_overlong: bool = False,
     katakana run that already fits is completely untouched -- is hard-sliced by _slice_atom()
     instead of kept whole. `sliced`, when given, gets one entry (the number of extra lines that
     one atom produced) per atom actually sliced, which is how the caller counts
-    `broken_inside_word` without re-deriving it from the output lines."""
+    `broken_inside_word` without re-deriving it from the output lines.
+
+    `gaps`, when given, is filled with one flag per break: did a space stand there in `raw`? The
+    passes in _balance() carry it, so a break they move keeps (or drops) exactly that space.
+
+    `kinsoku` (phrase mode) never breaks before a no-line-start or after a no-line-end character
+    (_kinsoku_atoms); `measured` keeps 1.15's fill."""
     current = ""
+    current_gap = False   # did a space stand before `current`'s first atom
     chunk: "List[str]" = []
-    for atom, spaced in _atoms(raw):
-        if slice_overlong and not current and text_width_em(atom) > max_em:
+    breaks: "List[bool]" = []
+
+    def emit(line: str, gap_before: bool) -> None:
+        if chunk:
+            breaks.append(gap_before)
+        chunk.append(line)
+
+    def start_line(atom: str, spaced: bool) -> "Tuple[str, bool]":
+        """The new current line opening with `atom`, sliced first when it is too wide alone."""
+        if slice_overlong and text_width_em(atom) > max_em:
             pieces = _slice_atom(atom, max_em)
             if sliced is not None and len(pieces) > 1:
                 sliced.append(len(pieces) - 1)
-            chunk.extend(pieces[:-1])
-            current = pieces[-1]
+            if len(pieces) > 1:
+                emit(pieces[0], spaced)
+                for piece in pieces[1:-1]:
+                    emit(piece, False)
+                return pieces[-1], False
+        return atom, spaced
+
+    atoms = _atoms(raw, chinese=chinese)
+    for atom, spaced in (_kinsoku_atoms(atoms) if kinsoku else atoms):
+        if not current:
+            current, current_gap = start_line(atom, spaced)
             continue
         candidate = _join(current, atom, spaced)
-        if current and text_width_em(candidate) > max_em:
-            chunk.append(current)
-            if slice_overlong and text_width_em(atom) > max_em:
-                pieces = _slice_atom(atom, max_em)
-                if sliced is not None and len(pieces) > 1:
-                    sliced.append(len(pieces) - 1)
-                chunk.extend(pieces[:-1])
-                current = pieces[-1]
-            else:
-                current = atom
+        if text_width_em(candidate) > max_em:
+            emit(current, current_gap)
+            current, current_gap = start_line(atom, spaced)
         else:
             current = candidate
     if current:
-        chunk.append(current)
+        emit(current, current_gap)
+    if gaps is not None:
+        gaps[:] = breaks
     return chunk
 
 
-def _balance(chunk: "List[str]", max_em: float, mode: str, lang: "Optional[str]") -> "List[str]":
+def _balance(chunk: "List[str]", max_em: float, mode: str, lang: "Optional[str]",
+             gaps: "Optional[List[bool]]" = None, *, chinese: bool = False) -> "List[str]":
     """The post-passes for one greedy chunk, in the mode's own order. Never changes the count:
     a pass that would is discarded, exactly as 1.15 did."""
     if len(chunk) < 2:
         return chunk
+    gaps = list(gaps) if gaps is not None else None
     if mode == "measured":
-        fixed = _fix_orphans(chunk, max_em)
-        rebalanced = _rebalance(fixed, max_em)
+        fixed = _fix_orphans(chunk, max_em, gaps)
+        rebalanced = _rebalance(fixed, max_em, list(gaps) if gaps is not None else None)
     else:
-        fixed = _fix_weak_lines(_fix_orphans(chunk, max_em), max_em)
-        rebalanced, _moved = _rebalance_phrase(fixed, max_em, lang)
-        rebalanced = _fix_weak_lines(rebalanced, max_em)
+        fixed = _fix_orphans(chunk, max_em, gaps, kinsoku=True, chinese=chinese)
+        fixed = _fix_weak_lines(fixed, max_em, gaps, chinese=chinese)
+        later = list(gaps) if gaps is not None else None
+        rebalanced, _moved = _rebalance_phrase(fixed, max_em, lang, later, chinese=chinese)
+        rebalanced = _fix_weak_lines(rebalanced, max_em, later, chinese=chinese)
     if len(rebalanced) == len(chunk):
         return rebalanced
     return fixed if len(fixed) == len(chunk) else chunk
@@ -678,11 +813,14 @@ def wrap_text(text: str, max_em: float, *, balance: bool = True, mode: str = "ph
     widest line. Neither mode ever changes the number of lines the greedy fill produced.
     """
     lines: "List[str]" = []
+    chinese = _protect_chinese_words(text, mode, lang)
     for raw in text.split("\n"):
         if not raw.strip():
             continue
-        chunk = _greedy_chunks(raw, max_em, slice_overlong=slice_overlong, sliced=sliced)
-        lines.extend(_balance(chunk, max_em, mode, lang) if balance else chunk)
+        gaps: "List[bool]" = []
+        chunk = _greedy_chunks(raw, max_em, slice_overlong=slice_overlong, sliced=sliced, gaps=gaps,
+                               kinsoku=mode == "phrase", chinese=chinese)
+        lines.extend(_balance(chunk, max_em, mode, lang, gaps, chinese=chinese) if balance else chunk)
     return lines or [text]
 def wrap_variants(text: str, max_em: float, *, mode: str = "phrase",
                   lang: "Optional[str]" = None, slice_overlong: bool = False,
@@ -698,13 +836,22 @@ def wrap_variants(text: str, max_em: float, *, mode: str = "phrase",
     wrapped: "List[str]" = []
     greedy: "List[str]" = []
     measured: "List[str]" = []
+    chinese = _protect_chinese_words(text, mode, lang)
     for raw in text.split("\n"):
         if not raw.strip():
             continue
-        chunk = _greedy_chunks(raw, max_em, slice_overlong=slice_overlong, sliced=sliced)
+        gaps: "List[bool]" = []
+        chunk = _greedy_chunks(raw, max_em, slice_overlong=slice_overlong, sliced=sliced, gaps=gaps,
+                               kinsoku=mode == "phrase", chinese=chinese)
         greedy.extend(chunk)
-        wrapped.extend(_balance(list(chunk), max_em, mode, lang))
-        measured.extend(chunk if mode == "measured" else _balance(list(chunk), max_em, "measured", None))
+        wrapped.extend(_balance(list(chunk), max_em, mode, lang, gaps, chinese=chinese))
+        if mode == "measured":
+            measured.extend(chunk)
+        else:
+            # 1.15's wrap fills without the kinsoku joins (A54), so it is filled on its own
+            plain_gaps: "List[bool]" = []
+            plain = _greedy_chunks(raw, max_em, slice_overlong=slice_overlong, gaps=plain_gaps)
+            measured.extend(_balance(plain, max_em, "measured", None, plain_gaps))
     if not greedy:
         greedy = [text]
     return (wrapped or [text], greedy, measured or [text])

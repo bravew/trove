@@ -54,6 +54,14 @@ on a stream copy as on a re-encode
 (`cut.py` reports it: `dropped_audio_streams`, an `audio_tracks_dropped` warning). Keep ProRes masters
 at source colour: `export.py --preset prores` does not retag.
 
+What else the source carried is compared on every write: `source_carry: {kept, dropped}` lists
+subtitles, chapters, a cover picture, surround channels, `creation_time`, the audio language tag
+and the start timecode (kept only when it labels the output's first frame: a cut from a later
+frame moves it there, a join of several ranges writes none), and a lost subtitle track, chapter list, cover picture or surround layout
+is a `source_items_dropped` warning. Read it before telling the user the file is complete; to
+carry the items over, use the tool that keeps them (`export.py` keeps subtitle tracks,
+`metadata.py` writes chapters and tags).
+
 Re-encoding an HDR (iPhone, HDR10) source through an SDR path flattens the
 colours. The scripts keep HDR; if you hand-write ffmpeg (never do — see SKILL.md),
 do not tag BT.709 on BT.2020 pixels.
@@ -68,8 +76,10 @@ opaque and the result says `verified: false` with a failing `alpha` step (`alpha
 transparency, start from `background.py --transparent --duration 5 --width 1920 --height 1080 -o canvas.mov`
 and draw one element on it
 with `graphics.py`/`overlay.py --keep-alpha`. An alpha line keeps the source's colour tags (as
-`--codec prores` does). `--alpha-mode premultiplied` multiplies the written colour by the alpha;
-sources are taken as straight. A VP9 layer with alpha is decoded with libvpx-vp9; FFmpeg's own VP9
+`--codec prores` does); an RGB source that is neither HDR nor BT.2020 (qtrle, PNG) written to ProRes 4444 or VP9 becomes BT.709
+YUV, tagged BT.709. `--alpha-mode premultiplied` multiplies the written colour by the alpha;
+sources are taken as straight unless `color.py --source-alpha-mode premultiplied` says the colour is
+already multiplied (it is divided by the alpha before the grade and multiplied again after, #453). A VP9 layer with alpha is decoded with libvpx-vp9; FFmpeg's own VP9
 decoder drops the alpha.
 
 ### Log footage
@@ -108,8 +118,18 @@ wrong frame — respect the automatic re-encode rather than forcing the copy.
 
 ### Variable frame rate
 `probe.py` sets `variable_frame_rate_suspected` when `r_frame_rate` and
-`avg_frame_rate` disagree (phone and screen recordings). Every re-encoding
-script then adds `-fps_mode cfr` at the source's average rate. That flag is a
+`avg_frame_rate` disagree (phone and screen recordings). On that flag `crop`, `denoise`,
+`deinterlace`, `proxy`, `sphere`, `stabilize`, `straighten`, `redact`, `overlay`, `caption`,
+`color`, `graphics`, `pad`, `freeze`, `loop`, `broll`, `cut` (a re-encode, `--segments`),
+`export`, `fit` and `speedramp` conform the picture with the `fps` filter (the nearest frame
+for each slot; `-fps_mode cfr` alone let a frame run up to two frames late against the sound,
+#512); `join`, `multicam` and `grid` put each input on the output's rate with their own `fps`
+filter. `reverse.py` is not changed: its `fps` filter comes after `reverse`, which hands the frames
+the forward timestamps in order, so a reversed VFR picture keeps its gaps where they were in
+forward time (each flash 0.19 s late on
+a 27 fps average clip; see docs/design-decisions.md). The rate is `cfr_args()`'s: the probed
+average, written as the nearest whole number when it is within 0.02 of one (29.98 is
+conformed to 30, 29.97 stays 29.97), and 30 when no average was probed. That flag is a
 whole-file average, and a phone clip at 29.98 against a nominal 30 trips it, so
 `cut.py` decides on packet timestamps sampled in up to five windows (`vfr_check`)
 instead: by default (`--vfr-guard sampled`, since 3.0.0) it switches to
@@ -184,7 +204,8 @@ libass and drawtext draw an empty box per character they have no glyph for, and
 ffmpeg still exits 0 — a video full of tofu is the classic "it worked" failure.
 Since 1.12 `caption.py`, `graphics.py` and `overlay.py --text` detect the script
 of the text they are about to draw (Japanese, Chinese, Korean, Arabic, Hebrew,
-Devanagari, Bengali, Tamil, Thai, Lao, Cyrillic, Greek) and resolve a font file that covers it,
+Devanagari, Bengali, Tamil, Thai, Lao, Cyrillic, Greek; after 3.8.7 also Gurmukhi, Gujarati,
+Telugu, Kannada, Malayalam, Sinhala, Khmer and Myanmar) and resolve a font file that covers it,
 printing one line — `font: /usr/share/fonts/.../wqy-zenhei.ttc (covers ko)`.
 **No font for the script is a failed job** (`kind: input`), not a warning.
 
@@ -202,15 +223,20 @@ printing one line — `font: /usr/share/fonts/.../wqy-zenhei.ttc (covers ko)`.
   already resolves a file for you on Windows, so this bites only a hand-built
   drawtext call. More: `references/ci-platform-pitfalls.md`.
 - Han characters alone (no kana, no hangul) are read as Chinese. Japanese or
-  Korean hanja text with no kana needs `--lang ja` / `--lang ko`
-  (`caption.py --language` is the same flag), or `"lang"` in brand.json.
+  Korean hanja text with no kana needs `--lang ja` / `--lang ko` on `graphics.py`
+  (`caption.py --language`, alias `--lang`, is the same hint), or `"lang"` in the
+  brand.json those two read. `overlay.py` has no such flag and its brand.json
+  `"lang"` is not read: name the face (`--font "Noto Sans CJK JP"` or
+  `--font-file`).
 - An explicit `--font`, an explicit `--font-file`, or a font your brand file
   itself names is always kept, even when fontconfig says it does not cover the script: you get one info
   line saying so, not a silent substitution. A brand file that never names a
   font is not a choice — the script still picks one.
 - `--fonts-dir` (`caption.py`) adds faces to the search, it does not switch the
   check off: if nothing in the directory covers the script, one line says so and
-  a covering font is resolved as usual.
+  a covering font is resolved as usual. A directory with no face named `--font`
+  is not an error either: libass asks fontconfig, and `font_used` says what it
+  drew with (`substituted: true` when it is another family).
 - **No fontconfig is `unknown`, not `missing`.** With no `fc-list` on PATH (or
   one that fails) coverage cannot be verified: the job runs with the font as
   given behind one info line, because libass and drawtext have font backends of
@@ -259,9 +285,11 @@ directory of PNGs — and on most builds only the second one exists.
   to 48 pixels: invalid library handle`, and at the font's own strike
   `Monocromatic (1bpp) fonts are not supported.`) and no file is written. That
   is why the colour route is a PNG overlay, never a drawtext font.
-- **PNGs**: `--emoji-assets DIR`, a directory of files named by code point in
-  the Twemoji/Noto convention — lowercase hex joined by `-`: `1f389.png`,
-  `1f1ef-1f1f5.png`, `1f469-200d-1f4bb.png`. Twemoji's `assets/72x72`
+- **PNGs**: `--emoji-assets DIR`, a directory of files named by code point:
+  Twemoji's lowercase hex joined by `-` (`1f389.png`, `1f1ef-1f1f5.png`,
+  `1f469-200d-1f4bb.png`), or Noto Emoji's `emoji_u` names, each code point at
+  least four hex digits, joined by `_` (`emoji_u1f389.png`,
+  `emoji_u0031_20e3.png`). Twemoji's `assets/72x72`
   (CC-BY 4.0) and Noto Emoji's `png/128` (OFL/Apache-2.0) are the two people
   already have. **The skill never downloads anything**: a missing directory is
   `kind: input`, never a silent fetch. The same directory can come from
@@ -391,8 +419,11 @@ commands work with `talk.wav` in place of `talk.mp4`. What changes:
 - `Look: not needed` in the report; `Check:` still applies for loudness
   (`check.py file.wav --platform podcast` measures LUFS and true peak).
 - Scripts that need a picture (`fit`, `caption`, `overlay`, `graphics`,
-  `color`, `export`, `scenes`, `look`) refuse an audio file with
-  "input has no video stream". Say so instead of forcing a video wrapper.
+  `color`, `export`, `look`; the contract's `video_required` lists the rest)
+  refuse an audio file with "input has no video stream". Say so instead of
+  forcing a video wrapper. `scenes` takes one as a single scene (`--beats`,
+  `--audio-peaks`, `--speech`, `--highlights`); its `--sheet` and `--shots`
+  refuse it.
 
 ### Audio-only recipes
 

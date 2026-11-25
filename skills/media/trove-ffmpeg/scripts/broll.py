@@ -18,21 +18,27 @@ Examples:
   python3 broll.py talk.mp4 --insert demo.mp4 --at 30 --duration 8 --audio mix
 """
 import argparse
+import math
 import sys
 from typing import Any, Dict, List
 
-from _common.decision import av_trim, frame_rate, grid_at_or_after, stream_starts
-from _common import STATE, add_common, aac_args, apply_common, cfr_args, as_limited, default_output, die, draws_chroma, drawn_chain, emit, ffmpeg_base, info, time_arg, label_chain, matrix_chain, range_chain, probe, run, validate_color, video_args, X264_PRESETS, fmt_secs
+from _common.decision import (av_trim, conform_output_t, conform_to_length, frame_durations, frame_rate, frame_window,
+                              grid_at_or_after, on_frame, silence_filter, stream_starts, window_expr, windowed_overlay_x)
+from _common import STATE, add_common, aac_args, apply_common, cfr_args, cfr_at_input, as_limited, default_output, die, draws_chroma, drawn_chain, emit, ffmpeg_base, info, time_arg, label_chain, matrix_chain, overlay_format, range_chain, probe, run, validate_color, video_args, X264_PRESETS, fmt_secs
 from _common.emit import note, record_fallback
-from _common.probe import display_size, square_pixels, square_pixels_note
+from _common.probe import display_size, is_still_input, square_pixels, square_pixels_note, still_loop_args
+from _common.emit import input_length
+
+
+MIX_RATE = 48000  # every layer of a b/mix sound is resampled to it before the mix
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", help="the A-roll (its timeline and length are kept)")
     ap.add_argument("-o", "--output", help="output file (default: <name>_broll.<ext>)")
-    ap.add_argument("--insert", action="append", required=True, metavar="B", help="B-roll clip (repeat with --at for several cutaways)")
-    ap.add_argument("--at", action="append", required=True, metavar="TIME", help="where in A the cutaway starts (seconds or mm:ss); one per --insert")
+    ap.add_argument("--insert", "--broll", action="append", required=True, metavar="B", help="B-roll clip (repeat with --at for several cutaways)")
+    ap.add_argument("--at", "--start", action="append", required=True, metavar="TIME", help="where in A the cutaway starts (seconds or mm:ss); one per --insert")
     ap.add_argument("--duration", action="append", metavar="T", help="cutaway length (default 4); one per --insert, or omit")
     ap.add_argument("--end", action="append", metavar="TIME", help="where in A the cutaway ends, instead of --duration")
     ap.add_argument("--from", dest="from_", action="append", metavar="TIME", help="where in B to start from (default 0); one per --insert, or omit")
@@ -57,7 +63,7 @@ def main() -> int:
     meta_a = probe(args.input)
     if not meta_a.get("video"):
         die("A-roll has no video stream")
-    dur_a = meta_a.get("duration") or 0.0
+    dur_a = input_length(meta_a)
     # the cutaway is scaled onto the frame ffmpeg has already rotated, not the stored one, and
     # onto a non-square-pixel A-roll squared at its display aspect (#411)
     w, h = display_size(meta_a["video"])
@@ -73,6 +79,11 @@ def main() -> int:
         a_chain = (a_chain + "," if a_chain else "") + f"scale={ew}:{eh},setsar=1"
         w, h = ew, eh
     fps = meta_a["video"].get("fps") or 30.0
+    # the A-roll's frame grid, when it has one (frame_window): its exact rate and where it starts
+    grid = frame_window(0.0, None, meta_a) is not None
+    rate_a, v0a = frame_rate(meta_a), stream_starts(meta_a)[0]
+    fps_filter = frame_durations(meta_a, rate_a)  # fps=30000/1001; a whole rate reads as it did (fps=25)
+    fps_filter = fps_filter[:-2] if fps_filter.endswith("/1") else fps_filter
     has_audio_a = bool(meta_a.get("audio"))
 
     def per(values: List[str], i: int, default: str) -> str:
@@ -98,22 +109,51 @@ def main() -> int:
             die(f"cutaway {i + 1}: --at {at:g}s is past the end of the A-roll ({dur_a:.3f}s)")
         if dur_a and at + length > dur_a + 0.01:
             die(f"cutaway {i + 1}: {at:g}s + {length:g}s runs past the end of the A-roll ({dur_a:.3f}s)")
-        dur_b = meta_b.get("duration") or 0.0
+        # a still has no material to run out of: it is looped for the window. image2 gives some (a
+        # TGA) a duration of one frame, which this refused as "only -0.460s from 0.5s" (review of #532)
+        dur_b = None if is_still_input(meta_b) else input_length(meta_b)
         if dur_b and start_b + length > dur_b + 0.01 and not STATE.dry_run:
             die(f"cutaway {i + 1}: {path} has only {dur_b - start_b:.3f}s from {start_b:g}s, {length:g}s asked for")
-        if cutaways and at < cutaways[-1]["at"] + cutaways[-1]["length"]:
-            die(f"cutaway {i + 1} at {at:g}s overlaps the previous one (ends {cutaways[-1]['at'] + cutaways[-1]['length']:g}s)")
-        cutaways.append({"path": path, "at": at, "length": length, "from": start_b, "has_audio": bool(meta_b.get("audio")), "meta": meta_b})
+        # the cutaway in whole frames: `first` is B's first frame at or after --from, `on` the
+        # A-roll's first frame at or after --at, and `span` runs to its first at or after the end
+        v0b, rate_b = stream_starts(meta_b)[0], frame_rate(meta_b)
+        first = max(v0b, grid_at_or_after(start_b, v0b, rate_b))
+        on = span = None
+        if grid:
+            on = grid_at_or_after(on_frame(at, v0a, rate_a), v0a, rate_a)  # a millisecond time is its frame (#653)
+            span = grid_at_or_after(on_frame(at + length, v0a, rate_a), v0a, rate_a) - on
+            if round(span * rate_a) < 1:
+                die(f"cutaway {i + 1}: no frame of the A-roll starts between {at:g}s and {at + length:g}s "
+                    f"(its frames are {1 / rate_a:.4f}s apart): nothing would be shown")
+        cutaways.append({"path": path, "at": at, "length": length, "from": start_b, "has_audio": bool(meta_b.get("audio")), "meta": meta_b,
+                         "first": first, "rate": rate_b, "on": on, "span": span})
+    # overlap is a property of the windows in time, not of the order they were given in: compared
+    # against the one given before it, a later window listed first was called overlapping (A179)
+    order = sorted(range(len(cutaways)), key=lambda k: cutaways[k]["at"])
+    for prev, k in zip(order, order[1:]):
+        end_prev = cutaways[prev]["at"] + cutaways[prev]["length"]
+        if cutaways[k]["at"] < end_prev:
+            die(f"cutaway {k + 1} at {cutaways[k]['at']:g}s overlaps cutaway {prev + 1} "
+                f"({cutaways[prev]['at']:g}s to {end_prev:g}s)")
     if args.audio != "a" and not all(c["has_audio"] for c in cutaways):
         die("--audio b/mix needs audio on every B-roll clip")
 
     output = args.output or default_output(args.input, "broll")
     cmd = ffmpeg_base() + ["-i", args.input]
     for c in cutaways:
+        # a still B-roll is one frame to a plain -i: it showed for one frame of the cutaway and A
+        # came back under it (#510). Looped, it lasts the window it is trimmed to. The bound is past
+        # the trim's end, which runs from B's first frame at or after --from on the loop's own
+        # grid for the window's whole frames: --from + --duration cut that frame off a short window
+        # (--from 0.041 --duration 0.033 needs the frame at 0.08, review of #532). A frame of B
+        # past it costs nothing: the trim drops it.
+        if is_still_input(c["meta"]):
+            frame_b = 1 / c["rate"] if c["rate"] else 0.04
+            cmd += still_loop_args(c["path"], max(c["from"], c["first"]) + max(c["length"], c["span"] or 0) + 2 * frame_b)
         cmd += ["-i", c["path"]]
 
     # Picture: each B window is trimmed, normalised to A's frame and fps, shifted to start at its
-    # --at time, and overlaid on A; before its first frame and after its last (eof_action=pass)
+    # --at time, and overlaid on A; outside the window the overlay is placed off the picture and
     # A shows through unchanged, so A's timeline is never touched.
     parts: List[str] = []
     cur = "[0:v]"
@@ -134,9 +174,32 @@ def main() -> int:
                + drawn_chain(pad + args.pad_color, as_limited(c["meta"]), [args.pad_color], pad + "black", line_meta=meta_a,
                              tag=f"pad{i}", labelled=True))
         b_sq = (square_pixels(c["meta"]["video"]) + ",") if square_pixels(c["meta"]["video"]) else ""
-        parts.append(f"[{i + 1}:v]trim=start={c['from']:.3f}:duration={c['length']:.3f},setpts=PTS-STARTPTS+{c['at']:.3f}/TB,"
-                     f"{convert[i + 1]}{b_sq}{geo},setsar=1,fps={fps:g},format={'yuv420p10le' if (meta_a.get('video') or {}).get('bt2020_or_hdr') else 'yuv420p'}[b{i}]")
-        parts.append(f"{cur}[b{i}]overlay=0:0:eof_action=pass:enable='between(t,{c['at']:.3f},{c['at'] + c['length']:.3f})'[v{i}]")
+        pix = 'yuv420p10le' if (meta_a.get('video') or {}).get('bt2020_or_hdr') else 'yuv420p'
+        if c["on"] is None:
+            # no grid to count the A-roll's frames on (a dry run's pending A-roll, a variable
+            # rate): the window as it was written before, to the millisecond
+            parts.append(f"[{i + 1}:v]trim=start={c['from']:.3f}:duration={c['length']:.3f},setpts=PTS-STARTPTS+{c['at']:.3f}/TB,"
+                         f"{convert[i + 1]}{b_sq}{geo},setsar=1,fps={fps:g},format={pix}[b{i}]")
+            window = window_expr(c["at"], c["at"] + c["length"], None)
+        else:
+            # The window is whole frames of the A-roll: from its first frame at or after --at to
+            # the frame before its first at or after the end. B is cut half a frame of its own
+            # before its first frame at or after --from, for as long as the window lasts, and
+            # that frame is put on the tick of the `fps` grid at or before the window's first
+            # frame, at the A-roll's exact rate (30000/1001, not probe()'s 29.97: frame 37
+            # counted at 29.97 comes 1.2 microseconds after the A-roll's and was shown a frame on)
+            # The cut never ends before B's first frame: a window shorter than half a frame of B
+            # (one 60 fps frame of the A-roll under a 24 fps cutaway) cut that frame off too
+            half_b = 0.5 / c["rate"] if c["rate"] else 0.0
+            parts.append(f"[{i + 1}:v]trim=start={max(0.0, c['first'] - half_b):.6f}:end={max(c['first'] + c['span'], c['first'] + 2 * half_b) - half_b:.6f},"
+                         f"setpts=PTS-STARTPTS+{math.floor(c['on'] * rate_a + 1e-6) / rate_a:.6f}/TB,"
+                         f"{convert[i + 1]}{b_sq}{geo},setsar=1,{fps_filter},format={pix}[b{i}]")
+            window = window_expr(c["on"], c["on"] + c["span"], meta_a, half_open=True)
+        # The window is in the cutaway's position: overlay's enable is evaluated on B's frames
+        # too. B's last frame is held when B ends (eof_action=repeat) and the position takes it
+        # off the picture: with eof_action=pass the window's last frame depended on where B's
+        # end fell against it, and an A-roll whose picture starts 13 ms late lost that frame.
+        parts.append(f"{cur}[b{i}]overlay={windowed_overlay_x(0, window)}:0{overlay_format(meta_a)}:eof_action=repeat[v{i}]")
         cur = f"[v{i}]"
     vout = cur
 
@@ -148,23 +211,58 @@ def main() -> int:
             aout = "0:a:0" if has_audio_a else None
         else:
             layers: List[str] = []
+            # the cutaway's sound follows its picture: it starts with the window's first frame and
+            # lasts as long as the window, counted in samples of the mix (without a frame grid:
+            # --at and the length asked)
+            for c in cutaways:
+                c["s0"] = round((c["at"] if c["on"] is None else c["on"]) * MIX_RATE)
+                c["sn"] = round((c["length"] if c["on"] is None else c["span"]) * MIX_RATE)
+            # a multichannel A-roll keeps its layout: 5.1 was folded to stereo with `verified: true`
+            # and nothing said (#470); B is up-mixed to it. Mono and stereo are mixed in stereo
+            aa = meta_a.get("audio") or {}
+            layout = "stereo"
+            if has_audio_a and (aa.get("channels") or 0) > 2:
+                layout = aa["channel_layout"] if aa.get("channel_layout") not in (None, "", "unknown") else f"{aa['channels']}c"
             if has_audio_a:
-                gate = "".join(f",volume=0:enable='between(t,{c['at']:.3f},{c['at'] + c['length']:.3f})'" for c in cutaways) if args.audio == "b" else ""
-                parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo{gate}[a0]")
+                # `b` mutes the A-roll over exactly the samples B's sound takes, on the A-roll's
+                # own clock: aeval's `t` is each sample's time, and the bounds sit half a sample
+                # outside the first and the last. `volume=0:enable='between(t,...)'` is evaluated
+                # once per audio frame and muted 48128-96255 where 48000-95999 was asked
+                # (1024-sample frames; FFmpeg 6.1.1)
+                gate = ""
+                if args.audio == "b":
+                    gate = ",aeval='val(ch)*not(" + "+".join(
+                        f"between(t,{(c['s0'] - 0.5) / MIX_RATE:.9f},{(c['s0'] + c['sn'] - 0.5) / MIX_RATE:.9f})" for c in cutaways) + ")':c=same"
+                parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts={layout}{gate}[a0]")
                 layers.append("[a0]")
             for i, c in enumerate(cutaways):
                 # B's sound is shifted by the same constant as its picture, whose first frame (the
-                # first at or after --from) lands on --at; rebasing the sound to its own first
-                # sample moved a track that starts 0.3 s late 0.279 s early (#409)
-                v0b = stream_starts(c["meta"])[0]
-                first = max(v0b, grid_at_or_after(c["from"], v0b, frame_rate(c["meta"])))
-                parts.append(f"[{i + 1}:a:0]{av_trim(first, first + c['length'])[1]},"
-                             f"aformat=sample_rates=48000:channel_layouts=stereo,adelay={int(c['at'] * 1000)}|{int(c['at'] * 1000)}[ab{i}]")
+                # first at or after --from) lands on the window's first frame; rebasing the sound
+                # to its own first sample moved a track that starts 0.3 s late 0.279 s early (#409)
+                first, length = c["first"], c["length"] if c["on"] is None else c["span"]
+                # the delay is to the sample of the mix's rate: `int(at * 1000)` cut 1.001 to
+                # 1000 ms and wrote 1.2346 s as 1234 ms, the cutaway's sound 48 and 29 samples
+                # early. A whole millisecond keeps the text it had, rounded (silence_filter)
+                lead = c["s0"] / MIX_RATE
+                delay = silence_filter(MIX_RATE, lead=lead)
+                if "S:" not in delay:
+                    delay = f"adelay={round(lead * 1000)}|{round(lead * 1000)}"
+                # under `b` the layer is as many samples as the gate mutes, padded or cut
+                exact = f"apad=whole_len={c['sn']},atrim=end_sample={c['sn']}," if args.audio == "b" else ""
+                parts.append(f"[{i + 1}:a:0]{av_trim(first, first + length)[1]},"
+                             f"aformat=sample_rates=48000:channel_layouts={layout},{exact}{delay}[ab{i}]")
                 layers.append(f"[ab{i}]")
-            parts.append(f"{''.join(layers)}amix=inputs={len(layers)}:normalize=0:dropout_transition=0,atrim=duration={dur_a:.3f}[aout]")
+            # the mix ends with the A-roll, to the sample (#493): every layer is 48 kHz, so the count
+            # is in that rate. `atrim=duration={:.3f}` and `-t {:.3f}` cut it to the millisecond. A
+            # dry run's pending A-roll has no length to count, and keeps the old filter.
+            tail = conform_to_length(dur_a, MIX_RATE) if dur_a > 0 else f"atrim=duration={dur_a:.3f}"
+            parts.append(f"{''.join(layers)}amix=inputs={len(layers)}:normalize=0:dropout_transition=0,{tail}[aout]")
             aout = "[aout]"
 
-    cmd += ["-filter_complex", ";".join(parts), "-map", vout]
+    # a VFR A-roll is conformed by the fps filter as it is decoded, at the rate cfr_args() delivers:
+    # -fps_mode cfr alone let a frame run up to two frames late against the sound (#512)
+    graph = cfr_at_input(";".join(parts), meta_a)
+    cmd += ["-filter_complex", graph, "-map", vout]
     if aout:
         cmd += ["-map", aout]
     cmd += video_args(meta_a, args.crf, args.preset, convert_matrix=False) + cfr_args(meta_a, None)
@@ -174,7 +272,7 @@ def main() -> int:
         cmd += aac_args()
     else:
         cmd += ["-an"]
-    cmd += ["-t", f"{dur_a:.3f}", output]
+    cmd += ["-t", conform_output_t(dur_a, MIX_RATE) if aout == "[aout]" and dur_a > 0 else f"{dur_a:.3f}", output]
     run(cmd)
 
     result = probe(output, role="output")

@@ -6,7 +6,8 @@ turning an equirectangular (or other spherical-projection) source into an
 ordinary flat video pointed at a chosen direction -- the same "look this way"
 operation a VR headset or a 360 video player's viewport does, baked into a
 real file. --yaw/--pitch/--roll aim the camera; --h-fov/--v-fov set how wide
-the view is.
+the view is (without --v-fov, the vertical view is the one that keeps the
+output's pixels square).
 
 This tool does not decide WHERE to point the camera -- there is no subject
 detection or tracking here, only the typed rotation/FOV you give it (see this
@@ -29,9 +30,11 @@ Examples:
   python3 sphere.py gopro_max.mp4 --input-projection fisheye --yaw -45 --pitch 10 -o angle.mp4
 """
 import argparse
+import math
 import sys
 
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, fmt_secs
+from _common import add_common, apply_common, aac_args, cfr_args, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, fmt_secs
+from _common.emit import note
 
 # v360's own AVOption names for the input projections real 360 cameras/exports actually
 # produce (ffmpeg -h filter=v360 documents 24 total; this is the subset a caller is likely
@@ -58,10 +61,12 @@ def main() -> int:
     aim.add_argument("--pitch", type=float, default=0.0, help="up/down rotation in degrees, -180..180 (default 0, level)")
     aim.add_argument("--roll", type=float, default=0.0, help="tilt/roll rotation in degrees, -180..180 (default 0)")
     fov = ap.add_argument_group("field of view")
-    fov.add_argument("--h-fov", type=float, default=90.0, help="output horizontal field of view in degrees, 1..170 (default 90)")
-    fov.add_argument("--v-fov", type=float, default=60.0, help="output vertical field of view in degrees, 1..170 (default 60)")
+    fov.add_argument("--h-fov", "--fov", type=float, default=90.0, help="output horizontal field of view in degrees, 1..170 (default 90)")
+    fov.add_argument("--v-fov", type=float, default=None,
+                     help="output vertical field of view in degrees, 1..170 (default: the one that keeps pixels square at "
+                          "--h-fov and --width/--height, 58.7 at the defaults)")
     out = ap.add_argument_group("output frame")
-    out.add_argument("--width", type=int, default=1920, help="output width in px, must be even (default 1920)")
+    out.add_argument("--width", type=int, default=1920, help="output width in px, must be even (default 1920); a size or resolution WxH is --width W --height H")
     out.add_argument("--height", type=int, default=1080, help="output height in px, must be even (default 1080)")
     out.add_argument("--interp", choices=INTERP_METHODS, default="lanczos", help="resampling method (default lanczos)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
@@ -73,20 +78,26 @@ def main() -> int:
     if args.fps is not None and args.fps <= 0:
         die(f"--fps must be positive, got {args.fps:g}")
 
-    if not -180 <= args.yaw <= 180:
-        die(f"--yaw must be -180..180, got {args.yaw}")
-    if not -180 <= args.pitch <= 180:
-        die(f"--pitch must be -180..180, got {args.pitch}")
-    if not -180 <= args.roll <= 180:
-        die(f"--roll must be -180..180, got {args.roll}")
-    if not 1 <= args.h_fov <= 170:
-        die(f"--h-fov must be 1..170, got {args.h_fov}")
-    if not 1 <= args.v_fov <= 170:
-        die(f"--v-fov must be 1..170, got {args.v_fov}")
+    # the angles and both fields of view state their range in the help; apply_common refuses outside it
     if args.width <= 0 or args.height <= 0:
         die(f"--width/--height must be > 0, got width={args.width} height={args.height}")
     if args.width % 2 or args.height % 2:
         die(f"--width/--height must be even (4:2:0 chroma), got width={args.width} height={args.height}")
+    # A rectilinear view has square pixels when tan(v/2) / tan(h/2) = H / W. Through 3.8.8 the
+    # default was a fixed 60 degrees, which at 90 x 1920x1080 squashed the view 2.6 % vertically
+    # (audit A163); the vertical FOV now follows from the other three unless it is given.
+    square_v = math.degrees(2 * math.atan(math.tan(math.radians(args.h_fov) / 2) * args.height / args.width))
+    if args.v_fov is None:
+        if not 1 <= square_v <= 170:
+            die(f"--h-fov {args.h_fov:g} at {args.width}x{args.height} needs a vertical field of view of {square_v:.1f} "
+                "degrees for square pixels, outside 1..170", hint="give --v-fov, or a lower --h-fov")
+        args.v_fov = round(square_v, 4)
+    else:
+        stretch = math.tan(math.radians(args.v_fov) / 2) / math.tan(math.radians(square_v) / 2)
+        if abs(stretch - 1) > 0.005:
+            note(f"--h-fov {args.h_fov:g} / --v-fov {args.v_fov:g} at {args.width}x{args.height} is not square-pixel: the view is "
+                 f"{'squashed' if stretch > 1 else 'stretched'} {abs(stretch - 1) * 100:.1f} % vertically "
+                 f"(--v-fov {square_v:.2f} keeps it square; omit --v-fov to get it)")
 
     meta = probe(args.input)
     if not meta.get("video"):
@@ -104,7 +115,7 @@ def main() -> int:
             f"yaw={args.yaw:g}:pitch={args.pitch:g}:roll={args.roll:g}:"
             f"h_fov={args.h_fov:g}:v_fov={args.v_fov:g}:"
             f"w={args.width}:h={args.height}:interp={args.interp}")
-    cmd = ffmpeg_base() + ["-i", args.input, "-vf", v360, "-map", "0:v:0"]
+    cmd = ffmpeg_base() + ["-i", args.input, "-vf", with_cfr(v360, meta, args.fps), "-map", "0:v:0"]
     if has_audio:
         cmd += ["-map", f"0:a:{args.audio_stream}?"]
     cmd += video_args(meta, args.crf, args.preset)
