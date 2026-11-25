@@ -255,7 +255,7 @@ def _cookie_read_dir(platform: str = "") -> Path:
 
 def _ensure_cookie_dir() -> Path:
     try:
-        ensure_writable_directory(COOKIE_DIR)
+        ensure_writable_directory(COOKIE_DIR, private=True)
         return COOKIE_DIR
     except OSError:
         fallback = _cookie_fallback_dir()

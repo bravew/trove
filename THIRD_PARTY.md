@@ -19,7 +19,7 @@ artifact entry in `upstream.yaml` for the selected files and exact revision.
 
 `trove-ffmpeg` in `trove-media` is vendored from
 [kajisho5/ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) at
-`6e42a79247909659b3d80833120b272fb5e46aba` (3.2.3), under the MIT license.
+`c7dad34c846099e7cf606ef943abe5e12d1ab0f9` (3.2.3), under the MIT license.
 The 3.0 release requires FFmpeg 6.1 or newer and Python 3.10 or newer, and it
 changed the cut defaults; the Trove front states both requirements.
 
@@ -47,7 +47,7 @@ them.
 
 `trove-diagram-design` in `trove-design` is vendored from
 [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)
-at `f2496acbde9f45ccb55c24d4f75210c8a1355df8` (2.6), under the MIT license.
+at `67dbb00176980741a909c84c124f86ef91bbf546` (2.6), under the MIT license.
 
 **Trove redistributes upstream code, not only adapted prose.** The selection
 carries upstream's `references/`, its eight Python `scripts/`
@@ -85,15 +85,16 @@ in `upstream.yaml`.
 ### trove-pulse
 
 Adapted from [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill)
-at `7869eb17144789b843e6655c41bd3d570aa2288a` (nine commits after `v3.32.0`).
+at `7c2e1c2b099b13abd4397910168c4f53e638bb21` (v4.6.0).
 Trove vendors `references/` and `scripts/` and authors a wrapper
 `SKILL.md.tmpl` that is local-only (outside the sync lock).
 
 The browser-cookie and Chrome DevTools lanes are excluded:
 `scripts/lib/agentcookie.py`, `scripts/lib/chrome_cdp.py`, and
-`scripts/box_chrome_login.py`. A local patch removes the setup wizard's
-description of them and drops `BROWSER_CDP_URL` from the research keys. The
-cookie modules Trove already shipped are kept.
+`scripts/box_chrome_login.py`. A local patch removes every description of
+them, drops `BROWSER_CDP_URL` from the research keys, and strips the references
+upstream added in `permission_preflight.py`, `doctor.py`, and the runtime spec.
+The cookie modules Trove already shipped are kept.
 
 The vendored tree includes `scripts/lib/vendor/bird-search`, an MIT-licensed
 Node client (`engines.node >= 22`, ~116 KB) used for X/Twitter search. A sync
@@ -105,7 +106,7 @@ translated READMEs.
 ### trove-pulse-cn
 
 Adapted from [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn)
-at `e0e41410de18466aceb505faee5ef998cacee1e8` (24 commits after `v4.0.0`). That repository is
+at `f560345767af3ff89733d2c2b15714eac6a8f436` (after `v4.0.0`). That repository is
 itself an MIT fork of `mvanhorn/last30days-skill`. The upstream `LICENSE`
 naming both copyright holders is preserved in the vendored tree.
 

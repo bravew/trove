@@ -121,9 +121,9 @@ describe("upstream manifest boundary", () => {
   test("records matching metadata.upstream-version for pulse artifacts", () => {
     const pulse = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/SKILL.md.tmpl"));
     const spec = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/references/runtime-spec.md"));
-    // The wrapper records the release it was written against. The vendored
-    // spec moves with the upstream pin, so the two versions diverge by design.
-    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe("3.21.1");
+    // The wrapper records the release it was written against. This sync
+    // changed the wrapper, so both now name upstream 4.6.0.
+    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe("4.6.0");
     expect(spec.version).toBe("4.6.0");
 
     const cn = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse-cn/SKILL.md.tmpl"));

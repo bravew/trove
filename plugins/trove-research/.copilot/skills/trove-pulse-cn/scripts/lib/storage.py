@@ -20,6 +20,10 @@ def ensure_writable_directory(path: Path, create: bool = True, private: bool = F
     if create:
         path.mkdir(mode=0o700 if private else 0o777, parents=True, exist_ok=True)
     if private:
+        if path.is_symlink():
+            raise PermissionError(f"Not a private directory: {path}")
+        if os.name != "nt":
+            os.chmod(path, 0o700)
         check_private_directory(path)
     with tempfile.TemporaryFile(dir=str(path)):
         pass

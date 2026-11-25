@@ -294,3 +294,31 @@ index e68e579..5dbe44e 100644
      if sys.version_info >= (3, 12):
          return sys.executable, f"当前解释器 Python {sys.version_info.major}.{sys.version_info.minor}"
      return None, (
+diff --git a/scripts/lib/crawler_bridge.py b/scripts/lib/crawler_bridge.py
+index 0e45088..0c57992 100644
+--- a/scripts/lib/crawler_bridge.py
++++ b/scripts/lib/crawler_bridge.py
+@@ -255,7 +255,7 @@ def _cookie_read_dir(platform: str = "") -> Path:
+ 
+ def _ensure_cookie_dir() -> Path:
+     try:
+-        ensure_writable_directory(COOKIE_DIR)
++        ensure_writable_directory(COOKIE_DIR, private=True)
+         return COOKIE_DIR
+     except OSError:
+         fallback = _cookie_fallback_dir()
+diff --git a/scripts/lib/storage.py b/scripts/lib/storage.py
+index 9efc9c7..2e48f64 100644
+--- a/scripts/lib/storage.py
++++ b/scripts/lib/storage.py
+@@ -20,6 +20,10 @@ def ensure_writable_directory(path: Path, create: bool = True, private: bool = F
+     if create:
+         path.mkdir(mode=0o700 if private else 0o777, parents=True, exist_ok=True)
+     if private:
++        if path.is_symlink():
++            raise PermissionError(f"Not a private directory: {path}")
++        if os.name != "nt":
++            os.chmod(path, 0o700)
+         check_private_directory(path)
+     with tempfile.TemporaryFile(dir=str(path)):
+         pass
