@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping
 
-from . import dates, relevance, schema
+from . import dates, reddit_refs, relevance, schema
 
 # Editorial signal-to-noise scores. Grounding (Google Search) is 1.0 baseline;
 # social platforms discounted for noise.
@@ -107,20 +107,22 @@ def freshness(
 
 
 def log1p_safe(value: float | int | None) -> float:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return 0.0
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
-    if numeric <= 0:
+    if not math.isfinite(numeric) or numeric <= 0:
         return 0.0
     return math.log1p(numeric)
 
 
 def _top_comment_score(item: schema.SourceItem) -> float:
-    comments = item.metadata.get("top_comments") or []
-    if not comments or not isinstance(comments[0], dict):
+    if not isinstance(item.metadata, dict):
+        return 0.0
+    comments = item.metadata.get("top_comments")
+    if not isinstance(comments, (list, tuple)) or not comments or not isinstance(comments[0], dict):
         return 0.0
     return log1p_safe(comments[0].get("score"))
 
@@ -170,7 +172,11 @@ def top_comment_vote_signal(candidate: schema.Candidate) -> float:
     """
     best_log = 0.0
     for item in candidate.source_items:
-        comments = item.metadata.get("top_comments") or []
+        if not isinstance(item.metadata, dict):
+            continue
+        comments = item.metadata.get("top_comments")
+        if not isinstance(comments, (list, tuple)):
+            continue
         for comment in comments[:3]:
             if isinstance(comment, dict):
                 best_log = max(best_log, log1p_safe(comment.get("score")))
@@ -183,23 +189,30 @@ def top_comment_vote_signal(candidate: schema.Candidate) -> float:
 # Per-source engagement weights: list of (field_name, weight) tuples.
 # Reddit, YouTube, and TikTok use custom functions because they include
 # a dedicated 10% top-comment-score slot (see _reddit_engagement,
-# _youtube_engagement, _tiktok_engagement).
+# _youtube_engagement, _tiktok_engagement). Digg uses these weights only when
+# the story carries a Digg Score (see _digg_engagement).
 ENGAGEMENT_WEIGHTS: dict[str, list[tuple[str, float]]] = {
-    "x":            [("likes", 0.55), ("reposts", 0.25), ("replies", 0.15), ("quotes", 0.05)],
-    "instagram":    [("views", 0.50), ("likes", 0.30), ("comments", 0.20)],
-    "hackernews":   [("points", 0.55), ("comments", 0.45)],
-    "devto":        [("reactions", 0.60), ("comments", 0.40)],
-    "bluesky":      [("likes", 0.40), ("reposts", 0.30), ("replies", 0.20), ("quotes", 0.10)],
-    "truthsocial":  [("likes", 0.45), ("reposts", 0.30), ("replies", 0.25)],
-    "polymarket":   [("volume", 0.60), ("liquidity", 0.40)],
-    "digg":         [("postCount", 0.40), ("uniqueAuthors", 0.30), ("rank_score", 0.30)],
-    "trustpilot":   [("reviews", 1.0)],
-    "amazon":       [("ratings", 1.0)],
+    "x":                [("likes", 0.55), ("reposts", 0.25), ("replies", 0.15), ("quotes", 0.05)],
+    "threads":          [("likes", 0.55), ("reposts", 0.25), ("replies", 0.15), ("quotes", 0.05)],
+    "instagram":        [("views", 0.50), ("likes", 0.30), ("comments", 0.20)],
+    "hackernews":       [("points", 0.55), ("comments", 0.45)],
+    "devto":            [("reactions", 0.60), ("comments", 0.40)],
+    "github":           [("reactions", 0.60), ("comments", 0.40)],
+    "bluesky":          [("likes", 0.40), ("reposts", 0.30), ("replies", 0.20), ("quotes", 0.10)],
+    "truthsocial":      [("likes", 0.45), ("reposts", 0.30), ("replies", 0.25)],
+    "pinterest":        [("saves", 0.70), ("comments", 0.30)],
+    "linkedin":         [("likes", 0.55), ("comments", 0.30), ("reposts", 0.15)],
+    "linkedin_profile": [("likes", 0.55), ("comments", 0.30), ("shares", 0.15)],
+    "xiaohongshu":      [("likes", 0.50), ("favorites", 0.30), ("comments", 0.20)],
+    "polymarket":       [("volume", 0.60), ("liquidity", 0.40)],
+    "digg":             [("digg_score", 0.50), ("postCount", 0.30), ("uniqueAuthors", 0.20)],
+    "trustpilot":       [("reviews", 1.0)],
+    "amazon":           [("ratings", 1.0)],
     # Meta publishes reach and spend only for political and issue ads, so a
     # commercial creative has no audience signal at all. How many variants a
     # brand cut of one creative is the closest honest proxy for how hard it is
     # pushing that message.
-    "meta_ads":     [("variants", 1.0)],
+    "meta_ads":         [("variants", 1.0)],
 }
 
 
@@ -208,6 +221,29 @@ def _weighted_engagement(item: schema.SourceItem, weights: list[tuple[str, float
     if not any(v for v, _ in values):
         return None
     return sum(v * w for v, w in values)
+
+
+# Digg stories from a CLI that reports no Digg Score: the two counts carry the
+# whole signal, in the same 3:2 proportion they have beside a score.
+_DIGG_COUNT_WEIGHTS: list[tuple[str, float]] = [("postCount", 0.60), ("uniqueAuthors", 0.40)]
+
+# GitHub person-mode contribution velocity summaries report merged_prs and
+# total_prs rather than issue/PR reactions and comments.
+_GITHUB_VELOCITY_WEIGHTS: list[tuple[str, float]] = [("merged_prs", 0.70), ("total_prs", 0.30)]
+
+
+def _digg_engagement(item: schema.SourceItem) -> float | None:
+    if log1p_safe(item.engagement.get("digg_score")) > 0:
+        return _weighted_engagement(item, ENGAGEMENT_WEIGHTS["digg"])
+    return _weighted_engagement(item, _DIGG_COUNT_WEIGHTS)
+
+
+def _github_engagement(item: schema.SourceItem) -> float | None:
+    labels = item.metadata.get("labels", []) if isinstance(item.metadata, dict) else []
+    eng = item.engagement or {}
+    if "velocity" in labels or "merged_prs" in eng or "total_prs" in eng:
+        return _weighted_engagement(item, _GITHUB_VELOCITY_WEIGHTS)
+    return _weighted_engagement(item, ENGAGEMENT_WEIGHTS["github"])
 
 
 def _reddit_engagement(item: schema.SourceItem) -> float | None:
@@ -259,10 +295,13 @@ def _instagram_engagement(item: schema.SourceItem) -> float | None:
 def _generic_engagement(item: schema.SourceItem) -> float | None:
     if not item.engagement:
         return None
-    values = [logged for v in item.engagement.values() if (logged := log1p_safe(v)) > 0]
-    if not values:
+    # Key-count-invariant peak + secondary bonus: adding optional keys (0, None,
+    # or positive) to a sparse dict is always non-decreasing.
+    pos = [logged for v in item.engagement.values() if (logged := log1p_safe(v)) > 0]
+    if not pos:
         return None
-    return sum(values) / len(values)
+    peak = max(pos)
+    return peak + 0.1 * (sum(pos) - peak)
 
 
 def engagement_raw(item: schema.SourceItem) -> float | None:
@@ -274,6 +313,10 @@ def engagement_raw(item: schema.SourceItem) -> float | None:
         return _tiktok_engagement(item)
     if item.source == "instagram":
         return _instagram_engagement(item)
+    if item.source == "digg":
+        return _digg_engagement(item)
+    if item.source == "github":
+        return _github_engagement(item)
     weights = ENGAGEMENT_WEIGHTS.get(item.source)
     if weights:
         return _weighted_engagement(item, weights)
@@ -297,6 +340,7 @@ _ENGAGEMENT_LOG_REFERENCE: dict[str, float] = {
     "pinterest":   9.2,  # ~log1p(10000)
     # Reactions run like Reddit upvotes: a viral post has ~2k.
     "linkedin":    7.6,  # ~log1p(2000)
+    "linkedin_profile": 7.6,  # the person's own posts, same scale
     # Per-issue/PR reactions and comments (repo snapshot cards, whose counts
     # are lifetime stars, get no score: see is_repo_snapshot). A
     # ~100-reaction thread lands near 50.
@@ -305,9 +349,18 @@ _ENGAGEMENT_LOG_REFERENCE: dict[str, float] = {
     # (log1p 16) and $1.2M liquidity (log1p 14), weighted 0.6/0.4 as in
     # ENGAGEMENT_WEIGHTS: 0.6*16 + 0.4*14 = 15.2.
     "polymarket": 15.2,
-    # A rank-1 cluster (rank_score 50) with ~100 posts from ~100 authors:
-    # 0.4*log1p(100) + 0.3*log1p(100) + 0.3*log1p(50) = 4.4.
-    "digg":        4.4,
+    # Digg Score, source count (stored as postCount) and unique authors.
+    # Calibrated on a 30-day search for "OpenAI" (99 stories, 2026-11-11):
+    # Digg Scores ran 1286, 473, 239, 227, 226, 218, 180, 169, 163, 150 across
+    # the top decile, ~38 at the median and 5 at the bottom; the two largest
+    # stories had 121-127 sources, the rest of the top decile 22-59. The
+    # reference is the middle of that decile (score 226, 44 sources, 30
+    # authors): 0.5*log1p(226) + 0.3*log1p(44) + 0.2*log1p(30) = 4.5. The
+    # decile then scores 92-100 (its tenth story, 150/27/22, scores 92), the
+    # median story ~61 and the smallest (5/2/2) 32. A story with no score,
+    # weighted on counts alone, saturates at ~100 sources from ~100 authors
+    # (log1p(100) = 4.6).
+    "digg":        4.5,
     # Lifetime totals for a whole company or product, not one post: big
     # consumer brands and best-sellers carry ~100k, so ~300 lands near 50.
     "trustpilot": 11.5,  # ~log1p(100000) reviews
@@ -438,19 +491,35 @@ _VIDEO_ENGAGEMENT_FLOOR_SOURCES = {"tiktok", "instagram"}
 _VIDEO_ENGAGEMENT_FLOOR_VIEWS = 1000
 
 
-def _passes_engagement_floor(item: schema.SourceItem, sole_source: bool) -> bool:
+def _reported_views(item: schema.SourceItem) -> float | None:
+    """Return finite numeric view count when reported, or None when absent/unreported."""
+    if not item.engagement or "views" not in item.engagement:
+        return None
+    raw = item.engagement.get("views")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _passes_engagement_floor(item: schema.SourceItem) -> bool:
     """Check whether a TikTok/Instagram item meets the minimum view floor.
 
     Items from sources not in _VIDEO_ENGAGEMENT_FLOOR_SOURCES always pass.
-    If the item's source is the *only* source represented in the batch
-    (sole_source=True), all items pass so we never return an empty result
-    for a whole source.
+    Items with no reported view count (``views`` missing or ``None``) also pass
+    so reels/videos whose upstream omitted play counts are not silently dropped;
+    reported numeric counts (including measured ``0``) must clear the floor.
+    Empty-batch protection is handled by ``prune_low_relevance``'s cascaded
+    ``filtered or rel_filtered or items`` fallback rather than a per-source bypass.
     """
     if item.source not in _VIDEO_ENGAGEMENT_FLOOR_SOURCES:
         return True
-    if sole_source:
+    views = _reported_views(item)
+    if views is None:
         return True
-    views = item.engagement.get("views") or 0 if item.engagement else 0
     return views >= _VIDEO_ENGAGEMENT_FLOOR_VIEWS
 
 
@@ -459,15 +528,21 @@ def prune_low_relevance(
     minimum: float = 0.15,
     first_party_handles: Iterable[str] | None = None,
     first_party_by_source: Mapping[str, Iterable[str]] | None = None,
+    passing_only: bool = False,
 ) -> list[schema.SourceItem]:
     """Drop weak lexical matches when stronger evidence exists.
+
+    ``passing_only`` returns just the items that pass, with no keep-all rescue
+    when none does: the count a caller needs to ask "how much of this batch is
+    on topic".
 
     Social-source items with genuinely zero engagement get a stricter
     threshold because zero engagement on a social platform is a strong noise
     signal.
 
     TikTok and Instagram items with fewer than 1000 views are pruned
-    (unless they are the only source represented in the batch).
+    (falling back to relevance-passing items when none meets the view floor,
+    or all items when none passes relevance, if ``passing_only`` is False).
 
     ``first_party_handles`` names accounts this run is explicitly searching
     (the subject of the topic). Their own posts are exempt from the floor: a
@@ -481,8 +556,11 @@ def prune_low_relevance(
     exempt a same-name account on a *different* platform: username reuse
     across platforms is common, and an unrelated account would otherwise
     bypass the relevance and engagement floors.
+
+    A Polymarket item carrying ``matched_market`` passed the entity matcher
+    at parse and is exempt the same way; ``polymarket.filter_items_against_topic``
+    is its topic bar.
     """
-    sources_present = {item.source for item in items}
     first_party = {
         h.strip().lstrip("@").lower()
         for h in (first_party_handles or ())
@@ -505,7 +583,7 @@ def prune_low_relevance(
             return True
         return author in scoped_first_party.get(item.source, frozenset())
 
-    def passes(item: schema.SourceItem) -> bool:
+    def passes_relevance(item: schema.SourceItem) -> bool:
         # YouTube items with successfully extracted transcripts should not
         # be pruned by title-only relevance scoring — the transcript content
         # already proves substantive topical coverage.
@@ -515,19 +593,34 @@ def prune_low_relevance(
         # provenance, not by lexical overlap with the topic.
         if _is_first_party(item):
             return True
+        # A Polymarket market the entity matcher kept names the subject (or a
+        # related name the host supplied), judged on the stable research
+        # topic. Its token overlap with the planner's ranking query says
+        # nothing more: "Vikings vs. 49ers" scored 0.15-0.21 by phrasing.
+        if item.source == "polymarket" and item.metadata.get("matched_market"):
+            return True
         rel = item.local_relevance if item.local_relevance is not None else 0.0
         if rel < minimum:
             return False
         # Key the stricter social gate on genuinely absent engagement (no
         # counts at all), not on a rounded score: a handful of likes is still
         # engagement even where the 0-100 scale rounds it low.
-        if item.source in _SOCIAL_SOURCES and not engagement_raw(item):
+        # A Reddit thread whose score is pending has unknown engagement, not
+        # absent engagement.
+        if (
+            item.source in _SOCIAL_SOURCES
+            and not engagement_raw(item)
+            and not reddit_refs.score_pending(item.metadata)
+        ):
             if rel < minimum * 1.5:
                 return False
-        sole_source = sources_present == {item.source}
-        if not _passes_engagement_floor(item, sole_source):
-            return False
         return True
 
-    filtered = [item for item in items if passes(item)]
-    return filtered or items
+    rel_filtered = [item for item in items if passes_relevance(item)]
+    filtered = [
+        item for item in rel_filtered
+        if _is_first_party(item) or _passes_engagement_floor(item)
+    ]
+    if passing_only:
+        return filtered
+    return filtered or rel_filtered or items

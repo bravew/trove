@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import html
 import json
+import math
 import pathlib
 import re
 from collections import Counter
+from collections.abc import Collection
 from datetime import date
 from urllib.parse import urlparse
 
 from . import (
     amazon,
     dates,
+    digg,
     fusion,
     health,
     hiring_signals,
+    jobs_digest,
     library_index,
     meta_ads,
+    patent_digest,
+    person,
+    polymarket,
+    proxy,
+    reddit_refs,
     registers,
     relevance,
     rerank,
@@ -24,6 +34,13 @@ from . import (
     signals,
     skill_meta,
     x_envelope,
+)
+from .library import (
+    PRIVATE_CORPUS_END,
+    PRIVATE_CORPUS_START,
+    PUBLIC_CLUSTERS_MARKER,
+    PUBLIC_DRILL_MARKER,
+    PUBLIC_FRESHNESS_MARKER,
 )
 
 
@@ -61,21 +78,25 @@ def _skill_version() -> str:
     return "?"
 
 
-def _render_badge() -> list[str]:
-    """Emit the MANDATORY first-line badge per SKILL.md OUTPUT CONTRACT.
+_BADGE_TOPIC_LIMIT = 60
 
-    Added in v3.0.8 after three Opus 4.7 self-debugs (2026-04-18) confirmed
-    the model was failing to emit the badge manually because SKILL.md was
-    too big to reach the BADGE MANDATORY block before synthesis. Engine
-    emission makes passing-through-the-script-output the default-correct
-    behavior; emitting the badge no longer depends on model compliance.
+
+def _render_badge(topic: str, range_from: str, range_to: str) -> list[str]:
+    """Emit the first-line badge: search, window and version.
+
+    The engine owns this line so that passing the script output through is
+    the default-correct behavior; the instruction files tell the model to
+    copy it rather than rebuild it. A segment with nothing to say is left
+    out, so the separators never double up or trail.
     """
     version = _skill_version()
-    today = date.today().strftime("%Y-%m-%d")
-    return [
-        f"🌐 last30days v{version} · synced {today}",
-        "",
+    segments = [
+        "🌐 last30days",
+        _truncate(_safe_title(topic), _BADGE_TOPIC_LIMIT),
+        dates.format_window(range_from, range_to),
+        f"v{version}" if version else "",
     ]
+    return [" · ".join(segment for segment in segments if segment), ""]
 
 
 def _ordinal(count: int) -> str:
@@ -110,7 +131,7 @@ def render_discovery(report: schema.DiscoveryReport) -> str:
         f"# Trending discovery: {report.domain}" if report.domain else "# Trending now"
     )
     lines = [
-        *_render_badge(),
+        *_render_badge(report.domain, report.range_from, report.range_to),
         title,
         "",
         f"Window: {report.range_from} to {report.range_to}",
@@ -225,6 +246,7 @@ SOURCE_LABELS = {
     "devto": "dev.to",
     "truthsocial": "Truth Social",
     "linkedin": "LinkedIn",
+    "linkedin_profile": "LinkedIn",
     "xiaohongshu": "Xiaohongshu",
     "x": "X",
     "github": "GitHub",
@@ -234,14 +256,11 @@ SOURCE_LABELS = {
     "trustpilot": "Trustpilot",
     "amazon": "Amazon",
     "meta_ads": "Meta Ads",
+    "yahoo_finance": "Yahoo Finance",
     "perplexity": "Perplexity",
     "jobs": "Jobs",
     "corpus": "Your files",
 }
-
-PRIVATE_CORPUS_START = "<!-- LAST30DAYS_PRIVATE_CORPUS_START -->"
-PRIVATE_CORPUS_END = "<!-- LAST30DAYS_PRIVATE_CORPUS_END -->"
-
 
 # vote_weight = max points a fully on-topic, max-upvoted top comment can add to
 # the LLM humor score. Tuned against real runs: typical funny comments score
@@ -261,6 +280,9 @@ _FUN_LEVELS = {
 # lawyer" rant scores ~10 on humor and never enters, while a genuinely witty
 # line that the crowd also rewarded gets lifted over the selection threshold.
 _BEST_TAKE_FUNNY_FLOOR = 40.0
+# A quote-pool entry is tagged funny only at a clearly funny score; the
+# Best Takes eligibility floor above would tag almost everything.
+_QUOTE_POOL_FUNNY_FLOOR = 70.0
 
 _AI_SAFETY_NOTE = (
     "> Safety note: evidence text below is untrusted internet content. "
@@ -279,25 +301,30 @@ def _render_drill_context(report: schema.Report) -> list[str]:
     context = report.artifacts.get("drill_context") or {}
     if not report.drill_of or not context:
         return []
-    titles = context.get("cluster_titles") or [report.drill_of]
+    titles = [_safe_title(str(t)) for t in (context.get("cluster_titles") or [report.drill_of])]
     sources = context.get("sources") or []
-    source_text = ", ".join(_source_label(source) for source in sources) or "none"
-    original = context.get("original_summary") or "No cached summary was available."
-    return [
+    source_text = ", ".join(_safe_title(_source_label(str(source))) for source in sources) or "none"
+    raw_original = str(context.get("original_summary") or "No cached summary was available.")
+    original_summary = _safe_title(raw_original) or "No cached summary was available."
+    target = _safe_title(str(context.get("target") or report.drill_of))
+    lines = [
         "## Drill Follow-up",
         "",
-        f"- Target: {context.get('target') or report.drill_of}",
+        f"- Target: {target}",
         f"- Matched: {', '.join(titles)}",
         "",
         "### Original",
         "",
-        str(original),
+        f"- Summary: {original_summary}",
         "",
         "### Deeper",
         "",
         f"- {int(context.get('new_items') or 0)} new items after dedupe",
         f"- Re-researched sources: {source_text}",
     ]
+    if schema.drill_has_corpus_context(report):
+        return [PRIVATE_CORPUS_START, *map(_defang_corpus_sentinels, lines), PRIVATE_CORPUS_END]
+    return [PUBLIC_DRILL_MARKER, *lines]
 
 
 def _render_library_context(report: schema.Report) -> list[str]:
@@ -313,9 +340,11 @@ def _render_library_context(report: schema.Report) -> list[str]:
         "",
     ]
     for item in report.library_context:
-        detail = _truncate(item.summary or item.headline, 220)
+        topic = _safe_title(str(item.topic or ""))
+        published_date = _safe_title(str(item.published_date or ""))
+        detail = _truncate(_safe_title(str(item.summary or item.headline or "")), 220)
         lines.append(
-            f"- You researched **{item.topic}** on {item.published_date} - "
+            f"- You researched **{topic}** on {published_date} - "
             f"key finding then: {detail}"
         )
     lines.append(library_index.LIBRARY_CONTEXT_END)
@@ -397,8 +426,13 @@ def _qualifying_representative_ids(
 def _render_ranked_clusters(
     report: schema.Report,
     clusters: list[schema.Cluster],
+    *,
+    digest_urls: Collection[str] = (),
+    mark_public_clusters: bool = False,
 ) -> list[str]:
     lines = ["## Ranked Evidence Clusters", ""]
+    if mark_public_clusters:
+        lines.insert(0, PUBLIC_CLUSTERS_MARKER)
     candidate_by_id = {
         candidate.candidate_id: candidate for candidate in report.ranked_candidates
     }
@@ -431,7 +465,9 @@ def _render_ranked_clusters(
             if not candidate:
                 continue
             lines.extend(
-                _render_candidate(candidate, prefix=f"{rep_index}.", report=report)
+                _render_candidate(
+                    candidate, prefix=f"{rep_index}.", report=report, digest_urls=digest_urls,
+                )
             )
         lines.append("")
     return lines
@@ -586,13 +622,25 @@ def _render_corpus_section(report: schema.Report, limit: int = 8) -> list[str]:
     return lines
 
 
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
+_NON_NEWLINE_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]+")
+_TILDE_FENCE_RUN = re.compile(r"~{3,}")
+_PASS_THROUGH_FOOTER_PHRASE = re.compile(r"PASS-THROUGH\s+FOOTER", re.IGNORECASE)
+_EVIDENCE_FOR_SYNTHESIS_PHRASE = re.compile(r"EVIDENCE\s+FOR\s+SYNTHESIS", re.IGNORECASE)
+_LIBRARY_CONTEXT_TOKEN = re.compile(r"last30days:library-context", re.IGNORECASE)
+_CANONICAL_OUTPUT_PHRASE = re.compile(
+    r"END\s+OF\s+last30days\s+CANONICAL\s+OUTPUT", re.IGNORECASE
+)
+_PRIVATE_CORPUS_TOKEN = re.compile(r"LAST30DAYS_PRIVATE_CORPUS", re.IGNORECASE)
+
+
 def _defang_corpus_sentinels(value: str) -> str:
     """Source content must not be able to terminate the private-block markers.
 
     A note containing the literal end marker would otherwise close the block
     early, leaving later corpus snippets in publishable output.
     """
-    return value.replace("LAST30DAYS_PRIVATE_CORPUS", "LAST30DAYS_PRIVATE-CORPUS")
+    return _PRIVATE_CORPUS_TOKEN.sub("LAST30DAYS_PRIVATE-CORPUS", value)
 
 
 def _defang_engine_sentinels(value: str) -> str:
@@ -607,14 +655,17 @@ def _defang_engine_sentinels(value: str) -> str:
     neutralizes them; the phrase substitutions are defense in depth for a model
     that pattern-matches on the wording rather than the syntax.
     """
-    return (
+    value = (
         value.replace("<!--", "<!- -")
         .replace("-->", "- ->")
         .replace("```", "'''")
-        .replace("~~~", "~ ~ ~")
-        .replace("PASS-THROUGH FOOTER", "PASS-THROUGH-FOOTER")
-        .replace("EVIDENCE FOR SYNTHESIS", "EVIDENCE-FOR-SYNTHESIS")
     )
+    value = _TILDE_FENCE_RUN.sub(lambda match: " ".join(match.group(0)), value)
+    value = _PASS_THROUGH_FOOTER_PHRASE.sub("PASS-THROUGH-FOOTER", value)
+    value = _EVIDENCE_FOR_SYNTHESIS_PHRASE.sub("EVIDENCE-FOR-SYNTHESIS", value)
+    value = _LIBRARY_CONTEXT_TOKEN.sub("last30days:library_context", value)
+    value = _CANONICAL_OUTPUT_PHRASE.sub("END OF last30days CANONICAL-OUTPUT", value)
+    return value
 
 
 def _safe_title(title: str) -> str:
@@ -628,7 +679,7 @@ def _safe_title(title: str) -> str:
     Collapsing whitespace first is what keeps the title on the line the
     caller built for it.
     """
-    return _defang_engine_sentinels(" ".join(title.split()))
+    return _defang_engine_sentinels(" ".join(_CONTROL_CHARS.sub(" ", title).split()))
 
 
 _FRESHNESS_PRIORITY = {
@@ -639,43 +690,130 @@ _FRESHNESS_PRIORITY = {
 }
 
 
+def _is_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _coerce_numeric(value: object) -> int | float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    if isinstance(value, int):
+        try:
+            fval = float(value)
+        except OverflowError:
+            return None
+        return value if math.isfinite(fval) else None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            numeric = float(text)
+        except (ValueError, OverflowError):
+            return None
+        if not math.isfinite(numeric):
+            return None
+        return int(numeric) if numeric.is_integer() else numeric
+    return None
+
+
+def _format_polymarket_pct(price: object) -> str | None:
+    if not _is_finite_number(price):
+        return None
+    try:
+        numeric = float(price)
+        scaled = numeric * 100.0
+    except OverflowError:
+        return None
+    if not math.isfinite(scaled):
+        return None
+    return f"{scaled:.0f}%" if numeric >= 0.1 else f"{scaled:.1f}%"
+
+
+def _format_vote_part(score: object, vote_label: str) -> str:
+    if score is None or score == "" or isinstance(score, bool):
+        return ""
+    if isinstance(score, (int, float)):
+        if not _is_finite_number(score):
+            return ""
+        return f" ({score} {vote_label})"
+    text = _safe_title(str(score))
+    return f" ({text} {vote_label})" if text else ""
+
+
 def _candidate_freshness_flag(report: schema.Report, candidate_id: str) -> str:
     states = {
-        verdict.verdict
+        safe_state
         for verdict in report.freshness_verdicts
         if verdict.candidate_id == candidate_id
+        and (safe_state := _safe_title(str(verdict.verdict or "")))
     }
     if not states:
         return ""
-    ordered = sorted(states, key=lambda state: _FRESHNESS_PRIORITY[state])
+    ordered = sorted(states, key=lambda state: (_FRESHNESS_PRIORITY.get(state, 99), state))
     return " [freshness:" + ",".join(ordered) + "]"
 
 
 def _render_freshness_verdicts(report: schema.Report) -> list[str]:
-    if not report.freshness_verdicts:
-        return []
+    public, private = schema.partition_freshness_verdicts(report, {"corpus"})
+    lines = [PUBLIC_FRESHNESS_MARKER, *_freshness_table(public, "Freshness Verification")] if public else []
+    if private:
+        if lines:
+            lines.append("")
+        local = _freshness_table(private, "Local freshness verification")
+        lines.extend([PRIVATE_CORPUS_START, *map(_defang_corpus_sentinels, local), PRIVATE_CORPUS_END])
+    return lines
+
+
+def _escape_table_cell(value: str) -> str:
+    """Flatten, defang, and escape backslashes and pipes for a Markdown table cell."""
+    return _safe_title(value).replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _freshness_table(verdicts: list[schema.FreshnessVerdict], heading: str) -> list[str]:
     lines = [
-        "## Freshness Verification",
+        f"## {heading}",
         "",
         "| Verdict | Claim | Evidence | Checked |",
         "| --- | --- | --- | --- |",
     ]
-    for verdict in report.freshness_verdicts:
-        claim = verdict.claim.replace("|", "\\|")
+    for verdict in verdicts:
+        claim = _escape_table_cell(verdict.claim)
         if verdict.detail:
             # The verifier's detail carries the formatted movement for stale
             # rows and the reason a claim could not be re-checked otherwise.
-            claim += f" ({verdict.detail.replace('|', chr(92) + '|')})"
-        evidence_label = (
+            detail = _escape_table_cell(verdict.detail)
+            claim += f" ({detail})"
+        raw_label = str(
             verdict.evidence_timestamp or verdict.source_timestamp or "source"
         )
-        evidence = (
-            f"[{evidence_label}]({verdict.evidence_url})"
-            if verdict.evidence_url
-            else evidence_label
+        evidence_label = (
+            _escape_table_cell(raw_label)
+            .replace("[", "\\[")
+            .replace("]", "\\]")
         )
+        if verdict.evidence_url:
+            rendered_link = _markdown_url_link(verdict.evidence_url)
+            if rendered_link.startswith("[") and "](" in rendered_link and rendered_link.endswith(")"):
+                safe_dest = rendered_link.rsplit("](", 1)[1][:-1].replace("|", "%7C")
+                evidence = f"[{evidence_label}]({safe_dest})"
+            elif rendered_link:
+                evidence = f"{evidence_label} ({rendered_link})"
+            else:
+                evidence = evidence_label
+        else:
+            evidence = evidence_label
+        checked_at = _escape_table_cell(str(verdict.checked_at or ""))
+        state = _escape_table_cell(str(verdict.verdict or ""))
         lines.append(
-            f"| **{verdict.verdict}** | {claim} | {evidence} | {verdict.checked_at} |"
+            f"| **{state}** | {claim} | {evidence} | {checked_at} |"
         )
     return lines
 
@@ -708,6 +846,7 @@ def _render_registered_sections(
     cluster_limit: int,
     *,
     include_source_diagnostics: bool = True,
+    mark_public_clusters: bool = False,
 ) -> list[str]:
     """Render one audience preset's ordered, budgeted evidence sections."""
 
@@ -745,8 +884,9 @@ def _render_registered_sections(
 
         top_comments = _render_top_comments(
             report,
-            limit=audience.budget_for("top_comments", 8),
+            limit=audience.budget_for("top_comments", QUOTE_POOL_LIMIT),
             candidates=aux_candidates,
+            clusters=solid_clusters,
         )
         if not top_comments:
             top_comments = [
@@ -754,6 +894,10 @@ def _render_registered_sections(
                 "",
                 "- No qualifying community comments surfaced in this run.",
             ]
+        # The subject's posts and the markets travel with the quote pool, in
+        # whatever place the preset gives it.
+        for block in reversed(_first_party_and_market_blocks(report)):
+            top_comments = [*block, "", *top_comments]
 
     sections = {
         "hiring_signals": (
@@ -767,6 +911,7 @@ def _render_registered_sections(
         "clusters": _render_ranked_clusters(
             report,
             visible_clusters,
+            mark_public_clusters=mark_public_clusters,
         ),
         "stats": _render_stats(report),
         "best_takes": best_takes,
@@ -790,6 +935,15 @@ def _render_registered_sections(
     return lines
 
 
+def _first_party_and_market_blocks(report: schema.Report) -> list[list[str]]:
+    """The subject's own posts and the Polymarket markets, each as a block."""
+    return [
+        block
+        for block in (_render_subject_posts(report), _render_polymarket_markets(report))
+        if block
+    ]
+
+
 def render_compact(
     report: schema.Report,
     cluster_limit: int = 8,
@@ -799,9 +953,10 @@ def render_compact(
 ) -> str:
     audience = registers.get_register(register)
     evidence_report = schema.without_sources(report, {"corpus"})
+    has_corpus = schema.report_has_corpus(report)
     non_empty = [s for s, items in sorted(report.items_by_source.items()) if items]
     lines = [
-        *_render_badge(),
+        *_render_badge(report.topic, report.range_from, report.range_to),
         f"# last30days v{_skill_version()}: {report.topic}",
         "",
         *_assistant_safety_lines(),
@@ -861,6 +1016,10 @@ def render_compact(
     aux_candidates = _auxiliary_candidate_pool(
         evidence_report, visible_clusters, solid_clusters
     )
+    person_block = _person_profile_block(evidence_report)
+    if person_block:
+        lines.extend(person_block)
+        lines.append("")
     hiring_block = (
         []
         if no_solid_evidence
@@ -872,11 +1031,26 @@ def render_compact(
     if hiring_block and audience.name in {"default", "eli5"}:
         lines.extend(hiring_block)
         lines.append("")
+    jobs_digest_block, jobs_digest_urls = _jobs_digest_block(evidence_report)
+    if jobs_digest_block:
+        lines.extend(jobs_digest_block)
+        lines.append("")
+    patent_block = _patent_digest_block(evidence_report)
+    if patent_block:
+        lines.extend(patent_block)
+        lines.append("")
+    market_block = _render_market_data(report)
+    if market_block:
+        lines.extend(market_block)
+        lines.append("")
     fun_params = _FUN_LEVELS.get(fun_level, _FUN_LEVELS["medium"])
     if audience.name in {"default", "eli5"}:
         # Keep this legacy assembly byte-for-byte stable. ELI5 has always been
         # a synthesis-only voice change, so it intentionally takes this path.
-        lines.extend(_render_ranked_clusters(evidence_report, visible_clusters))
+        lines.extend(_render_ranked_clusters(
+            evidence_report, visible_clusters, digest_urls=jobs_digest_urls,
+            mark_public_clusters=has_corpus,
+        ))
         lines.extend(_render_stats(evidence_report))
 
         if not no_solid_evidence:
@@ -889,9 +1063,13 @@ def render_compact(
             if best_takes:
                 lines.extend([""] + best_takes)
 
+            for block in _first_party_and_market_blocks(evidence_report):
+                lines.extend([""] + block)
+
             top_comments = _render_top_comments(
                 evidence_report,
                 candidates=aux_candidates,
+                clusters=solid_clusters,
             )
             if top_comments:
                 lines.extend([""] + top_comments)
@@ -904,7 +1082,8 @@ def render_compact(
     else:
         lines.extend(
             _render_registered_sections(
-                evidence_report, audience, fun_params, cluster_limit
+                evidence_report, audience, fun_params, cluster_limit,
+                mark_public_clusters=has_corpus,
             )
         )
     corpus_section = _render_corpus_section(report)
@@ -961,7 +1140,7 @@ def render_for_html(
     audience = registers.get_register(register)
     evidence_report = schema.without_sources(report, {"corpus"})
     lines = [
-        *_render_badge(),
+        *_render_badge(report.topic, report.range_from, report.range_to),
         *_render_html_metadata(report),
     ]
     drill_context = _render_drill_context(report)
@@ -971,14 +1150,19 @@ def render_for_html(
         evidence_report,
         evidence_report.clusters,
     )
+    no_solid_evidence = bool(evidence_report.clusters) and not html_clusters
     html_candidates = _candidates_for_auxiliary_sections(
         evidence_report,
         evidence_report.clusters,
         html_clusters,
     )
-    hiring_block = _render_hiring_signals(
-        evidence_report,
-        candidates=html_candidates if evidence_report.clusters else None,
+    hiring_block = (
+        []
+        if no_solid_evidence
+        else _render_hiring_signals(
+            evidence_report,
+            candidates=html_candidates if evidence_report.clusters else None,
+        )
     )
     if synthesis_md:
         lines.extend(["", synthesis_md.strip()])
@@ -997,6 +1181,7 @@ def render_for_html(
                     fun_params,
                     8,
                     include_source_diagnostics=False,
+                    mark_public_clusters=schema.report_has_corpus(report),
                 ),
             ]
         )
@@ -1036,7 +1221,9 @@ def render_for_html_comparison(
         f"· comparing {len(entities)}: {', '.join(entities)} -->"
     )
     lines = [
-        *_render_badge(),
+        *_render_badge(
+            " vs ".join(entities), main_report.range_from, main_report.range_to
+        ),
         meta,
     ]
     if synthesis_md:
@@ -1049,7 +1236,10 @@ def render_for_html_comparison(
         if corpus_section:
             lines.extend(["", f"## {label}", "", *corpus_section])
     # Comparison data quality notes also go to stderr, not into the artifact.
-    _append_html_footer(lines, main_report, save_path)
+    _append_html_footer(
+        lines, main_report, save_path, market_windows=_market_windows(entity_reports),
+        comparison=True,
+    )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1153,9 +1343,16 @@ def _dedupe_notes(notes: list[str]) -> list[str]:
 
 
 def _append_html_footer(
-    lines: list[str], report: schema.Report, save_path: str | None
+    lines: list[str],
+    report: schema.Report,
+    save_path: str | None,
+    *,
+    market_windows: list[dict] | None = None,
+    comparison: bool = False,
 ) -> None:
-    footer = _render_emoji_footer(report, save_path)
+    footer = _render_emoji_footer(
+        report, save_path, market_windows=market_windows, comparison=comparison,
+    )
     _append_pass_through_footer(lines, footer)
 
 
@@ -1386,7 +1583,9 @@ def render_comparison_multi(
     synthesized_topic = " vs ".join(entities)
 
     lines: list[str] = [
-        *_render_badge(),
+        *_render_badge(
+            synthesized_topic, main_report.range_from, main_report.range_to
+        ),
         f"# last30days v{_skill_version()}: {synthesized_topic}",
         "",
         *_assistant_safety_lines(),
@@ -1438,7 +1637,9 @@ def render_comparison_multi(
     scaffold = _render_comparison_scaffold(synthesized_topic)
     lines.extend(scaffold)
 
-    footer = _render_emoji_footer(main_report, save_path)
+    footer = _render_emoji_footer(
+        main_report, save_path, market_windows=_market_windows(entity_reports), comparison=True,
+    )
     _append_pass_through_footer(lines, footer)
 
     lines.extend(_render_canonical_boundary())
@@ -1457,7 +1658,7 @@ def _render_resolved_entities_block(
     Context strings truncate at 120 chars.
     """
     any_resolved = any(
-        isinstance(report.artifacts.get("resolved"), dict)
+        isinstance((report.artifacts or {}).get("resolved"), dict)
         for _label, report in entity_reports
     )
     if not any_resolved:
@@ -1465,12 +1666,19 @@ def _render_resolved_entities_block(
 
     out: list[str] = ["## Resolved Entities", ""]
     for label, report in entity_reports:
-        resolved = report.artifacts.get("resolved") or {}
+        raw_resolved = (report.artifacts or {}).get("resolved")
+        resolved = raw_resolved if isinstance(raw_resolved, dict) else {}
         x_handle = resolved.get("x_handle") or ""
-        subs = resolved.get("subreddits") or []
+        raw_subs = resolved.get("subreddits")
+        subs = [str(s) for s in raw_subs if s] if isinstance(raw_subs, (list, tuple)) else []
         gh_user = resolved.get("github_user") or ""
-        gh_repos = resolved.get("github_repos") or []
-        context = resolved.get("context") or ""
+        raw_gh_repos = resolved.get("github_repos")
+        gh_repos = (
+            [str(r) for r in raw_gh_repos if r]
+            if isinstance(raw_gh_repos, (list, tuple))
+            else []
+        )
+        context = str(resolved.get("context") or "")
 
         x_display = f"@{x_handle}" if x_handle else "-"
         subs_display = (
@@ -1489,10 +1697,27 @@ def _render_resolved_entities_block(
                 + ")"
             )
         context_display = _truncate(context, 120) if context else "-"
+        ticker = resolved.get("ticker") or ""
+        ticker_display = ""
+        if ticker:
+            ticker_display = f" | Ticker {ticker}"
+            if resolved.get("ticker_source") == "host":
+                raw_tickers = resolved.get("tickers")
+                ticker_values = (
+                    raw_tickers
+                    if isinstance(raw_tickers, (list, tuple)) and raw_tickers
+                    else [ticker]
+                )
+                tickers = [_footer_safe(str(symbol), 16) for symbol in ticker_values]
+                ticker_display = f" | Ticker {', '.join(tickers)} (host search)"
+            elif resolved.get("company_via_person") and resolved.get("company"):
+                ticker_display += f" (via {resolved['company']})"
+            elif resolved.get("company_source") == "yahoo-backup":
+                ticker_display += " (Yahoo match)"
 
         out.append(
             f"- **{label}**: X {x_display} | Subs {subs_display} | "
-            f"GitHub {gh_display} | Context: {context_display}"
+            f"GitHub {gh_display}{ticker_display} | Context: {context_display}"
         )
     return out
 
@@ -1513,6 +1738,10 @@ def _render_entity_evidence_block(
         requested_clusters,
     )
     out: list[str] = [f"## {label}", ""]
+    market_block = _render_market_data(report, heading="### Market Data")
+    if market_block:
+        out.extend(market_block)
+        out.append("")
 
     if not evidence_report.clusters:
         out.append("(no significant discussion this month)")
@@ -1642,24 +1871,54 @@ def render_comparison_multi_context(
 _SAFE_MARKDOWN_LINK_SCHEMES = ("http", "https")
 _MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\", "<", ">", "`")
 _MARKDOWN_PLAIN_TEXT_ESCAPES = re.compile(r"([\\`*_{}\[\]()#+\-.!|~:])")
+# Strip authority userinfo for any leading scheme or protocol-relative URL even
+# when scheme/userinfo contains control or whitespace chars, and for any
+# embedded scheme:// or whitespace-preceded // URL without crossing whitespace
+# or path/query/fragment delimiters.
+_LEADING_URL_USERINFO_RE = re.compile(
+    r"^([\s\x00-\x1f\x7f-\x9f]*(?!corpus://)[A-Za-z][A-Za-z0-9+.\t\r\n-]{0,40}:[\t\r\n]*/[\t\r\n]*/)[^/?#]+@",
+    re.IGNORECASE,
+)
+_LEADING_PROTOCOL_RELATIVE_USERINFO_RE = re.compile(
+    r"^([\s\x00-\x1f\x7f-\x9f]*/[\t\r\n]*/)[^/?#]+@",
+)
+_EMBEDDED_URL_USERINFO_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])((?!corpus://)[A-Za-z][A-Za-z0-9+.-]{0,31}://)[^\s/?#]+@",
+    re.IGNORECASE,
+)
+_EMBEDDED_PROTOCOL_RELATIVE_USERINFO_RE = re.compile(
+    r"(?:^|(?<=\s))(//)[^\s/?#]+@",
+)
 
 
-def _sanitize_url_for_single_line_output(url: str) -> str:
-    """Collapse embedded newlines/carriage-returns out of an untrusted URL.
-
-    A URL is not supposed to contain raw line breaks; a source-controlled
-    value that does could otherwise inject fabricated report structure
-    (fake headings, list items) into the saved single-line output --
-    whether or not it ends up wrapped in markdown link syntax. Applied
-    before either the link-safety check or the plain-text fallback below,
-    so this closes the injection at the root rather than only for links.
-    """
-    return "".join(
+def _scrub_url_for_single_line(url: str) -> str:
+    """Scrub URL userinfo and collapse whitespace/control chars before sentinel defanging."""
+    scrubbed = _LEADING_URL_USERINFO_RE.sub(r"\1", url)
+    scrubbed = _LEADING_PROTOCOL_RELATIVE_USERINFO_RE.sub(r"\1", scrubbed)
+    scrubbed = _EMBEDDED_URL_USERINFO_RE.sub(r"\1", scrubbed)
+    scrubbed = _EMBEDDED_PROTOCOL_RELATIVE_USERINFO_RE.sub(r"\1", scrubbed)
+    collapsed = "".join(
         " "
         if ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F
         else ch
-        for ch in url
+        for ch in scrubbed
     )
+    collapsed = _EMBEDDED_URL_USERINFO_RE.sub(r"\1", collapsed)
+    return _EMBEDDED_PROTOCOL_RELATIVE_USERINFO_RE.sub(r"\1", collapsed)
+
+
+def _sanitize_url_for_single_line_output(url: str) -> str:
+    """Scrub URL userinfo, collapse line breaks/control chars, and defang sentinels.
+
+    A URL is not supposed to contain embedded credentials or raw line breaks;
+    a source-controlled value that does could otherwise leak tokens or inject
+    fabricated report structure (fake headings, list items, block sentinels)
+    into single-line output -- whether or not it ends up wrapped in markdown
+    link syntax. Applied before either the link-safety check or the plain-text
+    fallback below, so this closes the injection at the root rather than only
+    for links.
+    """
+    return _defang_engine_sentinels(_scrub_url_for_single_line(url))
 
 
 def _escape_markdown_plain_text(value: str) -> str:
@@ -1677,21 +1936,27 @@ def _markdown_url_link(url: str, *, label: str | None = None) -> str:
     ``javascript:``) would become an active link with none of the safety
     filtering ``html_render.py`` already applies via
     ``html.escape(url, quote=True)``. Falls back to escaped plain text so
-    rejected input cannot remain active Markdown or raw HTML.
+    rejected input cannot remain active Markdown or raw HTML, and also falls
+    back whenever sentinel defanging had to mutate the destination URL so a
+    citation never points to an altered address.
     """
     if not url:
         return ""
-    sanitized_url = _sanitize_url_for_single_line_output(url)
+    pre_defang_url = _scrub_url_for_single_line(url)
+    sanitized_url = _defang_engine_sentinels(pre_defang_url)
     if not sanitized_url.strip():
         return ""
 
+    sentinel_mutated = sanitized_url != pre_defang_url
     has_whitespace_or_control = any(
         ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F
         for ch in url
-    )
+    ) or any(ch.isspace() for ch in sanitized_url)
     safe_destination = False
-    if not has_whitespace_or_control and not any(
-        ch in sanitized_url for ch in _MARKDOWN_LINK_UNSAFE_CHARS
+    if (
+        not sentinel_mutated
+        and not has_whitespace_or_control
+        and not any(ch in sanitized_url for ch in _MARKDOWN_LINK_UNSAFE_CHARS)
     ):
         try:
             parsed = urlparse(sanitized_url)
@@ -1750,8 +2015,26 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
             lines.extend(single_row)
             lines.append("")
 
+    person_block = _person_profile_block(evidence_report)
+    if person_block:
+        lines.extend(person_block)
+        lines.append("")
+    # The board's digest, as the compact output carries it: the saved file
+    # lists only the ranked postings below, so this is where the board is read.
+    jobs_digest_block, _digest_urls = _jobs_digest_block(evidence_report)
+    if jobs_digest_block:
+        lines.extend(jobs_digest_block)
+        lines.append("")
+    patent_block = _patent_digest_block(evidence_report)
+    if patent_block:
+        lines.extend(patent_block)
+        lines.append("")
+
     # ALL clusters (no limit)
-    lines.extend(_render_ranked_clusters(evidence_report, evidence_report.clusters))
+    lines.extend(_render_ranked_clusters(
+        evidence_report, evidence_report.clusters,
+        mark_public_clusters=schema.report_has_corpus(report),
+    ))
 
     fun_params = _FUN_LEVELS["medium"]
     full_clusters = _clusters_clearing_relevance_floor(
@@ -1814,12 +2097,22 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
             continue
         lines.append(f"### {_source_label(source)} ({len(items)} items)")
         lines.append("")
+        unlisted = 0
+        if source == "jobs":
+            # A board can hold thousands of postings, each opening with the
+            # same company text. The file lists the ones that were ranked;
+            # the rest are counted, and the Jobs Digest holds the board's
+            # distinct roles.
+            listed = _ranked_job_items(evidence_report, items)
+            unlisted = len(items) - len(listed)
+            items = listed
         for item in items:
             # local_rank_score is 0..1; print it on the report's 0-100 scale
             # (":.0f" of the raw value rendered every item as score:0 or 1).
             score = (item.local_rank_score or 0) * 100.0
+            author_text = _safe_title(str(item.author)) if item.author else ""
             lines.append(
-                f"**{item.item_id}** (score:{score:.0f}) {item.author or ''} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]"
+                f"**{item.item_id}** (score:{score:.0f}) {author_text} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]"
             )
             lines.append(f"  {_safe_title(item.title)}")
             if item.url:
@@ -1827,24 +2120,28 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
                 if rendered_url:
                     lines.append(f"  {rendered_url}")
             if item.container:
-                lines.append(f"  *{item.container}*")
+                lines.append(f"  *{_safe_title(str(item.container))}*")
             if item.snippet:
                 lines.append(
                     f"  {_format_untrusted_evidence(item.snippet, 500, continuation_indent='  ')}"
                 )
             # Top comments for Reddit, YouTube, TikTok, HackerNews.
-            top_comments = item.metadata.get("top_comments", [])
-            if top_comments and isinstance(top_comments[0], dict):
-                vote_label = _vote_label_for(item.source)
-                for tc in top_comments[:3]:
-                    excerpt = tc.get("excerpt", tc.get("text", ""))
-                    tc_score = tc.get("score", "")
-                    attribution = _comment_attribution(item.source, tc.get("author"))
-                    vote_part = (
-                        f" ({tc_score} {vote_label})"
-                        if tc_score is not None and tc_score != ""
-                        else ""
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            raw_top_comments = metadata.get("top_comments")
+            top_comments = (
+                [tc for tc in raw_top_comments if isinstance(tc, dict)][:3]
+                if isinstance(raw_top_comments, (list, tuple))
+                else []
+            )
+            if top_comments:
+                comment_source = _comment_source(item)
+                vote_label = _vote_label_for(comment_source)
+                for tc in top_comments:
+                    excerpt = str(
+                        tc.get("excerpt") or tc.get("body") or tc.get("text") or ""
                     )
+                    attribution = _comment_attribution(comment_source, tc.get("author"))
+                    vote_part = _format_vote_part(tc.get("score", ""), vote_label)
                     lines.append(
                         f"  Top comment {attribution}{vote_part}: "
                         f"{_format_untrusted_evidence(excerpt, 200, continuation_indent='  ')}"
@@ -1853,26 +2150,36 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
             for post in _digg_posts_for(item, limit=3):
                 lines.append(f"  > {_format_digg_quote(post)}")
             # Comment insights for Reddit
-            insights = item.metadata.get("comment_insights", [])
+            raw_insights = metadata.get("comment_insights")
+            insights = (
+                [ins for ins in raw_insights if isinstance(ins, str) and ins.strip()][:3]
+                if isinstance(raw_insights, (list, tuple))
+                else []
+            )
             if insights:
                 lines.append("  Insights:")
-                for ins in insights[:3]:
+                for ins in insights:
                     lines.append(
                         f"    - {_format_untrusted_evidence(ins, 200, continuation_indent='      ')}"
                     )
             # Transcript highlights for YouTube
-            highlights = item.metadata.get("transcript_highlights", [])
+            raw_highlights = metadata.get("transcript_highlights")
+            highlights = (
+                [hl for hl in raw_highlights if isinstance(hl, str) and hl.strip()][:5]
+                if isinstance(raw_highlights, (list, tuple))
+                else []
+            )
             if highlights:
                 lines.append(
                     "  Highlights (auto-generated transcript; may contain transcription errors):"
                 )
-                for hl in highlights[:5]:
+                for hl in highlights:
                     lines.append(
                         f'    - "{_format_untrusted_evidence(hl, 200, continuation_indent="      ")}"'
                     )
             # Full transcript snippet for YouTube
-            transcript = item.metadata.get("transcript_snippet", "")
-            if transcript and len(transcript) > 100:
+            transcript = metadata.get("transcript_snippet", "")
+            if isinstance(transcript, str) and len(transcript) > 100:
                 lines.append(
                     f"  <details><summary>Transcript ({len(transcript.split())} words; auto-generated — may contain transcription errors)</summary>"
                 )
@@ -1881,28 +2188,45 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
                 )
                 lines.append("  </details>")
             # Polymarket outcome prices and market details
-            outcome_prices = item.metadata.get("outcome_prices") or []
-            if outcome_prices and item.source == "polymarket":
-                question = item.metadata.get("question") or ""
+            outcome_prices = metadata.get("outcome_prices") or []
+            if (
+                isinstance(outcome_prices, (list, tuple))
+                and outcome_prices
+                and item.source == "polymarket"
+            ):
+                question = metadata.get("question") or ""
                 if question and question != item.title:
-                    lines.append(f"  Question: {question}")
+                    lines.append(f"  Question: {_safe_title(str(question))}")
                 odds_parts = []
-                for name, price in outcome_prices:
-                    if isinstance(price, (int, float)):
-                        pct = (
-                            f"{price * 100:.0f}%"
-                            if price >= 0.1
-                            else f"{price * 100:.1f}%"
-                        )
-                        odds_parts.append(f"{name}: {pct}")
+                for entry in outcome_prices:
+                    if not (isinstance(entry, (list, tuple)) and len(entry) == 2):
+                        continue
+                    name, price = entry
+                    pct = _format_polymarket_pct(price)
+                    if pct is None:
+                        continue
+                    odds_parts.append(
+                        f"{_safe_title('' if name is None else str(name))}: {pct}"
+                    )
                 if odds_parts:
                     lines.append(f"  Odds: {' | '.join(odds_parts)}")
-                remaining = item.metadata.get("outcomes_remaining") or 0
-                if remaining:
+                remaining = metadata.get("outcomes_remaining")
+                if isinstance(remaining, int) and _is_finite_number(remaining) and remaining > 0:
                     lines.append(f"  (+{remaining} more outcomes)")
-                end_date = item.metadata.get("end_date")
+                end_date = metadata.get("end_date")
                 if end_date:
                     lines.append(f"  Closes: {end_date}")
+            lines.append("")
+        if unlisted:
+            note = (
+                f"{unlisted:,} more job posting{'s' if unlisted != 1 else ''} on the board "
+                f"{'are' if unlisted != 1 else 'is'} not listed here: only ranked postings are."
+                if items
+                else f"No job posting was ranked, so none of the board's {unlisted:,} is listed here."
+            )
+            if jobs_digest_block:
+                note += " The Jobs Digest above holds the board's distinct roles."
+            lines.append(f"_{note}_")
             lines.append("")
 
     corpus_section = _render_corpus_section(report)
@@ -1910,7 +2234,7 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
         lines.extend(corpus_section)
         lines.append("")
 
-    freshness_verdicts = _render_freshness_verdicts(evidence_report)
+    freshness_verdicts = _render_freshness_verdicts(report)
     if freshness_verdicts:
         lines.extend(freshness_verdicts)
         lines.append("")
@@ -1921,11 +2245,57 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+# The most job postings the saved file lists one by one.
+FULL_DUMP_JOBS_LIMIT = 40
+
+
+def _ranked_job_items(
+    report: schema.Report, items: list[schema.SourceItem],
+) -> list[schema.SourceItem]:
+    """The job postings the saved file lists: those the ranking kept as
+    candidates, best first, up to ``FULL_DUMP_JOBS_LIMIT``."""
+    on_board = {fusion.candidate_key(item): item for item in items}
+    listed: dict[str, schema.SourceItem] = {}
+    for candidate in report.ranked_candidates:
+        for item in candidate.source_items:
+            key = fusion.candidate_key(item)
+            if item.source == "jobs" and key in on_board:
+                listed.setdefault(key, on_board[key])
+    return list(listed.values())[:FULL_DUMP_JOBS_LIMIT]
+
+
 def _format_item_engagement(item: schema.SourceItem) -> str:
     """Format engagement metrics for a SourceItem in the full dump."""
     eng = item.engagement
-    if not eng:
+    if not isinstance(eng, dict) or not eng:
         return ""
+
+    def _safe_val(val: object) -> str:
+        if val in (None, 0, 0.0, "") or isinstance(val, bool):
+            return ""
+        if isinstance(val, (int, float)):
+            if not _is_finite_number(val):
+                return ""
+            return str(val)
+        if isinstance(val, str):
+            numeric = _coerce_numeric(val)
+            if numeric is not None:
+                return _safe_title(val) if numeric != 0 else ""
+            stripped = val.strip()
+            if stripped:
+                try:
+                    float(stripped)
+                    return ""
+                except ValueError:
+                    pass
+                except OverflowError:
+                    return ""
+            return _safe_title(val)
+        try:
+            return _safe_title(str(val))
+        except ValueError:
+            return ""
+
     parts = []
     for key in [
         "score",
@@ -1942,8 +2312,12 @@ def _format_item_engagement(item: schema.SourceItem) -> str:
         "ratings",
     ]:
         val = eng.get(key)
-        if val is not None and val != 0:
-            parts.append(f"{val} {key}")
+        if key == "score" and item.source == "reddit" and reddit_refs.score_pending(item.metadata):
+            parts.append("score pending")
+            continue
+        formatted = _safe_val(val)
+        if formatted:
+            parts.append(f"{formatted} {key}")
     # Same drift as the source list above: this allowlist silently blanks the
     # engagement of any source whose metric is not on it (trustpilot's
     # `reviews`/`trustScore` today), so the item renders an empty `[]` in the
@@ -1952,9 +2326,19 @@ def _format_item_engagement(item: schema.SourceItem) -> str:
     # already render fine.
     if not parts:
         for key, val in sorted(eng.items()):
-            if val not in (None, 0, ""):
-                parts.append(f"{val} {key}")
+            formatted = _safe_val(val)
+            if formatted:
+                parts.append(f"{formatted} {key}")
     return ", ".join(parts) if parts else ""
+
+
+def _format_context_freshness_verdict(verdict: schema.FreshnessVerdict) -> str:
+    state = _safe_title(str(verdict.verdict or ""))
+    claim = _safe_title(str(verdict.claim or ""))
+    url = _sanitize_url_for_single_line_output(
+        str(verdict.evidence_url or verdict.source_url or "")
+    )
+    return f"- {state}: {claim} ({url})"
 
 
 def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
@@ -1970,7 +2354,7 @@ def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
     )
     no_solid_evidence = bool(requested_clusters) and not visible_clusters
     lines = [
-        f"Topic: {report.topic}",
+        f"Topic: {_safe_title(str(report.topic or ''))}",
         f"Intent: {report.query_plan.intent}",
         _AI_SAFETY_NOTE,
     ]
@@ -1984,7 +2368,7 @@ def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
     if freshness_warning:
         lines.append(f"Freshness warning: {freshness_warning}")
     context_candidates = _candidates_for_auxiliary_sections(
-        report,
+        evidence_report,
         requested_clusters,
         visible_clusters,
     )
@@ -1992,7 +2376,7 @@ def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
         []
         if no_solid_evidence
         else _render_hiring_signals(
-            report,
+            evidence_report,
             candidates=context_candidates if requested_clusters else None,
         )
     )
@@ -2015,9 +2399,9 @@ def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
                 continue
             detail_parts = [
                 schema.candidate_source_label(candidate),
-                candidate.title,
+                _safe_title(candidate.title),
                 schema.candidate_best_published_at(candidate) or "date unknown",
-                candidate.url,
+                _sanitize_url_for_single_line_output(candidate.url or ""),
             ]
             lines.append(f"  - {' | '.join(detail_parts)}")
             if candidate.snippet:
@@ -2031,12 +2415,24 @@ def render_context(report: schema.Report, cluster_limit: int = 6) -> str:
     if report.warnings:
         lines.append("Warnings:")
         lines.extend(f"- {warning}" for warning in report.warnings)
-    if report.freshness_verdicts:
+    public_verdicts, private_verdicts = schema.partition_freshness_verdicts(report, {"corpus"})
+    if public_verdicts:
         lines.append("Freshness verdicts:")
         lines.extend(
-            f"- {verdict.verdict}: {verdict.claim} ({verdict.evidence_url or verdict.source_url})"
-            for verdict in report.freshness_verdicts
+            _format_context_freshness_verdict(verdict)
+            for verdict in public_verdicts
         )
+    if private_verdicts:
+        private_lines = [
+            "Local freshness verdicts:",
+            *(_format_context_freshness_verdict(verdict) for verdict in private_verdicts),
+        ]
+        lines.extend([
+            "",
+            PRIVATE_CORPUS_START,
+            *map(_defang_corpus_sentinels, private_lines),
+            PRIVATE_CORPUS_END,
+        ])
     return "\n".join(lines).strip() + "\n"
 
 
@@ -2049,6 +2445,7 @@ def render_brief(report: schema.Report, cluster_limit: int = 8) -> str:
     is no matching data; Sections 1 and 5 always appear.
     """
     evidence_report = schema.without_sources(report, {"corpus"})
+    public_cluster_boundary = [PUBLIC_CLUSTERS_MARKER] if schema.report_has_corpus(report) else []
     non_empty = [s for s, items in sorted(report.items_by_source.items()) if items]
     lines = [
         f"# Production Brief: {report.topic}",
@@ -2067,8 +2464,7 @@ def render_brief(report: schema.Report, cluster_limit: int = 8) -> str:
     if library_context:
         lines.extend([*library_context, ""])
 
-    lines.append("## Ranked Storylines")
-    lines.append("")
+    lines.extend([*public_cluster_boundary, "## Ranked Storylines", ""])
     candidate_by_id = {c.candidate_id: c for c in evidence_report.ranked_candidates}
     requested_clusters = evidence_report.clusters[:cluster_limit]
     visible_clusters = _clusters_clearing_relevance_floor(
@@ -2126,30 +2522,40 @@ def render_brief(report: schema.Report, cluster_limit: int = 8) -> str:
         for candidate in hooks[:5]:
             source_label = _source_label(candidate.source)
             primary = schema.candidate_primary_item(candidate)
-            author = primary.author if primary else None
+            author = _safe_title(str(primary.author)) if primary and primary.author else ""
             if author and candidate.source in ("x", "tiktok", "instagram", "threads"):
-                attribution = f"@{author} on {source_label}"
-            elif author and candidate.source == "reddit":
-                container = primary.container if primary else None
+                bare = author.lstrip("@").strip()
+                attribution = f"@{bare} on {source_label}" if bare else source_label
+            elif candidate.source == "reddit":
+                container = (
+                    re.sub(
+                        r"^/?r/",
+                        "",
+                        _safe_title(str(primary.container)),
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    if primary and primary.container
+                    else ""
+                )
                 attribution = f"r/{container}" if container else "Reddit"
             else:
                 attribution = source_label
-            reason = (
-                f" — {candidate.fun_explanation}"
+            clean_reason = (
+                _safe_title(str(candidate.fun_explanation))
                 if candidate.fun_explanation
                 and candidate.fun_explanation != "heuristic-fallback"
                 else ""
             )
+            reason = f" — {clean_reason}" if clean_reason else ""
             lines.append(
-                f'- "{_truncate(candidate.title, 200)}"'
+                f'- "{_truncate(_safe_title(candidate.title), 200)}"'
                 f" ({attribution}, fun:{candidate.fun_score:.0f}){reason}"
             )
         lines.append("")
 
     tensions = [c for c in visible_clusters if c.uncertainty]
     if tensions:
-        lines.append("## Topic Tensions")
-        lines.append("")
+        lines.extend([*public_cluster_boundary, "## Topic Tensions", ""])
         for cluster in tensions[:cluster_limit]:
             label = (
                 cluster.uncertainty.replace("-", " ").title()
@@ -2165,11 +2571,10 @@ def render_brief(report: schema.Report, cluster_limit: int = 8) -> str:
         lines.append("## Audience Questions")
         lines.append("")
         for q in questions[:8]:
-            lines.append(f"- {q}")
+            lines.append(f"- {_safe_title(str(q))}")
         lines.append("")
 
-    lines.append("## Source Clusters")
-    lines.append("")
+    lines.extend([*public_cluster_boundary, "## Source Clusters", ""])
     for cluster in visible_clusters:
         source_tags = " + ".join(_source_label(s) for s in cluster.sources)
         lines.append(f"- **{_safe_title(cluster.title)}**: {source_tags}")
@@ -2193,7 +2598,7 @@ def _extract_audience_questions(candidates: list[schema.Candidate]) -> list[str]
     questions: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
-        title = candidate.title.strip()
+        title = _safe_title(str(candidate.title or ""))
         if not title:
             continue
         if title.endswith("?"):
@@ -2204,6 +2609,26 @@ def _extract_audience_questions(candidates: list[schema.Candidate]) -> list[str]
     return questions
 
 
+def _hiring_plain_field(value: Any, limit: int = 120) -> str:
+    """Single-line, sentinel-defanged, link-neutralized metadata text for Hiring Signals."""
+    cleaned = _safe_title(str(value or ""))
+    if not cleaned:
+        return ""
+    if len(cleaned) > limit:
+        cleaned = cleaned[: limit - 3].rstrip() + "..."
+    return cleaned.replace("[", "(").replace("]", ")")
+
+
+def _hiring_role_link(raw_title: Any, raw_url: Any) -> str:
+    title = _safe_title(str(raw_title or "")) or "Job posting"
+    url = _defang_engine_sentinels(str(raw_url or ""))
+    if url:
+        rendered = _markdown_url_link(url, label=title)
+        if rendered:
+            return rendered
+    return _escape_markdown_plain_text(title)
+
+
 def _render_hiring_signals(
     report: schema.Report,
     *,
@@ -2212,7 +2637,7 @@ def _render_hiring_signals(
     summary = report.artifacts.get("hiring_signals")
     if not isinstance(summary, dict):
         return []
-    mode = summary.get("mode") or "standard"
+    mode = _hiring_plain_field(summary.get("mode") or "standard", 40) or "standard"
     rejected_jobs = set(summary.get("rejected_job_keys") or [])
     if candidates is not None or rejected_jobs:
         solid_clusters = _clusters_clearing_relevance_floor(report, report.clusters)
@@ -2255,16 +2680,16 @@ def _render_hiring_signals(
     if not include and mode != "explicit":
         return []
 
+    size_tier = _hiring_plain_field(summary.get("company_size_tier") or "unknown", 60) or "unknown"
     out = [
         "## Hiring Signals",
         "",
-        (
-            f"- Mode: {mode}; company-size tier: "
-            f"{summary.get('company_size_tier') or 'unknown'}"
-        ),
+        f"- Mode: {mode}; company-size tier: {size_tier}",
     ]
     if not signals:
-        reason = summary.get("omitted_reason") or "no reliable hiring signal found"
+        reason = _hiring_plain_field(
+            summary.get("omitted_reason") or "no reliable hiring signal found", 200
+        ) or "no reliable hiring signal found"
         out.append(f"- No reliable hiring signal found: {reason}.")
         return out
 
@@ -2273,18 +2698,23 @@ def _render_hiring_signals(
     )
     for signal in signals[:4]:
         evidence = signal.get("evidence") or []
+        theme = _hiring_plain_field(signal.get("theme") or "hiring theme", 120) or "hiring theme"
+        interpretation = (
+            _hiring_plain_field(
+                signal.get("interpretation") or "possible hiring focus", 200
+            )
+            or "possible hiring focus"
+        )
+        confidence = _hiring_plain_field(signal.get("confidence") or "low", 40) or "low"
         out.append(
-            f"- {signal.get('theme', 'hiring theme')}: "
-            f"{signal.get('interpretation', 'possible hiring focus')} "
-            f"(confidence: {signal.get('confidence', 'low')}; "
+            f"- {theme}: {interpretation} "
+            f"(confidence: {confidence}; "
             f"evidence: {signal.get('evidence_count', len(evidence))} roles)"
         )
         for item in evidence[:3]:
-            title = item.get("title") or "Job posting"
-            url = item.get("url") or ""
-            dept = item.get("department") or ""
-            date = item.get("published_at") or "date unknown"
-            link = f"[{title}]({url})" if url else title
+            link = _hiring_role_link(item.get("title"), item.get("url"))
+            dept = _hiring_plain_field(item.get("department"), 120)
+            date = _hiring_plain_field(item.get("published_at") or "date unknown", 40) or "date unknown"
             detail = " | ".join(part for part in [dept, date] if part)
             out.append(f"  - {link}" + (f" ({detail})" if detail else ""))
 
@@ -2298,23 +2728,490 @@ def _render_hiring_signals(
             "a new capability or expansion of an existing one."
         )
         for cand in strategic[:8]:
-            title = cand.get("title") or "Job posting"
-            url = cand.get("url") or ""
-            flags = ", ".join(cand.get("flags") or [])
-            dept = cand.get("department") or ""
-            location = cand.get("location") or ""
-            date = cand.get("published_at") or "date unknown"
-            link = f"[{title}]({url})" if url else title
+            link = _hiring_role_link(cand.get("title"), cand.get("url"))
+            raw_flags = cand.get("flags") or []
+            clean_flags = [
+                _hiring_plain_field(flag, 60)
+                for flag in raw_flags
+                if _hiring_plain_field(flag, 60)
+            ]
+            flags = ", ".join(clean_flags)
+            dept = _hiring_plain_field(cand.get("department"), 120)
+            location = _hiring_plain_field(cand.get("location"), 120)
+            date = _hiring_plain_field(cand.get("published_at") or "date unknown", 40) or "date unknown"
             detail = " | ".join(part for part in [dept, location, date] if part)
             tag = f" [{flags}]" if flags else ""
             out.append(f"  - {link}{tag}" + (f" ({detail})" if detail else ""))
     return out
 
 
+def _jobs_board_footer_line(report: schema.Report) -> str | None:
+    """Build the 💼 Jobs footer line from what the company's board reports.
+
+    Open roles always; a ``+`` when the board stopped short of its full count;
+    roles new in the window only when the board gave every role a true
+    first-posted date. A board that is not the topic's own (the company a
+    person leads) is named: ``💼 Jobs at SpaceX: ...``. None when the run
+    read no board directly.
+    """
+    board = (report.artifacts or {}).get("jobs")
+    if not isinstance(board, dict) or not board.get("open_roles"):
+        return None
+    count = int(board["open_roles"])
+    of = " ".join(str(board.get("board_of") or "").split())
+    label = f"Jobs at {_format_untrusted_evidence(of, 60)}" if of else "Jobs"
+    line = (
+        f"💼 {label}: {count:,}{'+' if board.get('open_roles_floor') else ''} "
+        f"open role{'s' if count != 1 else ''}"
+    )
+    new = board.get("new_in_window")
+    if isinstance(new, int) and not isinstance(new, bool):
+        line += f" │ {new:,} new in the L30"
+    if board.get("titles_only"):
+        # Roles read off the site's job sitemap: no text, no posting dates.
+        line += " │ from its job sitemap"
+        if board.get("board_titles_missing"):
+            line += ", no titles readable"
+        fallback = board.get("board_fallback")
+        if isinstance(fallback, str) and fallback.strip():
+            # The platform reader failed and the run fell to the sitemap.
+            line += f" ({_footer_safe(fallback, 100)})"
+    return line
+
+
+def _jobs_unreadable_footer_line(report: schema.Report) -> str | None:
+    """The 💼 Jobs footer line for a company whose job site is known and
+    cannot be read, when no board gave an open-role count."""
+    name = (report.artifacts or {}).get("jobs_site_unreadable")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    line = f"💼 Jobs: {jobs_digest.unreadable_job_site_line(_footer_safe(name, 60))}"
+    reason = (report.artifacts or {}).get("jobs_site_unreadable_reason")
+    if isinstance(reason, str) and reason.strip():
+        line += f" ({_footer_safe(reason, 100)})"
+    return line
+
+
+# Per-field caps for the Person Profile's remote text.
+_PERSON_SHORT_CHARS = 120
+_PERSON_HEADLINE_CHARS = 200
+_PERSON_BIO_CHARS = 500
+_PERSON_POST_CHARS = 240
+_PERSON_ROLES_SHOWN = 2
+_PERSON_LINKS_SHOWN = 6
+_PERSON_OLDER_SHOWN = 6
+# Fewer first-party items than this in the window and older activity shows.
+_PERSON_THIN_WINDOW = 3
+_PERSON_DATE = re.compile(r"^\d{4}-\d{2}(?:-\d{2})?$")
+_PERSON_BIO_FENCE = re.compile(r"^\s*<untrusted_content>\s*|\s*</untrusted_content>\s*$")
+_LINKEDIN_STATUS_LINES = {
+    person.LINKEDIN_CHECKED: "LinkedIn: checked",
+    person.LINKEDIN_NO_KEY: "LinkedIn: not checked (no key)",
+}
+
+
+def _person_text(value: object, limit: int) -> str:
+    """Remote text as one inert, capped line: truncated, Markdown escaped,
+    then through the evidence formatter that defangs the engine's sentinels."""
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    escaped = _escape_markdown_plain_text(_truncate(text, limit))
+    return _format_untrusted_evidence(escaped, len(escaped))
+
+
+def _person_date(value: object) -> str:
+    text = str(value or "").strip()
+    return text if _PERSON_DATE.match(text) else ""
+
+
+def _person_links(profile_artifact: dict, profile: dict, bio: dict) -> list[str]:
+    """Handles and sites the profile or bio page named, each made safe."""
+    links: list[str] = []
+    handles = profile_artifact.get("derived_handles")
+    for key, value in (handles if isinstance(handles, dict) else {}).items():
+        value = str(value or "").strip()
+        if not value:
+            continue
+        if value.lower().startswith(("http://", "https://")):
+            links.append(_markdown_url_link(value))
+        elif key == "x":
+            links.append("X @" + _person_text(value.lstrip("@"), _PERSON_SHORT_CHARS))
+        elif key == "github":
+            links.append("GitHub " + _person_text(value, _PERSON_SHORT_CHARS))
+        else:
+            links.append(_person_text(f"{key} {value}", _PERSON_SHORT_CHARS))
+    for url in [*(bio.get("links") or []), *(profile.get("websites") or [])]:
+        link = _markdown_url_link(url) if isinstance(url, str) else ""
+        if link and link not in links:
+            links.append(link)
+    return [link for link in links if link][:_PERSON_LINKS_SHOWN]
+
+
+def _person_profile_block(report: schema.Report) -> list[str]:
+    """What a person run's own lanes found, printed before the ranked evidence.
+
+    Present only when the run carries the ``person_profile`` artifact. Every
+    field that came from LinkedIn, the employer's site or a post is remote
+    text: each goes through ``_person_text`` with its own cap, and each URL
+    through ``_markdown_url_link``. The LinkedIn line names the one status the
+    run reached; only "checked" makes an in-window post count of zero real.
+    Older posts are listed here and never join the ranked evidence.
+    """
+    profile_artifact = (report.artifacts or {}).get("person_profile")
+    if not isinstance(profile_artifact, dict):
+        return []
+    profile = profile_artifact.get("profile") if isinstance(profile_artifact.get("profile"), dict) else {}
+    bio = profile_artifact.get("bio") if isinstance(profile_artifact.get("bio"), dict) else {}
+    out = ["## Person Profile", ""]
+
+    basis = []
+    # The profile URL is an anchor too, but the match basis below already says
+    # how it was found; listing it again only repeats it.
+    anchors = [
+        _person_text(a, _PERSON_SHORT_CHARS) for a in profile_artifact.get("anchors") or []
+        if not str(a).lower().startswith(("http://", "https://"))
+    ]
+    if any(anchors):
+        basis.append("results kept only when they name " + ", ".join(a for a in anchors if a))
+    # How the LinkedIn URL was found (supplied, or looked up and verified)
+    # is in match_basis; a looked-up URL was not given by the user.
+    basis.extend(
+        text for text in (
+            _person_text(b, _PERSON_HEADLINE_CHARS) for b in profile_artifact.get("match_basis") or []
+        ) if text
+    )
+    if profile_artifact.get("identity_weak") or not basis:
+        line = (
+            "- Identity: uncertain. Nothing beyond the name ties these results to this "
+            "person; adding an employer (`--employer`) or a LinkedIn URL (`--linkedin`) "
+            "would sharpen it."
+        )
+        if basis:
+            line += " Partial basis: " + "; ".join(basis) + "."
+        out.append(line)
+    else:
+        out.append("- Identity basis: " + "; ".join(basis) + ".")
+
+    roles = [role for role in profile.get("current_roles") or [] if isinstance(role, dict)]
+    for role in roles[:_PERSON_ROLES_SHOWN]:
+        title = _person_text(role.get("title"), _PERSON_SHORT_CHARS)
+        company = _person_text(role.get("company"), _PERSON_SHORT_CHARS)
+        text = " at ".join(part for part in (title, company) if part)
+        if text:
+            start = _person_date(role.get("start_date"))
+            out.append(f"- Current role: {text}{f', since {start}' if start else ''} (LinkedIn)")
+    headline = _person_text(profile.get("headline"), _PERSON_HEADLINE_CHARS)
+    if headline:
+        out.append(f"- LinkedIn headline: {headline}")
+
+    # The bio arrives fenced. The fence is dropped rather than copied or
+    # doubled; the text inside is made inert like every other remote field.
+    bio_text = _person_text(
+        _PERSON_BIO_FENCE.sub("", str(bio.get("bio") or "")), _PERSON_BIO_CHARS
+    )
+    if bio_text:
+        source = _markdown_url_link(str(bio.get("url") or ""))
+        out.append(f"- Bio: {bio_text}" + (f" (source: {source})" if source else ""))
+
+    links = _person_links(profile_artifact, profile, bio)
+    if links:
+        out.append(
+            "- Links found on the profile or bio page, not confirmed as this person's: "
+            + ", ".join(links)
+        )
+
+    status = profile_artifact.get("linkedin_status") or person.LINKEDIN_NO_KEY
+    checked = status == person.LINKEDIN_CHECKED
+    line = "- " + _LINKEDIN_STATUS_LINES.get(status, f"LinkedIn: {_person_text(status, 40)}")
+    if not checked:
+        line += "; LinkedIn activity unknown"
+    mismatch = _person_text(profile_artifact.get("linkedin_mismatch"), _PERSON_HEADLINE_CHARS)
+    if mismatch:
+        line += f" ({mismatch})"
+    if profile_artifact.get("timed_out"):
+        line += ". The person lookups timed out before finishing, so some were not fully checked"
+    out.append(line + ".")
+
+    first_party = int(profile_artifact.get("first_party_in_window") or 0)
+    if checked and profile_artifact.get("posts_read"):
+        out.append(
+            f"- LinkedIn posts in the window: {int(profile_artifact.get('in_window_posts') or 0):,}. "
+            f"First-party items in the window (LinkedIn, resolved X and GitHub): {first_party:,}."
+        )
+    elif checked and int(profile_artifact.get("in_window_posts") or 0):
+        out.append(
+            f"- LinkedIn posts in the window: at least {int(profile_artifact.get('in_window_posts') or 0):,}, "
+            "the posts read did not finish. "
+            f"First-party items in the window (LinkedIn, resolved X and GitHub): {first_party:,}."
+        )
+    elif checked:
+        out.append(
+            "- LinkedIn posts in the window: unknown, the posts read did not finish. "
+            f"First-party items in the window (resolved X and GitHub): {first_party:,}."
+        )
+    else:
+        out.append(
+            "- LinkedIn posts in the window: unknown, LinkedIn was not read. "
+            f"First-party items in the window (resolved X and GitHub): {first_party:,}."
+        )
+
+    older = [post for post in profile_artifact.get("older_posts") or [] if isinstance(post, dict)]
+    if older and first_party < _PERSON_THIN_WINDOW:
+        out.append(
+            f"- Older activity on LinkedIn, from before this window opened on {report.range_from} "
+            "and not part of this window's findings:"
+        )
+        for post in older[:_PERSON_OLDER_SHOWN]:
+            parts = [
+                (_person_date(post.get("date")) or "undated")
+                + (" (reshare)" if post.get("is_reshare") else "")
+            ]
+            text = _person_text(post.get("text"), _PERSON_POST_CHARS)
+            link = _markdown_url_link(str(post.get("url") or ""))
+            parts.extend(part for part in (text, link) if part)
+            out.append("  - " + " | ".join(parts))
+
+    counts = profile_artifact.get("dropped_counts")
+    dropped = {
+        str(source): count
+        for source, count in (counts if isinstance(counts, dict) else {}).items()
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+    total = sum(dropped.values())
+    if total:
+        breakdown = ", ".join(
+            f"{_source_label(source)} {count:,}"
+            for source, count in sorted(dropped.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        out.append(
+            f"- Dropped as namesakes: {total:,} item{'s' if total != 1 else ''} that named "
+            f"someone with this name but matched none of this person's anchors ({breakdown})."
+        )
+    return out
+
+
+def _jobs_digest(report: schema.Report) -> dict | None:
+    board = (report.artifacts or {}).get("jobs")
+    digest = board.get("digest") if isinstance(board, dict) else None
+    return digest if isinstance(digest, dict) and digest.get("roles") else None
+
+
+def _render_jobs_digest(report: schema.Report) -> list[str]:
+    """The digest section's lines; see ``_jobs_digest_block``."""
+    return _jobs_digest_block(report)[0]
+
+
+def _jobs_digest_block(report: schema.Report) -> tuple[list[str], set[str]]:
+    """Render the board's role-unique digest as one flat list of roles.
+
+    A header line with the board's own counts, then one line per role: title
+    and posting URL, department, location, posted date when the board gave a
+    true one, and the text no other role on the board repeats. Roles the
+    ranking rejected stay out. The section stops before the character ceiling.
+
+    The second value is the posting URLs of the roles that made it into the
+    section, so a caller that prints the section can leave those roles'
+    snippets out of the ranked evidence.
+    """
+    digest = _jobs_digest(report)
+    if not digest:
+        return [], set()
+    board = report.artifacts["jobs"]
+    rejected = set((report.artifacts.get("hiring_signals") or {}).get("rejected_job_keys") or [])
+    rejected_urls = {
+        item.url
+        for item in report.items_by_source.get("jobs", [])
+        if fusion.candidate_key(item) in rejected
+    }
+    entries = [entry for entry in digest["roles"] if entry.get("url") not in rejected_urls]
+    if not entries:
+        return [], set()
+
+    count = int(board.get("open_roles") or 0)
+    header = [
+        _format_untrusted_evidence(" ".join(str(board.get("company") or report.topic).split()), 80),
+        str(board.get("provider") or "board"),
+        f"{count:,}{'+' if board.get('open_roles_floor') else ''} open role{'s' if count != 1 else ''}",
+    ]
+    new = board.get("new_in_window")
+    if isinstance(new, int) and not isinstance(new, bool):
+        header.append(f"{new:,} posted {report.range_from} to {report.range_to}")
+    distinct = int(digest.get("distinct_roles") or len(entries))
+    ranked_first = 0
+    for entry in entries:
+        if not entry.get("engine"):
+            break
+        ranked_first += 1
+    chosen = (
+        f"the first {ranked_first:,} are the roles this run's own ranking and hiring "
+        "themes put highest, the rest are the rarest on this "
+        if ranked_first else "the rarest on this "
+    )
+    out = [
+        "## Jobs Digest",
+        "",
+        "- Board: " + " | ".join(header),
+        (
+            f"- Roles listed: {len(entries):,} of {distinct:,} distinct roles, {chosen}"
+            "board by department, location and title wording. Each carries the text "
+            "no other role on the board repeats"
+            + _story_search_status(board.get("story_search")) + "."
+        ),
+    ]
+    sites = [site for site in board.get("board_sites") or [] if isinstance(site, dict)]
+    if len(sites) > 1:
+        # A Workday tenant read across its career sites: each site's own count.
+        counts = [(str(site.get("site") or ""), int(site.get("roles") or 0)) for site in sites]
+        out[-1] += f" Read from {len(sites)} Workday sites: " + ", ".join(
+            f"{_escape_markdown_plain_text(name)} ({roles:,} role{'' if roles == 1 else 's'})"
+            for name, roles in counts
+        ) + "."
+    teams = _named_teams_line(digest.get("teams"))
+    if teams:
+        out.append(teams)
+    if digest.get("note"):
+        out.append(f"- Note: {digest['note']}")
+    size = sum(len(line) + 1 for line in out)
+    shown: set[str] = set()
+    for entry in entries:
+        # The title and URL are the board's own text. `_markdown_url_link`
+        # links only a one-line http(s) URL and escapes the rest, so neither
+        # can open a heading, close the evidence block or forge a link.
+        title = " ".join(str(entry.get("title") or "").split()) or "Job posting"
+        url = str(entry.get("url") or "")
+        parts = [
+            _markdown_url_link(url, label=title) or _escape_markdown_plain_text(title)
+        ]
+        parts.extend(
+            _format_untrusted_evidence(" ".join(str(entry[key]).split()), 120)
+            for key in ("department", "location") if entry.get(key)
+        )
+        if entry.get("posted"):
+            parts.append(f"posted {entry['posted']}")
+        if entry.get("story_term"):
+            parts.append("story term: " + _format_untrusted_evidence(
+                " ".join(str(entry["story_term"]).split()), 80))
+        if entry.get("team_lead"):
+            parts.append("new-team lead")
+        team = entry.get("team")
+        if isinstance(team, dict) and team.get("name"):
+            parts.append("team: " + _format_untrusted_evidence(
+                " ".join(str(team["name"]).split()), 80) + f" ({int(team.get('roles') or 0):,} roles)")
+        line = "- " + " | ".join(parts)
+        text = " ".join(str(entry.get("text") or "").split())
+        if text:
+            line += ": " + _format_untrusted_evidence(text, jobs_digest.DIGEST_ROLE_CHARS)
+        if size + len(line) + 1 > jobs_digest.DIGEST_MAX_CHARS:
+            break
+        size += len(line) + 1
+        out.append(line)
+        shown.update(url for url in (entry.get("url"), *(entry.get("urls") or [])) if url)
+    return out, shown
+
+
+def _named_teams_line(teams: object) -> str:
+    """The board's named teams, each with its role count and, when the board
+    gives true posted dates, how many of them were posted in the window.
+    Empty when the board names none."""
+    if not isinstance(teams, list):
+        return ""
+    named = []
+    for team in teams:
+        if not isinstance(team, dict) or not team.get("name"):
+            continue
+        roles = int(team.get("roles") or 0)
+        count = f"{roles:,} roles"
+        if isinstance(team.get("new"), int) and not isinstance(team.get("new"), bool):
+            count += f", {team['new']:,} new"
+        named.append(_format_untrusted_evidence(" ".join(str(team["name"]).split()), 80) + f" ({count})")
+    if not named:
+        return ""
+    return "- Named teams (team names repeated across this board's titles): " + "; ".join(named) + "."
+
+
+def _story_search_status(record: object) -> str:
+    """What a board's story search did, as the end of the Roles listed line:
+    the terms searched and roles matched, no matches, or not run. Empty when
+    the run had no story terms."""
+    if not isinstance(record, dict):
+        return ""
+    if not record.get("ran"):
+        status = "story search: not run"
+    else:
+        terms = len(record.get("terms") or [])
+        matches = int(record.get("matches") or 0)
+        status = (
+            f"story search: {terms} term{'' if terms == 1 else 's'}, "
+            f"{matches:,} match{'' if matches == 1 else 'es'}"
+            if matches else "story search: no matches"
+        )
+    if record.get("story_partial"):
+        status += " (partial)"
+    return f"; {status}"
+
+
+def _patent_digest_block(report: schema.Report) -> list[str]:
+    """The ``## Patent Digest`` section from the run's ``patents`` artifact:
+    the lines ``lib.patent_digest`` builds, with every title, name and passage
+    of patent office text passed through the engine's own escaping. Empty
+    when the run has no artifact or the artifact holds counts only."""
+
+    def link(url: str, title: str) -> str:
+        return _markdown_url_link(url, label=title) or _escape_markdown_plain_text(title)
+
+    return patent_digest.digest_lines(
+        (report.artifacts or {}).get("patents"),
+        link=link,
+        untrusted=_format_untrusted_evidence,
+    )
+
+
+def _patents_footer_line(report: schema.Report) -> str | None:
+    """Build the 📜 Patents footer line from the counts in the ``patents``
+    artifact, whether or not the run read any filing's text.
+
+    Applications published, patents granted and first US publications, all
+    under the company's own names; a ``+`` on each when the search stopped
+    short of its full count. When none is the company's own, all three are
+    those of the other filers with the company's name, and the line ends
+    ``filed as {name}`` so the reader can judge whose they are. Filings of the
+    company a person leads name it: ``📜 Patents at Tesla: ...``. None when
+    the run has no artifact.
+    """
+    artifact = (report.artifacts or {}).get("patents")
+    if not isinstance(artifact, dict) or artifact.get("status") not in {"digest", "counts-only"}:
+        return None
+    counts = artifact.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    count, quantity = patent_digest.count, patent_digest.quantity
+    floor = bool(counts.get("floor"))
+    applications, grants = count(counts.get("applications")), count(counts.get("grants"))
+    first = count(counts.get("first_publications"))
+    filed_as = []
+    others = patent_digest.groups(artifact, patent_digest.NAME_MATCHED)
+    if others and not patent_digest.has_own_filings(artifact, counts):
+        applications = count(counts.get("name_matched_applications"))
+        grants = count(counts.get("name_matched_grants"))
+        first = count(counts.get("name_matched_first_publications"))
+        filed_as = ["filed as " + "; ".join(_footer_safe(group["name"], 60) for group in others)]
+    company = _footer_safe(artifact.get("company") or "", 60)
+    label = f"Patents at {company}" if artifact.get("company_via_person") and company else "Patents"
+    return " │ ".join([
+        f"📜 {label}: {quantity(applications, 'application', floor=floor)} published",
+        f"{grants:,}{'+' if floor else ''} granted",
+        quantity(first, "first US publication", floor=floor),
+        *filed_as,
+    ])
+
+
 def _render_candidate(
     candidate: schema.Candidate,
     prefix: str,
     report: schema.Report | None = None,
+    *,
+    digest_urls: Collection[str] = (),
 ) -> list[str]:
     primary = schema.candidate_primary_item(candidate)
     detail_parts = [
@@ -2330,7 +3227,13 @@ def _render_candidate(
     # should read even at low engagement, not noise.
     interaction_targets = (candidate.metadata or {}).get("interaction_targets")
     if interaction_targets:
-        detail_parts.append("interaction:→@" + ",@".join(interaction_targets[:2]))
+        safe_targets = [
+            _safe_title(str(target))
+            for target in interaction_targets[:2]
+            if _safe_title(str(target))
+        ]
+        if safe_targets:
+            detail_parts.append("interaction:→@" + ",@".join(safe_targets))
     details = " | ".join(part for part in detail_parts if part)
     lines = [
         f"{prefix} [{schema.candidate_source_label(candidate)}] {_safe_title(candidate.title)}"
@@ -2344,28 +3247,32 @@ def _render_candidate(
     corroboration = _format_corroboration(candidate)
     if corroboration:
         lines.append(f"   - {corroboration}")
+    digg_story = _format_digg_confirmation(candidate)
+    if digg_story:
+        lines.append(f"   - {digg_story}")
     explanation = _format_explanation(candidate)
     if explanation:
         lines.append(f"   - Why: {explanation}")
-    if candidate.snippet:
+    # A job description opens with company text every role shares. A role the
+    # caller printed in the Jobs Digest has its own text there instead; any
+    # other posting keeps its snippet.
+    in_digest = bool(
+        primary and primary.source == "jobs" and candidate.url in digest_urls
+    )
+    if candidate.snippet and not in_digest:
         lines.append(
             f"   - Evidence: {_format_untrusted_evidence(candidate.snippet, 360)}"
         )
+    comment_source = _comment_source(primary) if primary else None
     for tc in _top_comments_list(primary):
-        excerpt = tc.get("excerpt") or tc.get("text") or ""
-        score = tc.get("score", "")
-        vote_label = _vote_label_for(primary.source) if primary else "upvotes"
-        source = primary.source if primary else None
-        attribution = _comment_attribution(source, tc.get("author"))
-        vote_part = (
-            f" ({score} {vote_label})"
-            if score is not None and score != ""
-            else ""
-        )
+        excerpt = str(tc.get("excerpt") or tc.get("body") or tc.get("text") or "")
+        vote_label = _vote_label_for(comment_source) if comment_source else "upvotes"
+        attribution = _comment_attribution(comment_source, tc.get("author"))
+        vote_part = _format_vote_part(tc.get("score", ""), vote_label)
         # HN comment lines carry their own link: the candidate URL above is
         # the article, not where the quote was said.
         hn_link = (
-            _comment_link(primary, tc)
+            _sanitize_url_for_single_line_output(_comment_link(primary, tc))
             if primary is not None and primary.source == "hackernews"
             else ""
         )
@@ -2457,57 +3364,232 @@ def _shorten_polymarket_title(title: str) -> str:
     return t
 
 
-def _polymarket_top_markets(
-    items: list[schema.SourceItem], limit: int = 3
-) -> list[str]:
-    """Build short summary strings for the top Polymarket markets by volume.
+def _polymarket_name_key(text: str) -> str:
+    return " ".join((text or "").casefold().split())
 
-    Returns list like: ['UK visit 5.5%', 'Israel visit 8%', 'blocked from entering 36%']
+
+def _polymarket_market_name(question: str, label: object) -> tuple[str, bool]:
+    """Name one market for the footer, saying each thing once.
+
+    Returns the name and whether it is the bare descriptor, which drops the
+    question's deadline and so can read the same for two different markets.
     """
-    # Sort by volume descending
-    sorted_items = sorted(
-        items,
-        key=lambda it: it.engagement.get("volume") or 0,
-        reverse=True,
+    descriptor = _shorten_polymarket_title(question)
+    if not descriptor:
+        return "", True
+    label = ("" if label is None else str(label)).strip()
+    label_key = _polymarket_name_key(label)
+    descriptor_key = _polymarket_name_key(descriptor)
+    descriptor_lead = descriptor_key.split()[0] if descriptor_key else ""
+
+    # The label adds nothing when it is empty, a binary Yes/No proxy, a bare
+    # article ("an"/"the"), the descriptor's leading token, or a copy of the
+    # question cut short ("Jensen Huang announced resignation or re").
+    if (
+        not label_key
+        or label_key in ("yes", "no", "a", "an", "the")
+        or label_key == descriptor_lead
+        or descriptor_key.startswith(label_key)
+        or _polymarket_name_key(question.rstrip("?")).startswith(label_key)
+    ):
+        return descriptor, True
+    # A sub-market named by its own question ("Jensen Huang divorce by March
+    # 31, 2027") already holds the descriptor; the price is that market's.
+    if label_key.startswith(descriptor_key):
+        return label, False
+    return f"{descriptor}: {label}", False
+
+
+_POLYMARKET_MONTHS = {
+    "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+    "june": "Jun", "july": "Jul", "august": "Aug", "september": "Sep",
+    "october": "Oct", "november": "Nov", "december": "Dec",
+}
+_POLYMARKET_DATE = re.compile(
+    rf"\b({'|'.join(_POLYMARKET_MONTHS)})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b",
+    re.IGNORECASE,
+)
+# "market cap be between $2.0T and $2.25T" reads whole without the "be".
+_POLYMARKET_BE = re.compile(
+    r"\bbe\s+(?=(?:between|less than|more than|greater than|at least|at most|above|below|over|under)\b)",
+    re.IGNORECASE,
+)
+
+
+def _polymarket_phrase(question: str) -> str:
+    """A market's whole question as a footer name, with nothing cut off.
+
+    "Will Waymo operate in 12-15 cities on December 31 2026?" ->
+    "Waymo operate in 12-15 cities on Dec 31, 2026". Only the question
+    wrapping goes ("Will", "?", a leading article, the "be" before a
+    comparison) and a month name with a day is shortened; every bracket,
+    place and date stays, so the name says which market the price is for.
+    """
+    text = " ".join((question or "").split()).rstrip("?").strip()
+    if text.lower().startswith("will "):
+        text = _POLYMARKET_BE.sub("", text[5:].strip(), count=1)
+    text = _POLYMARKET_DATE.sub(
+        lambda match: (
+            f"{_POLYMARKET_MONTHS[match.group(1).lower()]} {match.group(2)}"
+            + (f", {match.group(3)}" if match.group(3) else "")
+        ),
+        text,
+    )
+    return re.sub(r"^(?:a|an|the)\s+", "", text, flags=re.IGNORECASE)
+
+
+def _polymarket_headline(item: schema.SourceItem) -> tuple[str, float, str] | None:
+    """The question, price and outcome label the parser chose to stand for the
+    event, or None for an item saved before it chose one."""
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    headline = metadata.get("headline")
+    if not isinstance(headline, dict):
+        return None
+    question = str(headline.get("question") or "").strip()
+    price = headline.get("price")
+    if not question or not _is_finite_number(price):
+        return None
+    return question, float(price), " ".join(str(headline.get("label") or "").split())
+
+
+def _polymarket_names_topic(item: schema.SourceItem, topic: str) -> bool:
+    """Whether a market names the whole topic, read from the event title, its
+    question and its headline. An item carrying a matched market was already
+    judged against the topic, its aliases and related names by the entity
+    matcher, so it is kept; the word check covers items saved by older builds."""
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    if isinstance(metadata.get("matched_market"), dict):
+        return True
+    return polymarket.names_whole_topic(
+        topic,
+        item.title or "",
+        str(metadata.get("question") or ""),
+        (_polymarket_headline(item) or ("",))[0],
     )
 
+
+def _polymarket_footer_entry(
+    item: schema.SourceItem,
+) -> tuple[str, str, str, str] | None:
+    """Extract ``(name, pct, question, label)`` for a priced footer market, or None."""
+    headline = _polymarket_headline(item)
+    if headline:
+        question, price, label = headline
+        pct = _format_polymarket_pct(price)
+        if pct is None:
+            return None
+        name = _polymarket_phrase(question)
+        if not name:
+            return None
+        return (f"{name}: {label}" if label else name, pct, question, label)
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    raw_outcomes = metadata.get("outcome_prices")
+    outcome_prices = raw_outcomes if isinstance(raw_outcomes, (list, tuple)) else []
+    lead_match = next(
+        (
+            (entry[0], pct)
+            for entry in outcome_prices
+            if isinstance(entry, (list, tuple))
+            and len(entry) == 2
+            and (pct := _format_polymarket_pct(entry[1])) is not None
+        ),
+        None,
+    )
+    if lead_match is None:
+        return None
+    lead_name, pct = lead_match
+    lead_name_str = "" if lead_name is None else str(lead_name)
+
+    question = str(metadata.get("question") or item.title or "").strip()
+    name, is_descriptor = _polymarket_market_name(question, lead_name_str)
+    if not name:
+        return None
+    label = "" if is_descriptor else lead_name_str.strip()
+    return (name, pct, question, label)
+
+
+def _polymarket_top_markets(
+    items: list[schema.SourceItem], limit: int = 3, topic: str = "",
+) -> list[str]:
+    """Build summary strings for the top Polymarket markets in selection order.
+
+    Returns list like: ['Waymo launch in Denver, CO by Dec 31, 2026 74%'].
+    Each market is named once, by its whole question, with the price of that
+    same market. With ``topic``, only a market that names the whole topic is
+    listed. An item saved by an older build carries no chosen market and is
+    named the older way: ['UK visit 5.5%', 'blocked from entering 36%'].
+    """
+    if limit <= 0:
+        return []
+    items = [item for item in items if isinstance(item.metadata, dict)]
+    if topic:
+        items = [item for item in items if _polymarket_names_topic(item, topic)]
+    sorted_items = polymarket.by_selection(items)
+
+    # Extract priced entries BEFORE claiming a series slot so an unpriced or
+    # impossible_set market in a recurring count series never blocks the next
+    # priced market in that same series.
+    # One market per series first, a substantive question before a recurring
+    # count bracket ("# tweets this week"); a count series is never repeated,
+    # and another rung of a substantive ladder only fills a slot left over.
+    firsts: list[tuple[schema.SourceItem, tuple[str, str, str, str]]] = []
+    repeats: list[tuple[schema.SourceItem, tuple[str, str, str, str]]] = []
+    seen_series: set[str] = set()
+    for item in sorted_items:
+        entry = _polymarket_footer_entry(item)
+        if entry is None:
+            continue
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        texts = (item.title or "", str(metadata.get("question") or ""))
+        counted = polymarket.is_count_series(*texts)
+        series = polymarket.series_key(*texts)
+        if series and series in seen_series:
+            if not counted:
+                repeats.append((item, entry))
+            continue
+        seen_series.add(series)
+        firsts.append((item, entry))
+    firsts.sort(key=lambda pair: polymarket.is_count_series(
+        pair[0].title or "",
+        str((pair[0].metadata if isinstance(pair[0].metadata, dict) else {}).get("question") or ""),
+    ))
+
+    # (name, pct, question, label when the name is not the bare descriptor)
+    markets: list[tuple[str, str, str, str]] = []
+    seen_markets: set[tuple[str, str]] = set()
+    for _item, (name, pct, question, label) in firsts + repeats:
+        if len(markets) >= limit:
+            break
+        key = (_polymarket_name_key(question), _polymarket_name_key(name))
+        if key in seen_markets:
+            continue
+        seen_markets.add(key)
+        markets.append((name, pct, question, label))
+
+    # Different questions can shorten to one name (a deadline ladder:
+    # "... by March 31, 2027", "... by June 30, 2027"), with or without an
+    # outcome label after it. Name those by the whole question so they read
+    # apart; only the same question listed twice is said once.
+    questions_by_name: dict[str, set[str]] = {}
+    for name, _pct, question, _label in markets:
+        questions_by_name.setdefault(_polymarket_name_key(name), set()).add(
+            _polymarket_name_key(question)
+        )
+
     summaries: list[str] = []
-    for item in sorted_items[:limit]:
-        outcome_prices = item.metadata.get("outcome_prices") or []
-        if not outcome_prices:
+    seen: set[tuple[str, str]] = set()
+    for name, pct, question, label in markets:
+        if len(questions_by_name[_polymarket_name_key(name)]) > 1:
+            whole = question.rstrip("?").strip()
+            if whole.lower().startswith("will "):
+                whole = whole[5:].strip()
+            if whole:
+                name = f"{whole}: {label}" if label else whole
+        key = (_polymarket_name_key(question), _polymarket_name_key(name))
+        if key in seen:
             continue
-
-        lead_name, lead_price = outcome_prices[0]
-        if not isinstance(lead_price, (int, float)):
-            continue
-
-        pct = (
-            f"{lead_price * 100:.0f}%"
-            if lead_price >= 0.1
-            else f"{lead_price * 100:.1f}%"
-        )
-
-        descriptor = _shorten_polymarket_title(
-            item.metadata.get("question") or item.title or ""
-        )
-        if not descriptor:
-            continue
-
-        # Append the outcome name only when it adds information. It's redundant when
-        # empty, a binary Yes/No proxy, a bare article ("an"/"the"), or already the
-        # leading token of the descriptor — appending it then yields noise like
-        # "...score at: an 19%" or a doubled token.
-        label = (lead_name or "").strip()
-        descriptor_lead = descriptor.split()[0].lower() if descriptor.split() else ""
-        redundant = (
-            not label
-            or label.lower() in ("yes", "no", "a", "an", "the")
-            or label.lower() == descriptor_lead
-        )
-        if redundant:
-            summaries.append(f"{descriptor} {pct}")
-        else:
-            summaries.append(f"{descriptor}: {label} {pct}")
+        seen.add(key)
+        summaries.append(f"{name} {pct}")
 
     return summaries
 
@@ -2672,23 +3754,57 @@ _SITE_NAMES: dict[str, str] = {
 }
 
 
+_EXPLICIT_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+_SCHEMELESS_HOST_PORT_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z0-9-]+:[0-9]{1,5}$")
+_SITE_HOST_FORBIDDEN_CHARS = frozenset("<>`~|│\\\"[]")
+
+
 def _site_name_for_url(url: str) -> str:
     """Return a clean publication name for a URL, or a bare domain fallback.
 
-    Strips protocol and ``www.`` from unknowns; checks known publications
-    before falling back. Returns a short readable string, never a raw URL.
+    Strips protocol, userinfo, port, and ``www.`` from unknowns; checks known
+    publications before falling back. Returns a short readable string, never a
+    raw URL or embedded credentials.
     """
     if not url:
         return ""
     u = url.strip()
     if not u:
         return ""
-    # urlparse needs a scheme to resolve the netloc; prepend http:// if missing.
-    parsed = urlparse(u if "://" in u else f"http://{u}")
-    host = (parsed.netloc or parsed.path.split("/", 1)[0]).lower()
-    host = host.removeprefix("www.")
+    # Reject raw control chars before urlparse, which silently strips \t/\r/\n.
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in u):
+        return ""
+    scheme_match = _EXPLICIT_SCHEME_RE.match(u)
+    if scheme_match:
+        if scheme_match.group(1).lower() not in _SAFE_MARKDOWN_LINK_SCHEMES:
+            return ""
+        to_parse = u
+    else:
+        first_seg = re.split(r"[/?#]", u, maxsplit=1)[0]
+        if not first_seg or "@" in first_seg:
+            return ""
+        if ":" in first_seg and not first_seg.startswith("["):
+            if not _SCHEMELESS_HOST_PORT_RE.match(first_seg):
+                return ""
+        to_parse = f"http://{u}"
+    try:
+        parsed = urlparse(to_parse)
+        _ = parsed.port
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if (
+        not host
+        or any(
+            ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F
+            for ch in host
+        )
+        or any(ch in _SITE_HOST_FORBIDDEN_CHARS for ch in host)
+    ):
+        return ""
+    host = _safe_title(host)
     if not host:
-        return u[:40]
+        return ""
     if host in _SITE_NAMES:
         return _SITE_NAMES[host]
     # Try stripping one subdomain level (eu.example.com -> example.com)
@@ -2774,6 +3890,13 @@ _FOOTER_SOURCES: list[tuple[str, str, str, str, list[tuple[str, str]]]] = [
         [("likes", "likes"), ("comments", "comments")],
     ),
     (
+        "linkedin_profile",
+        "👔",
+        "LinkedIn (their posts)",
+        "post",
+        [("likes", "likes"), ("comments", "comments")],
+    ),
+    (
         "github",
         "🐙",
         "GitHub",
@@ -2809,14 +3932,51 @@ _FOOTER_SOURCES: list[tuple[str, str, str, str, list[tuple[str, str]]]] = [
 def _sum_engagement(items: list[schema.SourceItem], key: str) -> int:
     total = 0
     for item in items:
-        value = item.engagement.get(key) if item.engagement else None
-        if value in (None, ""):
+        engagement = item.engagement if isinstance(item.engagement, dict) else {}
+        numeric = _coerce_numeric(engagement.get(key))
+        if numeric is None:
             continue
-        try:
-            total += int(value)
-        except (TypeError, ValueError):
-            continue
+        next_total = total + int(numeric)
+        if not _is_finite_number(next_total):
+            return 0
+        total = next_total
     return total
+
+
+def _on_topic_items(
+    report: schema.Report, items: list[schema.SourceItem],
+) -> list[schema.SourceItem]:
+    """The items whose engagement and voices the footer counts.
+
+    The source dump keeps items the ranking found off topic (one unrelated
+    video carried 12.5M of a Waymo run's 12.7M YouTube views). An item is
+    left out only when the ranking judged it off topic: its candidate fails
+    ``rerank.candidate_counts_for_topic``, or the relevance prune removed it
+    (``rerank.REJECTED_ITEMS_ARTIFACT``). An item with no verdict counts: the
+    fusion's per-author cap and pool size drop on-topic items too. A source
+    left with nothing is counted whole.
+    """
+    rejected = (report.artifacts or {}).get(rerank.REJECTED_ITEMS_ARTIFACT)
+    verdicts = rerank.item_topic_verdicts(
+        report.ranked_candidates or [], report.topic,
+        rejected if isinstance(rejected, list) else None,
+    )
+    kept = [
+        item for item in items
+        if verdicts.get((item.source, item.url or item.item_id)) is not False
+    ]
+    return kept or items
+
+
+# TikTok / Instagram items the host found with its own web search
+# (--shortform-urls) name that lane in the footer.
+HOST_SEARCH_LABEL = "via host search"
+
+
+def _host_search_items(source: str, items) -> bool:
+    return source in ("tiktok", "instagram") and any(
+        (getattr(item, "metadata", None) or {}).get("host_search") for item in items
+    )
 
 
 def _footer_line_for_source(
@@ -2834,8 +3994,17 @@ def _footer_line_for_source(
     return f"{emoji} {label}: {count_str} {plural}"
 
 
-def _build_source_footer_lines(report: schema.Report) -> list[str]:
+def _build_source_footer_lines(
+    report: schema.Report,
+    *,
+    market_windows: list[dict] | None = None,
+    comparison: bool = False,
+) -> list[str]:
     """Return emoji-tree lines for populated sources only (>=1 item).
+
+    ``market_windows`` holds the price windows of every entity of a
+    comparison; left out, the report's own window is used. ``comparison``
+    leaves out the patents line, which describes one company only.
 
     Sources that returned zero items - clean NO_RESULTS or a failure - are
     omitted; their outcome still surfaces in the ## Source Coverage /
@@ -2845,12 +4014,18 @@ def _build_source_footer_lines(report: schema.Report) -> list[str]:
     out: list[str] = []
     for source_key, emoji, label, item_word, engagement_fields in _FOOTER_SOURCES:
         items = report.items_by_source.get(source_key) or []
+        if source_key == "jobs":
+            board_line = _jobs_board_footer_line(report) or _jobs_unreadable_footer_line(report)
+            if board_line:
+                out.append(board_line)
+                continue
         if not items:
             continue
         parts: list[str] = []
+        counted = _on_topic_items(report, items)
         for eng_key, word in engagement_fields:
-            total = _sum_engagement(items, eng_key)
-            if total > 0:
+            total = _sum_engagement(counted, eng_key)
+            if total > 0 and _is_finite_number(total):
                 total_str = f"{total:,}" if total >= 1000 else str(total)
                 parts.append(f"{total_str} {word}")
         # YouTube: always append "M/N with transcripts" so a zero-transcript run
@@ -2871,6 +4046,8 @@ def _build_source_footer_lines(report: schema.Report) -> list[str]:
         if provenance in x_envelope.PROVENANCE_LABELS:
             # Host-fetched X names its lane on the user-facing line too.
             parts.append(f"via {x_envelope.PROVENANCE_LABELS[provenance]}")
+        if _host_search_items(source_key, items):
+            parts.append(HOST_SEARCH_LABEL)
         stats = " │ ".join(parts)
         line = _footer_line_for_source(emoji, label, len(items), item_word, stats)
         # Counts only: run diagnostics live in doctor --postmortem, the saved
@@ -2881,7 +4058,7 @@ def _build_source_footer_lines(report: schema.Report) -> list[str]:
     # Polymarket (special: count + odds string from existing helper)
     polymarket_items = report.items_by_source.get("polymarket") or []
     if polymarket_items:
-        odds = _polymarket_top_markets(polymarket_items, limit=3)
+        odds = _polymarket_top_markets(polymarket_items, limit=3, topic=report.topic)
         odds_str = ", ".join(odds) if odds else ""
         count = len(polymarket_items)
         count_str = f"{count:,}" if count >= 1000 else str(count)
@@ -2891,6 +4068,14 @@ def _build_source_footer_lines(report: schema.Report) -> list[str]:
         else:
             line = f"📊 Polymarket: {count_str} {plural}"
         out.append(line)
+
+    yahoo_finance_line = _yahoo_finance_footer_line(report, market_windows)
+    if yahoo_finance_line:
+        out.append(yahoo_finance_line)
+
+    patents_line = None if comparison else _patents_footer_line(report)
+    if patents_line:
+        out.append(patents_line)
 
     amazon_line = _amazon_footer_line(report)
     if amazon_line:
@@ -2920,6 +4105,176 @@ def _build_source_footer_lines(report: schema.Report) -> list[str]:
     # ## Partial Coverage / ## Source Coverage evidence blocks, so nothing is
     # silently lost; the conclusion surface just stays clean.
     return out
+
+
+def _market_windows(entity_reports: list[tuple[str, schema.Report]]) -> list[dict]:
+    """The price windows of each entity that has any, in entity order."""
+    return [
+        window for _label, report in entity_reports for window in _report_market_windows(report)
+    ]
+
+
+def _report_market_windows(report: schema.Report) -> list[dict]:
+    """A report's price windows: the ``yahoo_finance`` artifact, then the
+    windows in its ``more`` list (a second ticker the host passed)."""
+    first = (report.artifacts or {}).get("yahoo_finance")
+    more = first.get("more") if isinstance(first, dict) else None
+    windows = [first, *(more if isinstance(more, list) else [])]
+    return [window for window in windows if _is_market_window(window)]
+
+
+_MARKET_WINDOW_NUMBERS = ("start_close", "end_close", "change_pct")
+
+
+def _is_market_window(window: object) -> bool:
+    return (
+        isinstance(window, dict)
+        and bool(window.get("symbol"))
+        and all(_is_finite_number(window.get(key)) for key in _MARKET_WINDOW_NUMBERS)
+    )
+
+
+def _signed_percent(value: float) -> str:
+    return f"{value:+.1f}%"
+
+
+def _market_price(value: float, currency: str) -> str:
+    """Dollars as ``$226.32``; any other currency by its code, ``JPY 2,480``,
+    with decimals only when the price has them."""
+    if currency == "USD":
+        return f"${value:,.2f}"
+    number = f"{value:,.0f}" if value == int(value) else f"{value:,.2f}"
+    return f"{_footer_safe(currency, 8)} {number}".strip()
+
+
+def _market_ticker(window: dict, *, name_company: bool) -> str:
+    ticker = _footer_safe(window["symbol"], 16)
+    company = _footer_safe(window.get("company") or "")
+    return f"{ticker} ({company})" if name_company and company else ticker
+
+
+def _market_day(iso_date: str) -> str:
+    try:
+        day = date.fromisoformat(iso_date)
+    except ValueError:
+        return _footer_safe(iso_date, 12)
+    return f"{day:%b} {day.day}"
+
+
+def _yahoo_finance_footer_line(
+    report: schema.Report,
+    market_windows: list[dict] | None = None,
+) -> str | None:
+    """Build the 📈 Yahoo Finance footer line from the price-window artifact.
+
+    One line whatever the number of tickers. A single ticker carries its two
+    closes and its largest daily move; a comparison lists each ticker's change
+    and keeps the line short. A ticker reached through the person who leads
+    the company, or passed by the host for a company that is not the topic,
+    names the company beside it. The S&P 500 segment is present only when the
+    window carries one (US listings).
+    """
+    if market_windows is None:
+        market_windows = _report_market_windows(report)
+    windows = [window for window in market_windows if _is_market_window(window)]
+    if not windows:
+        return None
+    changes = " │ ".join(
+        f"{_market_ticker(window, name_company=bool(window.get('via_person') or window.get('name_company')))} "
+        f"{_signed_percent(window['change_pct'])}"
+        for window in windows
+    )
+    parts = [f"📈 Yahoo Finance: {changes} in the L30"]
+    if len(windows) == 1:
+        currency = str(windows[0].get("currency") or "")
+        parts.append(
+            f"{_market_price(windows[0]['start_close'], currency)} → "
+            f"{_market_price(windows[0]['end_close'], currency)}"
+        )
+    benchmark = next(
+        (
+            window["benchmark"] for window in windows
+            if isinstance(window.get("benchmark"), dict)
+            and _is_finite_number(window["benchmark"].get("change_pct"))
+        ),
+        None,
+    )
+    if benchmark:
+        parts.append(
+            f"{_footer_safe(benchmark.get('name') or '')} "
+            f"{_signed_percent(benchmark['change_pct'])}"
+        )
+    raw_moves = windows[0].get("top_moves")
+    valid_moves = [
+        move
+        for move in (raw_moves if isinstance(raw_moves, (list, tuple)) else [])
+        if isinstance(move, dict)
+        and move.get("date") is not None
+        and str(move.get("date")).strip()
+        and _is_finite_number(move.get("change_pct"))
+    ]
+    if len(windows) == 1 and valid_moves:
+        biggest = valid_moves[0]
+        label = "worst day" if biggest["change_pct"] < 0 else "best day"
+        parts.append(
+            f"{label} {_market_day(str(biggest['date']))} {_signed_percent(biggest['change_pct'])}"
+        )
+    return " │ ".join(parts)
+
+
+def _render_market_data(report: schema.Report, heading: str = "## Market Data") -> list[str]:
+    """The price windows as evidence: the same numbers as the footer line plus
+    the closes around the largest daily moves, ticker after ticker under one
+    heading. Data only."""
+    windows = _report_market_windows(report)
+    if not windows:
+        return []
+    lines = [heading, ""]
+    for window in windows:
+        lines.extend(_market_window_lines(window))
+    return lines
+
+
+def _market_window_lines(window: dict) -> list[str]:
+    if not _is_market_window(window):
+        return []
+    currency = _footer_safe(str(window.get("currency") or ""), 8)
+    lines = [
+        f"- Yahoo Finance daily closes: {_market_ticker(window, name_company=True)}, "
+        f"{currency}, {window.get('range_from')} to {window.get('range_to')}",
+        f"- First close {window['start_close']:,.2f} ({window.get('start_date')}), "
+        f"last close {window['end_close']:,.2f} ({window.get('end_date')}), "
+        f"change {_signed_percent(window['change_pct'])}",
+    ]
+    benchmark = window.get("benchmark")
+    if isinstance(benchmark, dict) and all(
+        _is_finite_number(benchmark.get(key)) for key in _MARKET_WINDOW_NUMBERS
+    ):
+        lines.append(
+            f"- {_footer_safe(benchmark.get('name') or '')} over the same window: "
+            f"{benchmark['start_close']:,.2f} to {benchmark['end_close']:,.2f}, "
+            f"change {_signed_percent(benchmark['change_pct'])}"
+        )
+    raw_moves = window.get("top_moves")
+    valid_moves = [
+        move
+        for move in (raw_moves if isinstance(raw_moves, (list, tuple)) else [])
+        if isinstance(move, dict)
+        and move.get("date") is not None
+        and str(move.get("date")).strip()
+        and all(
+            _is_finite_number(move.get(key))
+            for key in ("previous_close", "close", "change_pct")
+        )
+    ]
+    if valid_moves:
+        lines.append("- Largest daily moves, close to close:")
+        lines.extend(
+            f"  - {_footer_safe(str(move['date']), 20)}: {move['previous_close']:,.2f} to {move['close']:,.2f}, "
+            f"{_signed_percent(move['change_pct'])}"
+            for move in valid_moves
+        )
+    return lines
 
 
 def _amazon_footer_line(report: schema.Report) -> str | None:
@@ -2976,6 +4331,19 @@ def _amazon_footer_line(report: schema.Report) -> str | None:
             parts.append(f"{sum(rated) / len(rated):.1f}★ average")
         if total_ratings:
             parts.append(f"{total_ratings:,} ratings")
+        prices = [
+            float(price) for item in items
+            if isinstance(price := (getattr(item, "metadata", None) or {}).get("price"), (int, float))
+            and not isinstance(price, bool) and price > 0
+            and ((item.metadata.get("currency") or "USD") == "USD")
+        ]
+        if prices:
+            low, high = f"${min(prices):,.0f}", f"${max(prices):,.0f}"
+            parts.append(low if low == high else f"{low} to {high}")
+        # Pulls were fired and none answered: say so, so the inventory form is
+        # not read as a product nobody reviews.
+        if outcome and amazon.REVIEWS_UNAVAILABLE_NOTE in str(outcome.detail or ""):
+            parts.append(amazon.REVIEWS_UNAVAILABLE_NOTE)
         line = f"📦 Amazon: {' │ '.join(parts)}"
         return line
 
@@ -3157,11 +4525,12 @@ def _meta_ads_footer_line(report: schema.Report) -> str | None:
 def _top_voices_footer_line(report: schema.Report) -> str | None:
     """Return the 🗣️ Top voices line or None if no meaningful voices exist.
 
-    Combines top handles (X, Bluesky, Truth Social, YouTube, TikTok, Instagram)
-    and top subreddits, separated by │.
+    Combines top handles (X, Bluesky, Truth Social, YouTube, TikTok, Instagram,
+    Threads), ranked by engagement (``_rank_voice_handles``), and the most
+    frequent subreddits, separated by │.
     """
     handle_items = {
-        source: report.items_by_source.get(source) or []
+        source: _on_topic_items(report, report.items_by_source.get(source) or [])
         for source in (
             "x",
             "bluesky",
@@ -3172,19 +4541,16 @@ def _top_voices_footer_line(report: schema.Report) -> str | None:
             "threads",
         )
     }
-    handle_counts: Counter[str] = Counter()
-    for items in handle_items.values():
-        for item in items:
-            actor = _stats_actor(item)
-            if actor and actor.startswith("@"):
-                handle_counts[actor] += 1
+    top_handles = _rank_voice_handles(
+        [item for items in handle_items.values() for item in items],
+        _subject_x_handle(report),
+    )[:3]
 
     subreddit_counts: Counter[str] = Counter()
-    for item in report.items_by_source.get("reddit") or []:
+    for item in _on_topic_items(report, report.items_by_source.get("reddit") or []):
         if item.container:
             subreddit_counts[f"r/{item.container}"] += 1
 
-    top_handles = [h for h, _ in handle_counts.most_common(3)]
     top_subs = [s for s, _ in subreddit_counts.most_common(3)]
     if not top_handles and not top_subs:
         return None
@@ -3196,7 +4562,13 @@ def _top_voices_footer_line(report: schema.Report) -> str | None:
     return f"🗣️ Top voices: {' │ '.join(parts)}"
 
 
-def _render_emoji_footer(report: schema.Report, save_path: str | None) -> list[str]:
+def _render_emoji_footer(
+    report: schema.Report,
+    save_path: str | None,
+    *,
+    market_windows: list[dict] | None = None,
+    comparison: bool = False,
+) -> list[str]:
     """Produce the deterministic magic footer block.
 
     Returns a list of markdown lines, including enclosing ``---`` separators.
@@ -3205,7 +4577,9 @@ def _render_emoji_footer(report: schema.Report, save_path: str | None) -> list[s
     items but a save path exists, the banner and the 'Raw results saved to' line
     still render so the durable raw-file citation is never silently dropped.
     """
-    source_lines = _build_source_footer_lines(report)
+    source_lines = _build_source_footer_lines(
+        report, market_windows=market_windows, comparison=comparison,
+    )
     voices_line = _top_voices_footer_line(report)
     # The freshness verdict is computed for the report body, but a reader who
     # only scans this footer never sees it — and it is the one line that says
@@ -3213,6 +4587,8 @@ def _render_emoji_footer(report: schema.Report, save_path: str | None) -> list[s
     freshness_warning = _assess_data_freshness(report)
     freshness_line = f"🕒 {freshness_warning}" if freshness_warning else None
     raw_line = f"📎 Raw results saved to {save_path}" if save_path else None
+    # Proxy mode only: what the API key's metered proxy charged this run.
+    proxy_line = proxy.footer_line()
 
     body: list[str] = []
     body.extend(source_lines)
@@ -3224,6 +4600,8 @@ def _render_emoji_footer(report: schema.Report, save_path: str | None) -> list[s
     # its own emptiness.
     if freshness_line and (body or raw_line):
         body.append(freshness_line)
+    if proxy_line:
+        body.append(proxy_line)
     if raw_line:
         body.append(raw_line)
 
@@ -3254,23 +4632,39 @@ def _render_stats(report: schema.Report) -> list[str]:
         for source, items in sorted(report.items_by_source.items())
         if items
     }
-    total_items = sum(len(items) for items in non_empty_sources.values())
     if not non_empty_sources:
         lines.append("- No usable source metrics available.")
         lines.append("")
         return lines
 
-    lines.append(
-        f"- Total evidence: {total_items} item{'s' if total_items != 1 else ''} across "
-        f"{len(non_empty_sources)} source{'s' if len(non_empty_sources) != 1 else ''}"
-    )
-    top_voices = _top_voices_overall(non_empty_sources)
+    # Job postings are roles, not evidence or voices: a company board can hold
+    # thousands, and their department and hiring-system names are not people.
+    # They stay out of the total, its source count and the top voices, and get
+    # their own line below.
+    evidence_sources = {
+        source: items
+        for source, items in non_empty_sources.items()
+        if source != "jobs"
+    }
+    total_items = sum(len(items) for items in evidence_sources.values())
+    if evidence_sources:
+        lines.append(
+            f"- Total evidence: {total_items} item{'s' if total_items != 1 else ''} across "
+            f"{len(evidence_sources)} source{'s' if len(evidence_sources) != 1 else ''}"
+        )
+    subject_handle = _subject_x_handle(report)
+    top_voices = _top_voices_overall(evidence_sources, subject_handle=subject_handle)
     if top_voices:
         lines.append(f"- Top voices: {', '.join(top_voices)}")
     for source, items in non_empty_sources.items():
+        if source == "jobs":
+            lines.append(
+                f"- {_source_label(source)}: {len(items)} role{'s' if len(items) != 1 else ''}"
+            )
+            continue
         if source == "polymarket":
             # Polymarket gets a richer stats line with top market odds
-            market_summaries = _polymarket_top_markets(items)
+            market_summaries = _polymarket_top_markets(items, topic=report.topic)
             if market_summaries:
                 label = f"{len(items)} market{'s' if len(items) != 1 else ''}"
                 parts_str = f"{label} | " + " | ".join(market_summaries)
@@ -3285,22 +4679,29 @@ def _render_stats(report: schema.Report) -> list[str]:
         engagement_summary = _aggregate_engagement(source, items)
         if engagement_summary:
             parts.append(engagement_summary)
-        actor_summary = _top_actor_summary(source, items)
+        actor_summary = _top_actor_summary(
+            source, items, subject_handle=subject_handle if source == "x" else "",
+        )
         if actor_summary:
             parts.append(actor_summary)
         provenance = report.artifacts.get("x_provenance") if source == "x" else None
         if provenance in x_envelope.PROVENANCE_LABELS:
             # Host-fetched lane (--x-posts): name the provenance in the footer.
             parts.append(f"via {x_envelope.PROVENANCE_LABELS[provenance]}")
+        if _host_search_items(source, items):
+            parts.append(HOST_SEARCH_LABEL)
         lines.append(f"- {_source_label(source)}: {' | '.join(parts)}")
     lines.append("")
     return lines
 
 
 def _assess_data_freshness(report: schema.Report) -> str | None:
+    # Job postings are roles on a board, not dated evidence of what people
+    # said: a board can hold thousands, most posted long before the window.
     dated_items = [
         item
-        for items in report.items_by_source.values()
+        for source, items in report.items_by_source.items()
+        if source != "jobs"
         for item in items
         if item.published_at
     ]
@@ -3353,6 +4754,7 @@ ENGAGEMENT_DISPLAY: dict[str, list[tuple[str, str]]] = {
     "bluesky": [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "truthsocial": [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "linkedin": [("likes", "likes"), ("comments", "cmt")],
+    "linkedin_profile": [("likes", "likes"), ("comments", "cmt")],
     "polymarket": [],
     "github": [
         ("stars", "stars"),
@@ -3364,7 +4766,9 @@ ENGAGEMENT_DISPLAY: dict[str, list[tuple[str, str]]] = {
         ("comments", "cmt"),
     ],
     "perplexity": [("citations", "cite")],
-    "digg": [("postCount", "posts"), ("uniqueAuthors", "auth")],
+    # The Digg Score is shown on each story and never summed (see
+    # _aggregate_engagement); postCount holds the story's source count.
+    "digg": [("digg_score", " Digg Score"), ("postCount", "posts"), ("uniqueAuthors", "auth")],
     "trustpilot": [("reviews", "reviews")],
     "amazon": [("ratings", "ratings")],
     "meta_ads": [("variants", "variants")],
@@ -3378,6 +4782,14 @@ def _format_engagement(item: schema.SourceItem | None) -> str | None:
     fields = ENGAGEMENT_DISPLAY.get(item.source)
     if fields:
         text = _fmt_pairs([(engagement.get(field), label) for field, label in fields])
+        if item.source == "reddit" and reddit_refs.score_pending(item.metadata):
+            # A fresh archive snapshot reads 0 or 1 whatever the thread's
+            # real score is, so it is withheld rather than shown.
+            text = ", ".join(part for part in ("score pending", text) if part)
+        matched = (item.metadata or {}).get("matched_comment_date") if item.source == "reddit" else None
+        if matched and str(matched) != str(item.published_at or "")[:10]:
+            # Kept for a comment that falls in the window on an older thread.
+            text = ", ".join(part for part in (text, f"comment {matched}") if part)
     else:
         # Generic fallback: engagement.items() yields (key, value) but
         # _fmt_pairs expects (value, label), so swap them.
@@ -3390,15 +4802,27 @@ def _fmt_pairs(pairs: list[tuple[object, str]]) -> str:
     for value, suffix in pairs:
         if value in (None, "", 0, 0.0):
             continue
-        rendered.append(f"{_format_number(value)}{suffix}")
+        formatted = _format_number(value)
+        if not formatted:
+            continue
+        rendered.append(f"{formatted}{suffix}")
     return ", ".join(rendered)
 
 
 def _format_number(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value)
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
-        return str(value)
+    except (TypeError, ValueError, OverflowError):
+        if isinstance(value, int):
+            return ""
+        try:
+            return str(value)
+        except ValueError:
+            return ""
+    if not math.isfinite(numeric):
+        return ""
     if numeric >= 1000 and numeric.is_integer():
         return f"{int(numeric):,}"
     if numeric.is_integer():
@@ -3410,54 +4834,185 @@ def _aggregate_engagement(source: str, items: list[schema.SourceItem]) -> str | 
     fields = ENGAGEMENT_DISPLAY.get(source)
     if not fields:
         return None
+    # A score or rank says something about one item and is not additive.
+    # Reddit's "score" is its upvote count, which the agent export also
+    # treats as that source's headline counter.
     totals: list[tuple[float | int | None, str]] = []
     for field, label in fields:
-        total = 0
+        if not schema.is_summable_engagement_field(source, field):
+            continue
+        total: int | float = 0
         found = False
+        overflowed = False
         for item in items:
-            value = item.engagement.get(field)
-            if value in (None, ""):
+            engagement = item.engagement if isinstance(item.engagement, dict) else {}
+            numeric = _coerce_numeric(engagement.get(field))
+            if numeric is None:
                 continue
+            next_total = total + numeric
+            if not _is_finite_number(next_total):
+                overflowed = True
+                break
             found = True
-            total += value
-        totals.append((total if found else None, label))
+            total = next_total
+        totals.append((total if found and not overflowed else None, label))
     return _fmt_pairs(totals) or None
 
 
-def _top_actor_summary(source: str, items: list[schema.SourceItem]) -> str | None:
-    actors = _top_actors_for_source(source, items)
-    if not actors:
-        return None
+_BARE_VOICE_HANDLE_SOURCES = {"tiktok", "instagram", "threads"}
+_STATS_VOICE_HANDLE_SOURCES = {"x", "bluesky", "truthsocial"} | _BARE_VOICE_HANDLE_SOURCES
+
+
+def _top_actor_summary(
+    source: str, items: list[schema.SourceItem], *, subject_handle: str = "",
+) -> str | None:
     label = {
         "reddit": "communities",
         "grounding": "domains",
         "youtube": "channels",
         "hackernews": "domains",
     }.get(source, "voices")
-    return f"{label}: {', '.join(actors)}"
+    if source in _STATS_VOICE_HANDLE_SOURCES:
+        actors = _top_voices_overall(
+            {source: items}, limit=3, subject_handle=subject_handle,
+            bare_author_handles=source in _BARE_VOICE_HANDLE_SOURCES,
+        )
+    else:
+        counts = Counter(actor for item in items if (actor := _stats_actor(item)))
+        actors = [actor for actor, _ in counts.most_common(3)]
+    return f"{label}: {', '.join(actors)}" if actors else None
 
 
-def _top_actors_for_source(
-    source: str, items: list[schema.SourceItem], limit: int = 3
+# Top voices rank @handles by what their posts earned, not by how many they
+# posted: a headline-reposting account with ten zero-like posts used to outrank
+# the subject's own account with one viral post (#1449).
+_VOICE_POSTS_PER_HANDLE = 3  # mirrors fusion._MAX_ITEMS_PER_AUTHOR
+_VOICE_MIN_ENGAGEMENT = 5  # likes + reposts + replies over the counted posts
+_VOICE_ENGAGEMENT_KEYS = (
+    ("likes",),
+    ("reposts", "retweets", "shares"),
+    ("replies", "comments"),
+)
+
+
+def _voice_post_engagement(item: schema.SourceItem) -> int | None:
+    """Likes + reposts + replies for one post, or None when it reports none.
+
+    Sources name reposts and replies differently (TikTok ``shares``, Instagram
+    ``comments``); the first key present in each group counts.
+    """
+    engagement = item.engagement if isinstance(item.engagement, dict) else {}
+    total = 0
+    found = False
+    for keys in _VOICE_ENGAGEMENT_KEYS:
+        for key in keys:
+            value = engagement.get(key)
+            if not _is_finite_number(value):
+                continue
+            next_total = total + max(int(value), 0)
+            if not _is_finite_number(next_total):
+                continue
+            total = next_total
+            found = True
+            break
+    return total if found else None
+
+
+def _voice_identity(actor: str, bare_author_handles: bool = False) -> str:
+    return actor.lstrip("@").lower()
+
+
+def _is_voice_handle(item: schema.SourceItem, actor: str, bare_author_handles: bool) -> bool:
+    if bare_author_handles or item.source in _BARE_VOICE_HANDLE_SOURCES:
+        if not item.author or (item.container and item.container != "Polymarket"):
+            return False
+        stripped = actor.lstrip("@")
+        return bool(stripped) and not any(ch.isspace() for ch in stripped)
+    return actor.startswith("@") and bool(actor.lstrip("@"))
+
+
+def _rank_voice_handles(
+    items: list[schema.SourceItem], subject_handle: str = "", *, bare_author_handles: bool = False,
 ) -> list[str]:
-    counts: Counter[str] = Counter()
+    """Every eligible @handle among ``items``, most engaged first.
+
+    A handle's score is the sum of log1p(likes + reposts + replies) over its
+    best ``_VOICE_POSTS_PER_HANDLE`` posts, so volume alone cannot win. A
+    handle whose counted posts total under ``_VOICE_MIN_ENGAGEMENT`` is
+    dropped, except the run's own subject handle. A handle with no engagement
+    metrics at all stays eligible with score 0, since its source does not
+    report them. Ties fall back to counted posts, then the handle. Handles
+    group case-insensitively (X keeps the supplied case), shown in the first
+    spelling seen. Per-source Stats can also accept an unprefixed author handle.
+    """
+    posts: dict[str, list[int | None]] = {}
+    spelling: dict[str, str] = {}
     for item in items:
         actor = _stats_actor(item)
-        if actor:
-            counts[actor] += 1
-    return [actor for actor, _ in counts.most_common(limit)]
+        if actor and _is_voice_handle(item, actor, bare_author_handles):
+            key = _voice_identity(actor, bare_author_handles)
+            display = actor if bare_author_handles else f"@{actor.lstrip('@')}"
+            spelling.setdefault(key, display)
+            posts.setdefault(key, []).append(_voice_post_engagement(item))
+    subject = subject_handle.strip().lstrip("@").lower()
+    ranked: list[tuple[float, int, str]] = []
+    for key, values in posts.items():
+        measured = sorted((v for v in values if v is not None), reverse=True)
+        counted = measured[:_VOICE_POSTS_PER_HANDLE]
+        is_subject = bool(subject) and key.lstrip("@") == subject
+        if measured and sum(counted) < _VOICE_MIN_ENGAGEMENT and not is_subject:
+            continue
+        score = 0.0
+        for v in counted:
+            if not _is_finite_number(v) or v < 0:
+                continue
+            try:
+                term = math.log1p(float(v))
+            except (ValueError, OverflowError):
+                continue
+            if math.isfinite(term):
+                score += term
+        ranked.append((score, min(len(values), _VOICE_POSTS_PER_HANDLE), spelling[key]))
+    ranked.sort(key=lambda entry: (-entry[0], -entry[1], entry[2].lower()))
+    return [handle for _, _, handle in ranked]
 
 
 def _top_voices_overall(
-    items_by_source: dict[str, list[schema.SourceItem]], limit: int = 5
+    items_by_source: dict[str, list[schema.SourceItem]],
+    limit: int = 5,
+    subject_handle: str = "",
+    *,
+    bare_author_handles: bool = False,
 ) -> list[str]:
-    counts: Counter[str] = Counter()
-    for items in items_by_source.values():
-        for item in items:
-            actor = _stats_actor(item)
-            if actor:
-                counts[actor] += 1
-    return [actor for actor, _ in counts.most_common(limit)]
+    """The ``## Stats`` top voices: the most frequent actors across sources.
+
+    Non-handle actors (subreddits, channels, domains) rank by item count as
+    before. @handles are counted at most ``_VOICE_POSTS_PER_HANDLE`` times and
+    only when eligible under ``_rank_voice_handles``; the slots they win are
+    then filled with the eligible handles in engagement order.
+    """
+    all_items = [item for items in items_by_source.values() for item in items]
+    ranked_handles = _rank_voice_handles(
+        all_items, subject_handle, bare_author_handles=bare_author_handles,
+    )
+    eligible = {_voice_identity(handle, bare_author_handles) for handle in ranked_handles}
+    counts: Counter[tuple[bool, str]] = Counter()
+    for item in all_items:
+        actor = _stats_actor(item)
+        if not actor:
+            continue
+        is_handle = _is_voice_handle(item, actor, bare_author_handles)
+        if is_handle:
+            actor = _voice_identity(actor, bare_author_handles)
+        key = (is_handle, actor)
+        if is_handle and (actor not in eligible or counts[key] >= _VOICE_POSTS_PER_HANDLE):
+            continue
+        counts[key] += 1
+    by_engagement = iter(ranked_handles)
+    return [
+        next(by_engagement) if is_handle else actor
+        for (is_handle, actor), _ in counts.most_common(limit)
+    ]
 
 
 def _stats_actor(item: schema.SourceItem) -> str | None:
@@ -3496,10 +5051,27 @@ def _format_corroboration(candidate: schema.Candidate) -> str | None:
     return f"Also on: {', '.join(corroborating)}"
 
 
+def _format_digg_confirmation(candidate: schema.Candidate) -> str | None:
+    """Name the Digg story this item is one of the sources of, if any."""
+    story = (candidate.metadata or {}).get(digg.CONFIRMED_BY_KEY)
+    if not isinstance(story, dict) or not story.get("url"):
+        return None
+    title = _safe_title(str(story.get("title") or "")) or "Digg story"
+    line = f"Also in Digg story: {_markdown_url_link(str(story['url']), label=title)}"
+    counts = []
+    score = story.get("digg_score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        counts.append(f"Digg Score {score:g}")
+    sources = story.get("source_count")
+    if isinstance(sources, int) and not isinstance(sources, bool) and sources > 0:
+        counts.append(f"{sources} sources")
+    return f"{line} ({', '.join(counts)})" if counts else line
+
+
 def _format_explanation(candidate: schema.Candidate) -> str | None:
     if not candidate.explanation or candidate.explanation == "fallback-local-score":
         return None
-    return candidate.explanation
+    return _safe_title(str(candidate.explanation)) or None
 
 
 # Per-source minimum vote counts for showing a top comment in compact emit.
@@ -3542,6 +5114,7 @@ _HANDLE_PREFIX: dict[str, str] = {
     "youtube": "@",
     "instagram": "@",
     "bluesky": "@",
+    "truthsocial": "@",
     "x": "@",
     "threads": "@",
 }
@@ -3554,14 +5127,52 @@ def _comment_attribution(source: str | None, author: str | None) -> str:
     author is captured, or the legacy ``Comment`` marker when the author is
     missing, empty, deleted, or removed.
     """
-    if not author or author in ("[deleted]", "[removed]"):
+    cleaned = _safe_title(str(author or ""))
+    if not cleaned or cleaned in ("[deleted]", "[removed]"):
         return "Comment"
     prefix = _HANDLE_PREFIX.get(source or "", "")
     # Some sources (YouTube/TikTok) already store the author with a leading '@';
     # strip it before re-prefixing so we don't emit '@@handle'.
-    if prefix and author.startswith(prefix):
-        author = author[len(prefix) :]
-    return f"{prefix}{author}" if prefix else author
+    if prefix and cleaned.startswith(prefix):
+        cleaned = cleaned[len(prefix) :].strip()
+    if not cleaned:
+        return "Comment"
+    # A display name with spaces (a YouTube channel, "WSJ Events") is no handle.
+    if any(ch.isspace() for ch in cleaned):
+        return cleaned
+    return f"{prefix}{cleaned}" if prefix else cleaned
+
+
+def _comment_platform_dot(source: str | None) -> str:
+    """The footer's dot for a source ("🟠" for Reddit), or "" when it has none."""
+    for source_key, emoji, *_rest in _FOOTER_SOURCES:
+        if source_key == source:
+            return emoji
+    return ""
+
+
+# Sources whose label names no platform a reader would recognise in a quote
+# attribution ("on Web").
+_SOURCES_WITHOUT_A_PLACE = frozenset({"grounding", "corpus", "perplexity"})
+
+
+def _comment_community(item: schema.SourceItem) -> str:
+    """Where a comment or post was said: ``on r/sub`` for Reddit with a known
+    subreddit, else ``on <platform>`` (``on YouTube``, ``on Hacker News``)."""
+    if item.source == "reddit":
+        subreddit = _safe_title(str(item.container or "")).removeprefix("r/").strip()
+        if subreddit:
+            return f" on r/{subreddit}"
+    if not item.source or item.source in _SOURCES_WITHOUT_A_PLACE:
+        return ""
+    return f" on {_safe_title(_source_label(item.source))}"
+
+
+def _comment_count(score) -> str:
+    """A vote count with thousands separators; other values print as they are."""
+    if isinstance(score, int) and not isinstance(score, bool):
+        return f"{score:,}" if _is_finite_number(score) else ""
+    return str(score)
 
 
 def _comment_link(item: schema.SourceItem, comment: dict, fallback: str = "") -> str:
@@ -3595,21 +5206,47 @@ def _top_comments_list(
     """
     if not item:
         return []
-    comments = item.metadata.get("top_comments") or []
-    if not comments or not isinstance(comments[0], dict):
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    raw_comments = metadata.get("top_comments")
+    if not isinstance(raw_comments, (list, tuple)):
+        return []
+    comments = [c for c in raw_comments if isinstance(c, dict)]
+    if not comments:
         return []
     if min_score is None:
-        min_score = _TOP_COMMENT_MIN_SCORE.get(item.source, 0)
-    return [c for c in comments if (c.get("score") or 0) >= min_score][:limit]
+        min_score = _TOP_COMMENT_MIN_SCORE.get(_comment_source(item), 0)
+    # A pending comment (a fresh archive snapshot, score withheld) is exempt
+    # from the vote floor; it is listed after every scored comment and printed
+    # with no vote count.
+    scored: list[dict] = []
+    pending: list[dict] = []
+    for c in comments:
+        if c.get("score_pending"):
+            pending.append(c)
+            continue
+        raw_score = c.get("score")
+        if raw_score in (None, ""):
+            numeric_score: int | float = 0
+        else:
+            coerced = _coerce_numeric(raw_score)
+            if coerced is None:
+                continue
+            numeric_score = coerced
+        if numeric_score >= min_score:
+            scored.append(c)
+    return (scored + pending)[:limit]
 
 
 def _comment_insight(item: schema.SourceItem | None) -> str | None:
     if not item:
         return None
-    insights = item.metadata.get("comment_insights") or []
-    if not insights:
+    insights = (item.metadata or {}).get("comment_insights")
+    if not isinstance(insights, (list, tuple)):
         return None
-    return str(insights[0]).strip() or None
+    for insight in insights:
+        if isinstance(insight, str) and insight.strip():
+            return insight.strip()
+    return None
 
 
 def _digg_posts_for(item: schema.SourceItem | None, limit: int = 3) -> list[dict]:
@@ -3648,7 +5285,10 @@ def _format_digg_quote(post: dict, body_limit: int = 200) -> str:
 def _transcript_highlights(item: schema.SourceItem | None) -> list[str]:
     if not item or item.source != "youtube":
         return []
-    return (item.metadata.get("transcript_highlights") or [])[:5]
+    raw = (item.metadata or {}).get("transcript_highlights")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [hl for hl in raw if isinstance(hl, str) and hl.strip()][:5]
 
 
 def _source_label(source: str) -> str:
@@ -3711,37 +5351,44 @@ def _render_best_takes(
         return []
     lines = ["## Best Takes", ""]
     for candidate, effective in gems[:limit]:
-        text = candidate.title.strip()
+        text = (candidate.title or "").strip()
         selected_comment_item = None
+        selected_comment = None
         hackernews_take = None
         for item in candidate.source_items:
-            for comment in item.metadata.get("top_comments", [])[:3]:
-                body = (
-                    (
-                        comment.get("body")
+            raw_comments = (
+                item.metadata.get("top_comments")
+                if isinstance(item.metadata, dict)
+                else None
+            )
+            top_comments = (
+                raw_comments[:3] if isinstance(raw_comments, (list, tuple)) else []
+            )
+            for comment in top_comments:
+                if isinstance(comment, dict):
+                    body = str(
+                        comment.get("excerpt")
+                        or comment.get("body")
                         or comment.get("text")
-                        or (
-                            comment.get("excerpt")
-                            if item.source == "hackernews"
-                            else ""
-                        )
                         or ""
                     )
-                    if isinstance(comment, dict)
-                    else str(comment)
-                )
+                elif isinstance(comment, str):
+                    body = comment
+                else:
+                    continue
                 body = body.strip()
                 if not body or len(body) <= 10:
                     continue
                 if item.source == "hackernews" and (
                     hackernews_take is None or len(body) < len(hackernews_take[0])
                 ):
-                    hackernews_take = (body, item)
+                    hackernews_take = (body, item, comment)
                 elif hackernews_take is None and len(body) < len(text):
                     text = body
                     selected_comment_item = item
+                    selected_comment = comment
         if hackernews_take is not None:
-            text, selected_comment_item = hackernews_take
+            text, selected_comment_item, selected_comment = hackernews_take
         attribution_item = (
             selected_comment_item
             or (candidate.source_items[0] if candidate.source_items else None)
@@ -3751,15 +5398,37 @@ def _render_best_takes(
             if selected_comment_item is not None
             else candidate.source
         )
-        source_label = _source_label(attribution_source)
-        author = attribution_item.author if attribution_item else None
-        attribution = (
-            f"@{author} on {source_label}"
-            if author and attribution_source in ("x", "tiktok", "instagram", "threads")
-            else f"{source_label}"
-        )
-        if author and attribution_source == "reddit":
-            container = attribution_item.container if attribution_item else None
+        source_label = _safe_title(_source_label(attribution_source))
+        if attribution_source in ("x", "tiktok", "instagram", "threads"):
+            if selected_comment is not None:
+                comment_author = (
+                    selected_comment.get("author")
+                    if isinstance(selected_comment, dict)
+                    else ""
+                )
+                who = _comment_attribution(attribution_source, comment_author)
+                attribution = f"{who} on {source_label}"
+            else:
+                author = (
+                    _safe_title(str(attribution_item.author or ""))
+                    if attribution_item
+                    else ""
+                )
+                bare = author.lstrip("@").strip()
+                attribution = f"@{bare} on {source_label}" if bare else source_label
+        else:
+            attribution = source_label
+        if attribution_source == "reddit":
+            container = (
+                re.sub(
+                    r"^/?r/",
+                    "",
+                    _safe_title(str(attribution_item.container or "")),
+                    flags=re.IGNORECASE,
+                ).strip()
+                if attribution_item
+                else ""
+            )
             attribution = f"r/{container} comment" if container else "Reddit"
         # fun: is the LLM humor score; flag when crowd votes materially lifted
         # this item's ranking, so a lower-fun item ranking above a higher-fun one
@@ -3767,12 +5436,13 @@ def _render_best_takes(
         crowd_boost = effective - (candidate.fun_score or 0.0)
         crowd_tag = " +crowd" if crowd_boost >= 5.0 else ""
         score_tag = f"(fun:{candidate.fun_score:.0f}{crowd_tag})"
-        reason = (
-            f" -- {candidate.fun_explanation}"
+        clean_reason = (
+            _safe_title(str(candidate.fun_explanation))
             if candidate.fun_explanation
             and candidate.fun_explanation != "heuristic-fallback"
             else ""
         )
+        reason = f" -- {clean_reason}" if clean_reason else ""
         lines.append(
             f'- "{_format_untrusted_evidence(text, 280, continuation_indent="  ")}" '
             f"-- {attribution} {score_tag}{reason}"
@@ -3780,27 +5450,742 @@ def _render_best_takes(
     return lines
 
 
+# Compact output budgets for the three blocks a report's quote lines and
+# first-party paragraphs are written from. Each entry is one line. A report
+# runs up to six quote lines in all, across its six to eight stories, so the
+# pool leaves that choice to the writer rather than making it.
+QUOTE_POOL_LIMIT = 40
+SUBJECT_POSTS_LIMIT = 8
+POLYMARKET_MARKETS_LIMIT = 8
+# An item (a thread, a video, a reel, a story) gives the pool its top comment
+# and its second, by its own order. The best comment on a thread is usually
+# the best quote, and a like count does not rank a comment from one place
+# against a comment from another, so nothing here sorts across items by count.
+_QUOTE_POOL_COMMENTS_PER_ITEM = 2
+# Standalone posts a story may add after its top comments.
+_QUOTE_POOL_POSTS_PER_STORY = 2
+# Sources whose post is itself the quotable text, so the post joins the pool
+# beside the comments other sources carry.
+_QUOTABLE_POST_SOURCES = frozenset(
+    {"x", "threads", "bluesky", "truthsocial", "linkedin"}
+)
+# Sources whose content is spoken, so a line said in the video (a YouTube
+# transcript highlight, a reel's or TikTok's spoken caption) joins the pool as
+# a ``said`` entry beside the comments on it. One per item, the extractor's
+# best, and only from a video with as many likes as a standalone post needs.
+_QUOTABLE_CONTENT_SOURCES = frozenset({"youtube", "tiktok", "instagram"})
+_QUOTE_POOL_CONTENT_PER_ITEM = 1
+# Short-form spoken captions run long sentences together.
+_SHORTFORM_HIGHLIGHT_MAX_WORDS = 70
+# A source author that only names the platform is no author to quote.
+_PLACEHOLDER_POST_AUTHORS = frozenset({"linkedin"})
+# On a platform that counts likes or upvotes, a comment nobody voted for is
+# not a quote (a zero-like reel comment is as often an ad), so it needs one
+# vote, and an item whose top comment has none gives the pool nothing. A
+# standalone post needs ten likes. A source that measures no votes (Hacker
+# News comments) is held to neither. The comment lines inside the ranked
+# clusters are not the pool and keep their own per-source floors.
+_QUOTE_POOL_VOTE_COUNTING_SOURCES = frozenset(
+    {
+        "instagram", "tiktok", "youtube", "x", "reddit", "threads", "bluesky",
+        "linkedin", "github",
+    }
+)
+_QUOTE_POOL_MIN_VOTES = 1
+# The bar an item clears to join the pool at all: position makes its best
+# community comment a "top comment", so on a platform that counts votes that
+# comment needs a few. A one-upvote reply on a small thread is nobody's pick.
+_QUOTE_POOL_ITEM_MIN_TOP_VOTES = 5
+# A small Reddit thread's best comment has few votes to win: the item floor
+# scales with the thread's own score, from 2 on a thread under 40 points to
+# the full 5 at 100.
+_QUOTE_POOL_SMALL_THREAD_MIN_TOP_VOTES = 2
+_QUOTE_POOL_THREAD_SCORE_PER_VOTE = 20
+_QUOTE_POOL_POST_MIN_LIKES = 10
+_QUOTE_POOL_POSITION_LABELS = ("top comment", "#2 comment")
+_QUOTE_POOL_SAID_LABEL = "said"
+_QUOTE_TEXT_LIMIT = 240
+_SUBJECT_POST_TEXT_LIMIT = 280
+
+
+def _one_line_quote(text: str, limit: int) -> str:
+    """Scraped text on one line, bounded and defanged."""
+    return _format_untrusted_evidence(" ".join(str(text or "").split()), limit)
+
+
+_RAW_URL = re.compile(r"(?:https?://|www\.)\S+")
+# A line that quotes the parent comment (markdown ``>``, also as scraped:
+# ``&gt;`` or escaped ``\\>``). The commenter's own words are the other lines.
+_QUOTED_PARENT_LINE = re.compile(r"^\s*(?:\\?>|&gt;)")
+# Emphasis delimiters (``*x*``, ``**x**``, ``__x__``, ``_x_``, ``~~x~~``): the
+# markers that open or close a run, not an asterisk between spaces or an
+# underscore inside a word.
+_EMPHASIS_MARKERS = re.compile(
+    r"(?<![\w*])\*{1,3}(?=[^\s*])|(?<=[^\s*])\*{1,3}(?![\w*])"
+    r"|(?<![\w_])_{1,3}(?=[^\s_])|(?<=[^\s_])_{1,3}(?![\w_])"
+    r"|~~"
+)
+_LEADING_REPLY_HANDLES = re.compile(r"^(?:@\w+[\s,:]*)+")
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s)")
+# A cut at a sentence end must leave at least this much of the quote.
+_QUOTE_MIN_SENTENCE_CUT = 40
+
+
+def _quote_text(text: str, limit: int, *, strip_reply_handles: bool = False) -> str:
+    """Text as a quote line prints it, between one pair of outer quotes.
+
+    One line. Raw URLs are dropped, so a quote line never carries a link or
+    half of one. A reply's leading run of @mentions is dropped on request
+    (the rest stays verbatim). Straight double quotes inside become single
+    ones, so a comment that is itself a quotation does not double the outer
+    pair. Lines that quote the parent comment are dropped, and markdown
+    emphasis markers are removed, since either would break a blockquote line.
+    Text over ``limit`` ends at the last sentence that fits, or failing that at
+    a word, with one ``...``.
+    """
+    own_lines = [
+        line for line in str(text or "").splitlines()
+        if not _QUOTED_PARENT_LINE.match(line)
+    ]
+    flat = " ".join(_RAW_URL.sub(" ", " ".join(own_lines)).split())
+    flat = " ".join(_EMPHASIS_MARKERS.sub("", flat).split())
+    if strip_reply_handles:
+        flat = _LEADING_REPLY_HANDLES.sub("", flat)
+    flat = flat.replace('"', "'")
+    if len(flat) > limit:
+        window = flat[: limit + 1]
+        ends = [
+            match.end()
+            for match in _SENTENCE_END.finditer(window)
+            if _QUOTE_MIN_SENTENCE_CUT <= match.end() <= limit
+        ]
+        if ends:
+            flat = window[: ends[-1]]
+        else:
+            head = flat[: limit - 3]
+            if not flat[limit - 3].isspace() and " " in head:
+                head = head[: head.rfind(" ")]
+            flat = head.rstrip(" .,;:!?") + "..."
+    return _format_untrusted_evidence(flat, len(flat) + 1)
+
+
+def _quote_attribution(
+    item: schema.SourceItem,
+    author: str | None,
+    score,
+    vote_label: str,
+    *,
+    source: str | None = None,
+) -> str:
+    """``🟠 u/author on r/sub · 1,315 upvotes``: the part of a quote line that
+    follows the quoted text, in the shape the report prints it. The count is
+    left out when the source measured none."""
+    effective_source = source or item.source
+    dot = _comment_platform_dot(effective_source)
+    count = (
+        f" · {_comment_count(score)} {vote_label}"
+        if score is not None and score != ""
+        else ""
+    )
+    if effective_source == item.source:
+        community = _comment_community(item)
+    elif effective_source == "reddit":
+        meta = item.metadata if isinstance(item.metadata, dict) else {}
+        raw_sub = meta.get("reddit_subreddit") or ""
+        if not raw_sub:
+            ref = reddit_refs.canonical_thread(str(item.url or ""))
+            raw_sub = ref.subreddit if ref is not None else ""
+        subreddit = _safe_title(str(raw_sub)).removeprefix("r/").strip()
+        community = f" on r/{subreddit}" if subreddit else " on Reddit"
+    else:
+        community = (
+            ""
+            if effective_source in _SOURCES_WITHOUT_A_PLACE
+            else f" on {_safe_title(_source_label(effective_source))}"
+        )
+    return (
+        f"{dot + ' ' if dot else ''}{_comment_attribution(effective_source, author)}"
+        f"{community}{count}"
+    )
+
+
+def _subject_x_handle(report: schema.Report) -> str:
+    """The X handle this run resolved for its subject, lowercased, or ""."""
+    resolved = report.artifacts.get("resolved")
+    if not isinstance(resolved, dict):
+        return ""
+    return str(resolved.get("x_handle") or "").strip().lstrip("@").lower()
+
+
+def _post_likes(item: schema.SourceItem):
+    engagement = item.engagement if isinstance(item.engagement, dict) else {}
+    likes = engagement.get("likes")
+    return likes if _is_finite_number(likes) else None
+
+
+def _render_subject_posts(
+    report: schema.Report, limit: int = SUBJECT_POSTS_LIMIT,
+) -> list[str]:
+    """The subject's own X posts in the window, most liked first.
+
+    These are the posts returned for the resolved ``--x-handle``. Most never
+    reach a shown cluster, so without this block the only copy is the saved
+    file. Each line ends with the post's date and its own URL.
+    """
+    handle = _subject_x_handle(report)
+    if not handle:
+        return []
+    posts = [
+        item
+        for item in report.items_by_source.get("x") or []
+        if (item.author or "").strip().lstrip("@").lower() == handle
+        # A repost is someone else's words.
+        and not (item.body or item.title or "").lstrip().startswith("RT @")
+        # A reply that is only the handles it answers says nothing.
+        and _quote_text(item.body or item.title, _SUBJECT_POST_TEXT_LIMIT, strip_reply_handles=True)
+    ]
+    if not posts:
+        return []
+    posts.sort(key=lambda item: -(_post_likes(item) or 0))
+    lines = [f"## Posts by @{handle}", ""]
+    for item in posts[:limit]:
+        likes = _post_likes(item)
+        quote = _quote_text(
+            item.body or item.title, _SUBJECT_POST_TEXT_LIMIT, strip_reply_handles=True
+        )
+        tail = "".join(
+            f" — {part}"
+            for part in (
+                item.published_at or "",
+                _sanitize_url_for_single_line_output(item.url or ""),
+            )
+            if part
+        )
+        # The quote line's own part ends at the count; date and URL follow it.
+        lines.append(
+            f'- "{quote}" '
+            f"{_quote_attribution(item, item.author, None if likes is None else int(likes), 'likes')}"
+            f"{tail}"
+        )
+    return lines
+
+
+def _polymarket_percent(price: float) -> str:
+    return _format_polymarket_pct(price) or ""
+
+
+# An outcome under this is left off an odds line after the first: it says
+# only that the market gives it almost no chance.
+_ODDS_LINE_MIN_PRICE = 0.05
+_ODDS_PLACEHOLDER = re.compile(r"\s*_{2,}\s*|\s*\.{3}\s*$")
+
+
+def _odds_points(move) -> str:
+    """``(up 2 pts today)``: a change in percentage points, or ""."""
+    if not (isinstance(move, (list, tuple)) and len(move) == 2):
+        return ""
+    points, period = move
+    if not _is_finite_number(points) or not points:
+        return ""
+    size = f"{abs(float(points)):.1f}".rstrip("0").rstrip(".")
+    unit = "pt" if size == "1" else "pts"
+    return f" ({'up' if points > 0 else 'down'} {size} {unit} {_one_line_quote(period, 12)})"
+
+
+def _odds_label(text) -> str:
+    """An outcome's own label on one line, with no long dash: the entry uses
+    one as its separator and the report prints none."""
+    return _one_line_quote(text, 60).replace("\u2013", "-").replace("\u2014", "-")
+
+
+# A market question is one sentence; this only bounds a malformed one. The
+# short limit is for outcome labels: a subject cut at 60 characters lost its
+# deadline or condition.
+_ODDS_SUBJECT_LIMIT = 200
+
+
+def _odds_subject(text: str) -> str:
+    """A market's whole phrase as the line's subject."""
+    phrase = _polymarket_phrase(_ODDS_PLACEHOLDER.sub(" ", text or ""))
+    subject = _one_line_quote(_safe_title(phrase.rstrip(" ?:.,")), _ODDS_SUBJECT_LIMIT)
+    return subject.replace("\u2013", "-").replace("\u2014", "-")
+
+
+def _polymarket_odds(item: schema.SourceItem) -> dict | None:
+    """The stored odds summary, or one built from the listed outcomes for an
+    item saved before the parser stored it."""
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    odds = metadata.get("odds")
+    if isinstance(odds, dict) and isinstance(odds.get("parts"), list) and odds["parts"]:
+        return odds
+    raw_outcomes = metadata.get("outcome_prices")
+    pairs = [
+        (name, price)
+        for name, price in (
+            pair for pair in (raw_outcomes if isinstance(raw_outcomes, (list, tuple)) else [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        )
+        if _format_polymarket_pct(price) is not None
+    ]
+    if not pairs:
+        return None
+    question = str(metadata.get("question") or item.title or "")
+    by_name = {("" if name is None else str(name)).casefold(): price for name, price in pairs}
+    if set(by_name) == {"yes", "no"}:
+        # The snippet is this market's own movement, worded "up 2.5% this
+        # week" for what is a change in points.
+        match = _POLYMARKET_MOVEMENT_PARTS.match(" ".join((item.snippet or "").split()))
+        move = None
+        if match:
+            delta = float(match["size"]) * (1 if match["direction"] == "up" else -1)
+            if _is_finite_number(delta):
+                move = [delta, match["period"]]
+        return {"kind": "single", "subject": question,
+                "parts": [{"price": by_name["yes"], "move": move}]}
+    return {
+        "kind": "outcomes", "subject": item.title or question,
+        "parts": [
+            {"label": "" if name is None else str(name), "price": price, "move": None}
+            for name, price in pairs[:3]
+        ],
+    }
+
+
+_POLYMARKET_MOVEMENT_PARTS = re.compile(
+    r"^(?P<direction>up|down) (?P<size>\d+(?:\.\d+)?)% (?P<period>today|this week|this month)$"
+)
+
+
+def _polymarket_matched_part(
+    item: schema.SourceItem, entries: list[dict],
+) -> tuple[str, dict | None] | None:
+    """The odds-line part for the market the parser matched to the subject,
+    and the odds entry it repeats (left off the rest of the line).
+
+    None when the line already says all of it: no matched market, or one
+    already listed among the outcomes that is neither a top contender nor
+    matched through a related name.
+    """
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    matched = metadata.get("matched_market")
+    if not isinstance(matched, dict):
+        return None
+    price = matched.get("price")
+    if not _is_finite_number(price):
+        return None
+    try:
+        scaled_price = float(price) * 100.0
+    except OverflowError:
+        return None
+    if not math.isfinite(scaled_price):
+        return None
+    def _norm_id(value: object) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    label = " ".join(str(matched.get("label") or "").split())
+    norm_label = label.casefold()
+    matched_market_id = _norm_id(matched.get("market_id"))
+    matched_outcome_id = _norm_id(matched.get("outcome_id"))
+
+    def _ids_present(entry: dict) -> bool:
+        return bool(matched_market_id and _norm_id(entry.get("market_id")))
+
+    def _ids_match(entry: dict) -> bool:
+        if not _ids_present(entry):
+            return False
+        if _norm_id(entry.get("market_id")) != matched_market_id:
+            return False
+        entry_outcome_id = _norm_id(entry.get("outcome_id"))
+        if matched_outcome_id and entry_outcome_id:
+            return entry_outcome_id == matched_outcome_id
+        return True
+
+    same = next(
+        (entry for entry in entries if isinstance(entry, dict) and _ids_match(entry)),
+        None,
+    )
+    if same is None and norm_label:
+        same = next(
+            (
+                entry for entry in entries
+                if isinstance(entry, dict)
+                and not _ids_present(entry)
+                and " ".join(str(entry.get("label") or "").split()).casefold() == norm_label
+            ),
+            None,
+        )
+    if same is None:
+        same = next(
+            (
+                entry for entry in entries
+                if isinstance(entry, dict)
+                and not _ids_present(entry)
+                and not " ".join(str(entry.get("label") or "").split())
+                and _is_finite_number(entry.get("price"))
+                and float(entry.get("price")) == float(price)
+            ),
+            None,
+        )
+    relation = str(matched.get("relation") or "").strip()
+    related = bool(label and matched.get("related_name") and relation)
+    rank, size = matched.get("rank"), matched.get("race_size")
+    contender = (
+        bool(matched.get("contender"))
+        and isinstance(rank, int)
+        and not isinstance(rank, bool)
+        and _is_finite_number(rank)
+        and isinstance(size, int)
+        and not isinstance(size, bool)
+        and _is_finite_number(size)
+    )
+    if same is not None and not (related or contender):
+        return None
+    if related:
+        label = f"{label} ({relation})"
+    percent = f"{scaled_price:.1f}".removesuffix(".0") + "%"
+    text = f"{_odds_label(label)} {percent}" if label else percent
+    if contender:
+        text += f", #{rank} of {size}"
+    return text + _odds_points((same or {}).get("move")), same
+
+
+def _polymarket_odds_line(item: schema.SourceItem, window_year: str) -> str:
+    """``📊 Polymarket · {subject}: {outcome} {price} · ...``: a market's odds
+    as the report prints them on a line of their own.
+
+    At most three outcomes: a deadline ladder's nearest live deadlines in date
+    order (``16% by Dec 31``, the year only when it is not the window's), the
+    leading outcomes of brackets under their own labels (``12-15 at 79%``),
+    or a single market's one price. A movement follows the outcome it belongs
+    to, in points. Never a volume.
+
+    A market the parser matched to the subject leads, by its own label and
+    price: ``San Francisco 49ers 14.5%, #1 of 32``, the rank when the subject
+    is a top contender, and the relation when a related name matched
+    (``Yaxel Lendeborg (player) 34.6%``).
+    """
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    odds = _polymarket_odds(item)
+    if not odds:
+        # The race's other odds were withheld; the subject's own outcome of
+        # the race (the only kind that carries a rank) is still priced on its
+        # own book.
+        own = metadata.get("matched_market")
+        if not isinstance(own, dict) or not (
+            isinstance(own.get("rank"), int)
+            and not isinstance(own.get("rank"), bool)
+            and _is_finite_number(own.get("rank"))
+        ):
+            return ""
+        matched = _polymarket_matched_part(item, [])
+        subject = _odds_subject(str(item.title or ""))
+        if not matched or not subject:
+            return ""
+        return f"📊 Polymarket · {subject}: {matched[0]}"
+    shown_entries = [entry for entry in odds["parts"][:3] if isinstance(entry, dict)]
+    entries = shown_entries
+    parts: list[str] = []
+    matched = _polymarket_matched_part(item, shown_entries)
+    if matched:
+        text, repeated = matched
+        parts.append(text)
+        entries = [entry for entry in shown_entries if entry is not repeated][:2]
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        price = entry.get("price")
+        percent = _format_polymarket_pct(price)
+        if percent is None:
+            continue
+        if (index or matched) and odds.get("kind") != "ladder" and float(price) < _ODDS_LINE_MIN_PRICE:
+            continue
+        by = entry.get("by")
+        if odds.get("kind") == "ladder" and isinstance(by, (list, tuple)) and len(by) == 3:
+            month, day, year = by
+            when = f"{_one_line_quote(month, 4)} {day}"
+            if year and str(year) != window_year:
+                when += f", {year}"
+            text = f"{percent} by {when}"
+        elif entry.get("label"):
+            text = f"{_odds_label(entry['label'])} at {percent}"
+        else:
+            text = percent
+        parts.append(text + _odds_points(entry.get("move")))
+    subject = _odds_subject(str(odds.get("subject") or item.title or ""))
+    if not parts or not subject:
+        return ""
+    return f"📊 Polymarket · {subject}: {' · '.join(parts)}"
+
+
+def _render_polymarket_markets(
+    report: schema.Report, limit: int = POLYMARKET_MARKETS_LIMIT,
+) -> list[str]:
+    """Each market that names the topic, as a ready-to-copy odds line, then
+    metadata: the URL, the close date, and how many outcomes are not listed.
+
+    The copyable part ends before the first `` — ``, as a quote pool entry's
+    does. In selection order, as in the footer, and like the footer it
+    prints odds only, never a dollar amount.
+    """
+    items = polymarket.by_selection([
+        item
+        for item in report.items_by_source.get("polymarket") or []
+        if isinstance(item.metadata, dict) and _polymarket_names_topic(item, report.topic)
+    ])
+    window_year = str(report.range_to or "")[:4]
+    lines: list[str] = []
+    for item in items:
+        odds_line = _polymarket_odds_line(item, window_year)
+        if not odds_line:
+            continue
+        parts = [odds_line]
+        url = _sanitize_url_for_single_line_output(item.url or "")
+        if url:
+            parts.append(url)
+        odds = _polymarket_odds(item) or {}
+        end_date = str(item.metadata.get("end_date") or "").strip()
+        if end_date and odds.get("kind") != "ladder":
+            parts.append(f"closes {_one_line_quote(end_date, 20)}")
+        remaining = item.metadata.get("outcomes_remaining")
+        if isinstance(remaining, int) and _is_finite_number(remaining) and remaining > 0:
+            parts.append(f"+{remaining} more outcome{'s' if remaining != 1 else ''}")
+        lines.append("- " + " — ".join(parts))
+        if len(lines) >= limit:
+            break
+    return ["## Polymarket Markets", "", *lines] if lines else []
+
+
+def _comment_source(item: schema.SourceItem) -> str:
+    meta = item.metadata if isinstance(item.metadata, dict) else {}
+    if item.source != "reddit" and (
+        meta.get("enriched_via") == "arctic"
+        or (
+            item.source in _SOURCES_WITHOUT_A_PLACE
+            and reddit_refs.canonical_thread(str(item.url or "")) is not None
+        )
+    ):
+        return "reddit"
+    return item.source
+
+
+def _reddit_thread_score(item: schema.SourceItem) -> float | None:
+    engagement = item.engagement if isinstance(item.engagement, dict) else {}
+    score = engagement.get("score")
+    if not _is_finite_number(score) and isinstance(item.metadata, dict):
+        score = item.metadata.get("reddit_thread_score")
+    if _is_finite_number(score):
+        return float(score)
+    return None
+
+
+def _quote_pool_item_floor(
+    item: schema.SourceItem, *, score_override: float | None = None,
+) -> int:
+    """Votes an item's top community comment needs for the item to join the pool."""
+    if _comment_source(item) != "reddit":
+        return _QUOTE_POOL_ITEM_MIN_TOP_VOTES
+    score = score_override if score_override is not None else _reddit_thread_score(item)
+    if not _is_finite_number(score):
+        return _QUOTE_POOL_ITEM_MIN_TOP_VOTES
+    return min(
+        _QUOTE_POOL_ITEM_MIN_TOP_VOTES,
+        max(
+            _QUOTE_POOL_SMALL_THREAD_MIN_TOP_VOTES,
+            int(score) // _QUOTE_POOL_THREAD_SCORE_PER_VOTE,
+        ),
+    )
+
+
+_CAPTION_ARTIFACTS = re.compile(r"(?:&gt;|>){2,}\s*")
+
+
+def _clean_spoken(text: str) -> str:
+    """Auto-caption text without speaker-change markers or escaped entities."""
+    unescaped = html.unescape(str(text or ""))
+    return " ".join(_CAPTION_ARTIFACTS.sub(" ", unescaped).split())
+
+
+def _content_quotes(item: schema.SourceItem, topic: str) -> list[str]:
+    """Lines said in a video, best first: YouTube's transcript highlights, or
+    highlights drawn from a reel's or TikTok's spoken caption."""
+    metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    if item.source == "youtube":
+        raw_hl = metadata.get("transcript_highlights")
+        lines = list(raw_hl) if isinstance(raw_hl, (list, tuple)) else []
+    elif not metadata.get("spoken_caption"):
+        # The snippet is the written description when no transcript came back.
+        return []
+    else:
+        from . import youtube_yt
+
+        spoken = _clean_spoken(item.snippet)
+        lines = youtube_yt.extract_transcript_highlights(
+            spoken, topic, max_words=_SHORTFORM_HIGHLIGHT_MAX_WORDS
+        )
+    return [_clean_spoken(line) for line in lines if isinstance(line, str) and line.strip()]
+
+
+def _quote_pool_has_vote(source: str, score) -> bool:
+    """Whether a comment clears the one-vote floor of a vote-counting platform."""
+    if source not in _QUOTE_POOL_VOTE_COUNTING_SOURCES:
+        return True
+    return _is_finite_number(score) and score >= _QUOTE_POOL_MIN_VOTES
+
+
+_BOT_AUTHOR = re.compile(
+    r"\[bot\]$|(?:^|[-_.])bot(?:$|[-_.])|^(?:automoderator|github-actions|dependabot)$",
+    re.IGNORECASE,
+)
+_BOT_TEXT = re.compile(
+    r"automated review|\bi am a bot\b|\bperformed automatically\b", re.IGNORECASE
+)
+_HTML_COMMENT_START = re.compile(r"^\s*<!-\s?-")
+
+
+def _strip_author_prefix(name: str) -> str:
+    bare = name.strip()
+    while True:
+        prev = bare
+        bare = bare.lstrip("@")
+        lower = bare.lower()
+        if lower.startswith("/u/"):
+            bare = bare[3:]
+        elif lower.startswith("u/"):
+            bare = bare[2:]
+        if bare == prev:
+            return bare
+
+
+def _author_key(name: str | None) -> str:
+    """An author name for comparison: no case, no spaces, no ``@`` or ``u/``."""
+    return _strip_author_prefix("".join(str(name or "").split())).lower()
+
+
+def _is_community_comment(item: schema.SourceItem, comment: dict, text: str) -> bool:
+    """False for what is not a reaction from the community, on any platform:
+    a bot's comment, machine markup (an HTML comment), or a comment by the
+    item's own author (a channel's pinned note, the original poster)."""
+    author = str(comment.get("author") or "").strip()
+    author_bare = _strip_author_prefix(author)
+    if _BOT_AUTHOR.search(author_bare) or _BOT_TEXT.search(text):
+        return False
+    if _HTML_COMMENT_START.match(text):
+        return False
+    # The source's own word on it comes first: a channel's display name and
+    # the handle on its comments can differ, and a fan account can share the
+    # name. Names are compared only when the comment was stored without it.
+    if isinstance(comment.get("is_uploader"), bool):
+        return not comment["is_uploader"]
+    return not (_author_key(author) and _author_key(author) == _author_key(item.author))
+
+
+def _comment_entities(report) -> tuple[list[str] | None, str]:
+    """The entities a Reddit comment can be about: the comparison's, or the
+    single topic's primary entity."""
+    from . import rerank
+
+    topic = report.topic or ""
+    compared = _parse_comparison_entities(topic)
+    raw = (report.query_plan.raw_topic if report.query_plan else "") or topic
+    return compared, rerank._primary_entity(raw)
+
+
+def _comparison_entity_mentioned(text: str, name: str) -> bool:
+    """Positive grounding for a comparison entity, with a whole-word fallback
+    when ``_entity_grounding_verdict`` returns None (e.g. <=3-char names like
+    ``Go``, ``AWS``, ``AMD``, or ``X``)."""
+    from . import rerank
+
+    verdict = rerank._entity_grounding_verdict(text, name)
+    if verdict is not None:
+        return verdict
+    cleaned = " ".join(str(name or "").split()).lower()
+    if not cleaned:
+        return False
+    normalized_text = " ".join(str(text or "").split()).lower()
+    return bool(re.search(rf"(?<!\w){re.escape(cleaned)}(?!\w)", normalized_text))
+
+
+def _comment_entity_tags(
+    item: schema.SourceItem,
+    comment: dict,
+    text: str,
+    compared: list[str] | None,
+    entity: str,
+) -> list[str] | None:
+    """Whether a Reddit comment names the topic, and for a comparison which of
+    its entities.
+
+    Returns None when the comment is not quotable. A single-topic run returns
+    ``[]`` for a quotable comment: it names the entity, or it is a top-level
+    reply (``depth`` 0, or unset) to a post whose title does. A comparison has no reply
+    exemption: the comment must itself name an entity, and the result lists
+    each one it names.
+    """
+    from . import rerank
+
+    if compared:
+        tags = [name for name in compared if _comparison_entity_mentioned(text, name)]
+        return tags or None
+    if not entity or rerank._entity_grounded(text, entity):
+        return []
+    # A flat top-comment list (no ``depth`` field) holds top-level replies.
+    if comment.get("depth") in (0, None) and rerank._entity_grounded(item.title or "", entity):
+        return []
+    return None
+
+
+def _quotable(body: str) -> bool:
+    """Long enough to quote, and words rather than a row of emoji."""
+    return len(body) >= 12 and sum(ch.isalnum() for ch in body) >= 4
+
+
 def _render_top_comments(
     report,
-    limit: int = 8,
+    limit: int = QUOTE_POOL_LIMIT,
     *,
     candidates: list[schema.Candidate] | None = None,
+    clusters: list[schema.Cluster] | None = None,
 ) -> list[str]:
-    """Vote-ranked community comments across ALL ranked candidates — not just the
-    top-cluster representatives — surfaced into the EVIDENCE block so the reading
-    model can weave the funniest/highest-engagement lines into the synthesis.
+    """The quote pool: each item's top comment and its second, and the posts
+    of sources whose post is the quotable text, across ALL ranked candidates —
+    not just the top-cluster representatives — surfaced into the EVIDENCE block
+    so the reading model can put the best lines on the report's quote lines.
 
     This exists because `_render_best_takes` only populates when the engine has an
     LLM fun-scorer (a paid provider the subprocess usually lacks), so in normal
     use the funniest comments never reach the model. This block always surfaces
-    the crowd-voted comments and leaves the funny/quotable SELECTION to the model
-    (a capable fun judge). Ranking is per-platform-normalized so one platform
-    can't crowd out the rest; each line carries the verbatim comment/post URL so
-    the model can cite without reconstructing a link.
+    the comments and leaves the funny/quotable SELECTION to the model (a
+    capable fun judge).
+
+    Position chooses and orders the pool, never a like count compared across
+    items. "Position" is the comment's place in the item's own stored list
+    (``metadata["top_comments"]``): by score for Reddit, by like count for
+    TikTok and Instagram, YouTube's own "top comments" order, and Hacker
+    News's thread order. Every story's top comments come first, in the order
+    of the stories (``clusters``, the clusters the output shows, as it numbers
+    them; then every other kept item as ranked), each story's standalone posts
+    after its top comments; then every second comment in the same order. Among
+    a story's entries of one position, those on a candidate that cleared the
+    Best Takes funny floor come first and end ``funny``: the fun score belongs
+    to the candidate, not to one comment.
+
+    Within ``limit`` the shown stories are covered first, taking turns (one top
+    comment each, then the rest round by round, then posts and #2s the same
+    way), then the other items. The printed order stays position first. Every eligibility test (relevance, the one-vote floor,
+    quotable text) runs before duplicates are removed, so a rejected copy of a
+    line never hides an eligible one.
+
+    Every line has one shape, the quote line's own: the quoted text, the
+    platform dot, the author, the subreddit or platform, the count when the
+    source measured one; then metadata: the URL of the comment or of the post
+    it sits on, ``cluster N`` or the title of a thread outside the shown
+    clusters, and the position. The subject's own X posts are left to
+    ``_render_subject_posts``.
     """
-    seen: set[str] = set()
-    scored: list[tuple[float, schema.Candidate, schema.SourceItem, dict, str]] = []
     candidate_pool = report.ranked_candidates if candidates is None else candidates
+    subject_handle = _subject_x_handle(report)
+    compared_entities, comment_entity = _comment_entities(report)
     floor_candidates = [
         cand
         for cand in candidate_pool
@@ -3808,78 +6193,309 @@ def _render_top_comments(
         and (cand.local_relevance or 0.0) >= relevance.RELEVANCE_FLOOR
     ]
     apply_relevance_floor = len(floor_candidates) >= relevance.MIN_ON_TOPIC
-    for cand in candidate_pool:
-        if not _best_take_relevance_ok(cand):
-            continue
+    eligible = [
+        cand
+        for cand in candidate_pool
+        if _best_take_relevance_ok(cand)
         # Skip comments from off-topic threads when enough candidates clear the
         # floor; sparse niche topics still surface their best comments (#641).
-        if (
+        and not (
             apply_relevance_floor
             and (cand.local_relevance or 0.0) < relevance.RELEVANCE_FLOOR
-        ):
-            continue
-        for item in cand.source_items:
-            # Pass min_score=0 here: the cross-platform list deliberately does
-            # NOT gate on the per-platform absolute floor, because a less-watched
-            # video's killer low-vote top comment is gold too. The 3-per-item cap
-            # still applies; cross-platform fairness is handled by the rank-based
-            # round-robin below, and the model makes the final quotable pick.
-            for tc in _top_comments_list(item, min_score=0):
+        )
+    ]
+
+    cluster_number: dict[str, int] = {}
+    for number, cluster in enumerate(clusters or [], start=1):
+        for candidate_id in cluster.candidate_ids:
+            cluster_number.setdefault(candidate_id, number)
+
+    # Stories in order: each shown cluster's candidates as the cluster lists
+    # them, then every other candidate, one story each, as ranked.
+    by_id = {cand.candidate_id: cand for cand in eligible}
+    stories: list[tuple[int | None, list[schema.Candidate]]] = []
+    for number, cluster in enumerate(clusters or [], start=1):
+        members = [
+            by_id[candidate_id]
+            for candidate_id in dict.fromkeys(cluster.candidate_ids)
+            if candidate_id in by_id and cluster_number.get(candidate_id) == number
+        ]
+        if members:
+            stories.append((number, members))
+    stories.extend(
+        (None, [cand]) for cand in eligible if cand.candidate_id not in cluster_number
+    )
+
+    def _reddit_comment_sort_key(comment: dict) -> tuple[int, float]:
+        score = comment.get("score")
+        if not comment.get("score_pending") and _is_finite_number(score):
+            return (0, -float(score))
+        return (1, 0.0)
+
+    def _merge_reddit_group_comments(group: list[schema.SourceItem]) -> list[dict]:
+        merged: list[dict] = []
+        index_by_key: dict[str, int] = {}
+        for member in group:
+            meta = member.metadata if isinstance(member.metadata, dict) else {}
+            raw_comments = meta.get("top_comments")
+            if not isinstance(raw_comments, (list, tuple)):
+                continue
+            for tc in raw_comments:
                 if not isinstance(tc, dict):
                     continue
-                body = (
-                    tc.get("excerpt") or tc.get("text") or tc.get("body") or ""
-                ).strip()
-                if len(body) < 12:
-                    continue
-                key = body[:60].lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                # Blend vote strength (60%) with thread relevance (40%) so comments
-                # from on-topic threads rank above off-topic viral comments.
-                vote_strength = signals.normalized_comment_vote(
-                    item.source, tc.get("score")
+                ckey = reddit_refs.comment_key(tc)
+                existing_idx = index_by_key.get(ckey)
+                if existing_idx is None:
+                    index_by_key[ckey] = len(merged)
+                    merged.append(tc)
+                elif (
+                    _reddit_comment_sort_key(merged[existing_idx])[0] == 1
+                    and _reddit_comment_sort_key(tc)[0] == 0
+                ):
+                    merged[existing_idx] = tc
+        return sorted(merged, key=_reddit_comment_sort_key)
+
+    def entries_for(cand: schema.Candidate) -> list[dict]:
+        funny = (cand.fun_score or 0.0) >= _QUOTE_POOL_FUNNY_FLOOR
+        rows: list[dict] = []
+
+        reddit_groups: dict[str, list[schema.SourceItem]] = {}
+        comment_order: list[tuple[str, object]] = []
+        for item in cand.source_items:
+            comment_source = _comment_source(item)
+            ref = (
+                reddit_refs.canonical_thread(str(item.url or ""))
+                if comment_source == "reddit"
+                else None
+            )
+            if ref is not None:
+                if ref.post_id not in reddit_groups:
+                    reddit_groups[ref.post_id] = [item]
+                    comment_order.append(("reddit_group", ref.post_id))
+                else:
+                    reddit_groups[ref.post_id].append(item)
+            else:
+                comment_order.append(("item", (item, comment_source)))
+
+        for kind, entry_payload in comment_order:
+            if kind == "reddit_group":
+                post_id = entry_payload
+                group = reddit_groups[post_id]
+                display_item = next((it for it in group if it.source == "reddit"), group[0])
+                ordered_group = [display_item, *(it for it in group if it is not display_item)]
+                item = display_item
+                comment_source = "reddit"
+                top_comments = _merge_reddit_group_comments(ordered_group)
+                thread_score = _reddit_thread_score(display_item)
+                if thread_score is None:
+                    alt_scores = [
+                        s for it in ordered_group[1:] if (s := _reddit_thread_score(it)) is not None
+                    ]
+                    thread_score = max(alt_scores) if alt_scores else None
+            else:
+                item, comment_source = entry_payload
+                post_id = None
+                metadata = item.metadata if isinstance(item.metadata, dict) else {}
+                raw_top_comments = metadata.get("top_comments")
+                top_comments = (
+                    raw_top_comments
+                    if isinstance(raw_top_comments, (list, tuple))
+                    else ()
                 )
-                strength = 0.6 * vote_strength + 0.4 * (cand.local_relevance or 0.0)
-                scored.append((strength, cand, item, tc, body))
-    if len(scored) < 2:
+                thread_score = None
+
+            # The item's community comments, in its own order. A bot's, the
+            # item author's own, or one with nothing quotable in it is not a
+            # reaction to quote, so the next comment takes its position.
+            community: list[tuple[dict, str]] = []
+            entity_tags: dict[int, list[str]] = {}
+            for tc in top_comments:
+                if not isinstance(tc, dict):
+                    continue
+                raw = str(tc.get("excerpt") or tc.get("text") or tc.get("body") or "")
+                if not _is_community_comment(item, tc, raw):
+                    continue
+                body = _quote_text(raw, _QUOTE_TEXT_LIMIT)
+                if not _quotable(body):
+                    continue
+                if comment_source == "reddit":
+                    tags = _comment_entity_tags(
+                        item, tc, body, compared_entities, comment_entity
+                    )
+                    if tags is None:
+                        continue
+                    entity_tags[id(tc)] = tags
+                community.append((tc, body))
+            # A pending comment (a fresh archive snapshot, its score withheld)
+            # has no vote count to clear the vote floors with; it is quoted
+            # without one, after every scored line.
+            scored = [(tc, body) for tc, body in community if not tc.get("score_pending")]
+            if scored and comment_source in _QUOTE_POOL_VOTE_COUNTING_SOURCES:
+                top_score = scored[0][0].get("score")
+                if not (
+                    _is_finite_number(top_score)
+                    and top_score >= _quote_pool_item_floor(item, score_override=thread_score)
+                ):
+                    # Too few voted for the item's best comment: skip the item.
+                    community = [
+                        (tc, body) for tc, body in community if tc.get("score_pending")
+                    ]
+            for position, (tc, body) in enumerate(
+                community[:_QUOTE_POOL_COMMENTS_PER_ITEM]
+            ):
+                score = tc.get("score")
+                pending = bool(tc.get("score_pending"))
+                if not pending and not _quote_pool_has_vote(comment_source, score):
+                    continue
+                rows.append({
+                    "pending": pending,
+                    "position": position, "cand": cand, "item": item, "funny": funny,
+                    "comment_source": comment_source,
+                    "reddit_post_id": post_id,
+                    "author": tc.get("author"), "score": score,
+                    "vote_label": _vote_label_for(comment_source), "body": body,
+                    "entities": entity_tags.get(id(tc), []),
+                    # A comment with no link of its own is cited by the item it
+                    # sits on. The candidate's URL is another item's whenever
+                    # the candidate fused several.
+                    "url": _comment_link(item, tc, fallback=item.url or cand.url),
+                })
+
+        for item in cand.source_items:
+            author_key = (item.author or "").strip().lstrip("@").lower()
+            likes = _post_likes(item)
+            text = (item.body or item.title or "").strip()
+            if (
+                item.source in _QUOTABLE_CONTENT_SOURCES
+                and (likes or 0) >= _QUOTE_POOL_POST_MIN_LIKES
+            ):
+                said = [
+                    body
+                    for body in (
+                        _quote_text(line, _QUOTE_TEXT_LIMIT)
+                        for line in _content_quotes(item, report.topic or "")
+                    )
+                    if _quotable(body)
+                ]
+                for body in said[:_QUOTE_POOL_CONTENT_PER_ITEM]:
+                    rows.append({
+                        "position": None, "cand": cand, "item": item, "funny": funny,
+                        "author": item.author, "score": int(likes),
+                        "vote_label": "likes", "body": body,
+                        "url": item.url or cand.url, "said": True,
+                    })
+            if (
+                item.source in _QUOTABLE_POST_SOURCES
+                and author_key
+                and author_key not in _PLACEHOLDER_POST_AUTHORS
+                and not (item.source == "x" and author_key == subject_handle)
+                and (likes or 0) >= _QUOTE_POOL_POST_MIN_LIKES
+                and not text.startswith("RT @")
+            ):
+                body = _quote_text(
+                    text, _QUOTE_TEXT_LIMIT, strip_reply_handles=item.source == "x"
+                )
+                if _quotable(body):
+                    rows.append({
+                        "position": None, "cand": cand, "item": item, "funny": funny,
+                        "author": item.author, "score": int(likes),
+                        "vote_label": "likes", "body": body, "url": item.url or cand.url,
+                    })
+        return rows
+
+    # Per story: (first block: top comments then posts, second block: #2s),
+    # with a story's funny entries leading each position.
+    shown: list[tuple[list[dict], list[dict], list[dict]]] = []
+    other_first: list[dict] = []
+    other_second: list[dict] = []
+    first_order: list[dict] = []
+    second_order: list[dict] = []
+    for number, members in stories:
+        rows = [row for cand in members for row in entries_for(cand)]
+        tops = sorted((r for r in rows if r["position"] == 0), key=lambda r: not r["funny"])
+        posts = sorted((r for r in rows if r["position"] is None), key=lambda r: not r["funny"])
+        posts = posts[:_QUOTE_POOL_POSTS_PER_STORY]
+        seconds = sorted((r for r in rows if r["position"] == 1), key=lambda r: not r["funny"])
+        if number:
+            shown.append((tops, posts, seconds))
+        else:
+            other_first.extend(tops + posts)
+            other_second.extend(seconds)
+        first_order.extend(tops + posts)
+        second_order.extend(seconds)
+
+    def round_by_round(per_story: list[list[dict]]) -> list[dict]:
+        """Every story's first entry, then every story's second, and so on."""
+        return [
+            rows[turn]
+            for turn in range(max((len(rows) for rows in per_story), default=0))
+            for rows in per_story
+            if len(rows) > turn
+        ]
+
+    # Who gets a place within the limit. A cluster has no size cap, so the
+    # shown stories take turns: one top comment each before any gets a second,
+    # then their posts and their #2s the same way. A busy first story cannot
+    # leave a later one with no quote. Other items follow, as ranked.
+    priority = [
+        *round_by_round([tops for tops, _posts, _seconds in shown]),
+        *round_by_round([posts for _tops, posts, _seconds in shown]),
+        *round_by_round([seconds for _tops, _posts, seconds in shown]),
+        *other_first,
+        *other_second,
+    ]
+    # Pending lines carry no vote count, so they never take a place or a
+    # printed position ahead of a scored line from any platform.
+    priority.sort(key=lambda row: bool(row.get("pending")))
+    first_order.sort(key=lambda row: bool(row.get("pending")))
+    second_order.sort(key=lambda row: bool(row.get("pending")))
+
+    # Eligibility is settled above; only now are duplicates removed, and the
+    # limit applied, in the order of who is covered first.
+    kept: set[int] = set()
+    seen: set[str] = set()
+    reddit_thread_counts: dict[str, int] = {}
+    for row in priority:
+        key = row["body"][:60].lower()
+        if key in seen:
+            continue
+        post_id = row.get("reddit_post_id")
+        if post_id and reddit_thread_counts.get(post_id, 0) >= _QUOTE_POOL_COMMENTS_PER_ITEM:
+            continue
+        seen.add(key)
+        if post_id:
+            reddit_thread_counts[post_id] = reddit_thread_counts.get(post_id, 0) + 1
+        if len(kept) < limit:
+            kept.add(id(row))
+    if len(seen) < 2:
         return []
-    # Rank-based cross-platform diversity: group by platform, rank each
-    # platform's comments by within-platform vote strength, then interleave by
-    # rank -- every platform's #1, then every #2, then every #3, and so on. This
-    # makes the top-3-of-each-platform outrank the 4th-of-any and guarantees each
-    # platform's #1 a slot, instead of a global vote sort where one viral
-    # platform sweeps the list. Absolute vote counts are NOT compared across
-    # platforms (a less-watched video's killer 50-like comment is gold too);
-    # vote strength only orders comments *within* a platform and breaks ties
-    # among same-rank picks. The model still makes the final quotable pick.
-    by_source: dict[str, list] = {}
-    for row in scored:
-        by_source.setdefault(row[2].source, []).append(row)
-    for src_rows in by_source.values():
-        src_rows.sort(key=lambda row: -row[0])
-    ordered: list = []
-    deepest = max(len(rows) for rows in by_source.values())
-    for rank in range(deepest):
-        tier = [rows[rank] for rows in by_source.values() if len(rows) > rank]
-        tier.sort(key=lambda row: -row[0])  # among same-rank picks, strongest first
-        ordered.extend(tier)
+
     lines = ["## Top Community Comments", ""]
-    for _strength, cand, item, tc, body in ordered[:limit]:
-        score = tc.get("score", "")
-        vote_label = _vote_label_for(item.source)
-        attribution = _comment_attribution(item.source, tc.get("author"))
-        url = _comment_link(item, tc, fallback=cand.url)
+    for row in (*first_order, *second_order):
+        if id(row) not in kept:
+            continue
+        cand, item, position = row["cand"], row["item"], row["position"]
+        url = _sanitize_url_for_single_line_output(row["url"] or "")
         url_part = f" — {url}" if url else ""
-        vote_part = (
-            f" ({score} {vote_label})"
-            if score is not None and score != ""
-            else ""
-        )
+        number = cluster_number.get(cand.candidate_id)
+        if number:
+            origin = f" — cluster {number}"
+        elif clusters and position is not None:
+            thread = _truncate(_safe_title(cand.title or ""), 60)
+            origin = f' — re: "{thread}"' if thread else ""
+        else:
+            origin = ""
+        if row.get("said"):
+            label = _QUOTE_POOL_SAID_LABEL
+        elif position is None:
+            label = "post"
+        else:
+            label = _QUOTE_POOL_POSITION_LABELS[position]
+        about = f" (about {', '.join(row['entities'])})" if row.get("entities") else ""
         lines.append(
-            f'- "{_format_untrusted_evidence(body, 240, continuation_indent="  ")}" '
-            f"— {attribution}{vote_part}{url_part}"
+            f'- "{row["body"]}" '
+            f"{_quote_attribution(item, row['author'], row['score'], row['vote_label'], source=row.get('comment_source'))}"
+            f"{url_part}{origin} — {label}{about}{' — funny' if row['funny'] else ''}"
         )
     return lines
 
@@ -3929,7 +6545,8 @@ def _format_untrusted_evidence(
     truncated = _truncate(text, limit)
     if not truncated:
         return truncated
-    lines = _defang_engine_sentinels(truncated).splitlines()
+    cleaned = _NON_NEWLINE_CONTROL_CHARS.sub(" ", truncated)
+    lines = _defang_engine_sentinels(cleaned).splitlines()
     safe: list[str] = [_escape_atx_heading_prefix(lines[0])]
     for line in lines[1:]:
         safe.append(continuation_indent + _escape_atx_heading_prefix(line))

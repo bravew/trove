@@ -1,21 +1,20 @@
-"""Reddit public ``.json`` search module (demoted to keyless Tier 0).
+"""Reddit public ``.json`` search helpers, and the keyless lane's entry point.
 
-Reddit's public ``.json`` endpoints now return HTTP 403 from most contexts
-(shreddit anti-bot), so this is no longer the primary free path. The keyless
-pipeline (see reddit_keyless.py) still calls ``search`` as a cheap one-shot
-Tier 0 attempt — a residential machine may occasionally get a 200 — before
-falling through to site search discovery (reddit_search.py) and shreddit
-comment enrichment (reddit_shreddit.py).
+Reddit's anonymous ``.json`` endpoints return HTTP 403 from every context
+since about 2026-05-28, so ``search`` below is no longer wired into any
+production path; it stays as a standalone ``.json`` utility with its own test
+coverage.
 
-``search_reddit_public`` is retained as a compatibility shim that delegates to
-the keyless pipeline, so existing callers (pipeline.py) need no change.
+``search_reddit_public`` is the entry point ``pipeline.py`` calls for the free
+Reddit path. It delegates to ``reddit_keyless.search_and_enrich``, which runs
+the layered keyless paths (site search, the web floor hydrated through Arctic
+Shift, subreddit listings) under per-path health (``reddit_health``): a path
+refused with a 403 is skipped for 6 h across runs, a 429 for the rest of the
+run, and the stream's detail names the path that served.
 
-Endpoints (Tier 0):
+Endpoints (standalone ``search`` only):
 - Global: https://www.reddit.com/search.json?q={query}&sort=relevance&t=month&limit={limit}
 - Subreddit: https://www.reddit.com/r/{sub}/search.json?q={query}&restrict_sr=on&sort=relevance&t=month
-
-Handles 429 rate limits with exponential backoff, HTML anti-bot responses,
-network timeouts, and missing subreddits.
 """
 
 import gzip
@@ -25,9 +24,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from lib import http
+from . import reddit_refs
 
 
 USER_AGENT = (
@@ -204,19 +204,33 @@ def search(
         List of normalized post dicts. Empty list on any failure.
     """
     limit = DEPTH_LIMITS.get(depth, DEPTH_LIMITS["default"])
-    encoded_query = _url_encode(query)
 
     if subreddit:
-        sub = subreddit.removeprefix("r/").strip()
+        sub = reddit_refs.normalize_subreddit(subreddit, allow_all=True)
+        if not sub:
+            _log(f"Invalid subreddit rejected: {subreddit!r}")
+            return []
+        params = [
+            ("q", str(query or "")),
+            ("restrict_sr", "on"),
+            ("sort", "relevance"),
+            ("t", "month"),
+            ("limit", str(limit)),
+            ("raw_json", "1"),
+        ]
         url = (
-            f"https://www.reddit.com/r/{sub}/search.json"
-            f"?q={encoded_query}&restrict_sr=on&sort=relevance&t=month&limit={limit}&raw_json=1"
+            f"https://www.reddit.com/r/{urllib.parse.quote(sub, safe='')}/search.json"
+            f"?{urllib.parse.urlencode(params)}"
         )
     else:
-        url = (
-            f"https://www.reddit.com/search.json"
-            f"?q={encoded_query}&sort=relevance&t=month&limit={limit}&raw_json=1"
-        )
+        params = [
+            ("q", str(query or "")),
+            ("sort", "relevance"),
+            ("t", "month"),
+            ("limit", str(limit)),
+            ("raw_json", "1"),
+        ]
+        url = f"https://www.reddit.com/search.json?{urllib.parse.urlencode(params)}"
 
     data = _fetch_json(url, timeout=timeout)
     posts = _parse_posts(data)
@@ -242,15 +256,19 @@ def search_reddit_public(
     depth: str = "default",
     subreddits: Optional[List[str]] = None,
     dedicated_subreddits: Optional[List[str]] = None,
+    config: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """High-level free Reddit search + enrichment (keyless).
 
     Thin compatibility shim over the keyless pipeline: the legacy ``.json``
     search/enrichment endpoints now return HTTP 403, so this delegates to
-    ``reddit_keyless.search_and_enrich`` (dedicated-sub listings + site search
-    discovery → shreddit comment enrichment; no ``.json`` search). The name and signature
-    are preserved so ``pipeline.py`` and other callers need no change and the
-    ScrapeCreators backup still engages when this returns empty.
+    ``reddit_keyless.search_and_enrich`` (site search, the keyless web floor
+    with Arctic Shift hydration, and dedicated/targeted listings, then comment
+    enrichment; no ``.json`` search). Each path's state for the call lands in
+    ``reddit_keyless.lane_paths()`` when the caller opened one. The name and
+    signature are preserved so ``pipeline.py`` and other callers need no
+    change and the ScrapeCreators backup still engages when this returns
+    empty.
 
     The module-level ``search`` / ``_parse_posts`` helpers remain as a
     standalone ``.json`` search utility (own test coverage), no longer wired
@@ -262,13 +280,21 @@ def search_reddit_public(
         to_date: End date (YYYY-MM-DD)
         depth: 'quick', 'default', or 'deep'
         subreddits: Optional list of subreddit names (without r/) for targeted search
+        dedicated_subreddits: Optional list of entity-home subreddits (without r/)
+        config: Optional pre-loaded per-run config mapping.
 
     Returns:
         List of normalized item dicts matching ScrapeCreators output format.
         Empty list on total failure (so SC backup can engage).
     """
     from . import reddit_keyless
+    kwargs: Dict[str, Any] = {
+        "depth": depth,
+        "subreddits": subreddits,
+        "dedicated_subreddits": dedicated_subreddits,
+    }
+    if config is not None:
+        kwargs["config"] = config
     return reddit_keyless.search_and_enrich(
-        topic, from_date, to_date, depth=depth, subreddits=subreddits,
-        dedicated_subreddits=dedicated_subreddits,
+        topic, from_date, to_date, **kwargs,
     )

@@ -62,13 +62,16 @@ DEPTH_CONFIG = {
 }
 
 SEARCH_TIMEOUT = 90
-REVIEW_TIMEOUT = 180
+REVIEW_TIMEOUT = 60
 
 # Wall-clock ceiling for the whole parallel review lane. Pulls that miss it
 # are abandoned, and their products degrade to `quiet` rather than
-# disappearing (a slow SKU is real and unrelated to the cap: one live pull
-# took 115s).
-LANE_DEADLINE = 180
+# disappearing. One minute, down from three: a healthy pull answers in about
+# 20s, and when the provider's review scraper does not answer at all (live
+# 2026-11-10: no records after 180s while the product search took 16s) the
+# run should lose a minute to it, not three. A slow SKU (one live pull took
+# 115s) now reads `quiet` too.
+LANE_DEADLINE = 60
 
 # The engine's foreground contract. The lane deadline is clamped against
 # whatever remains of it, minus room to render.
@@ -77,9 +80,24 @@ RENDER_MARGIN = 20
 
 # Minimum useful budget for the review lane. Below this threshold, Bright
 # Data pulls reliably time out (cli_timeout = max(5, timeout-10), so budget
-# 11s → CLI timeout 1s). Crumbs are a skip, not a short timeout: firing
-# doomed pulls still spends 3 credits with no reviews returned.
-MIN_USEFUL_REVIEW_BUDGET = 90
+# 11s → CLI timeout 1s; 45s leaves the CLI 35s against a ~20s healthy pull).
+# Crumbs are a skip, not a short timeout: firing doomed pulls still spends 3
+# credits with no reviews returned.
+MIN_USEFUL_REVIEW_BUDGET = 45
+
+# Footer and Partial Coverage wording for a review lane whose every pull
+# failed or missed the deadline: the products and their search stats still
+# stand, and the reader is told why there are no review excerpts.
+REVIEWS_UNAVAILABLE_NOTE = "written reviews unavailable from the provider this run"
+_REVIEWS_UNAVAILABLE_STATUSES = ("review lane timed out", "review pulls failed")
+
+
+def outcome_detail(status: str) -> str:
+    """The source-outcome detail for an ``enrich_with_reviews`` status."""
+    if status in _REVIEWS_UNAVAILABLE_STATUSES:
+        return f"{REVIEWS_UNAVAILABLE_NOTE} ({status})"
+    return status
+
 
 # Minimum dated reviews inside the window before a drift arrow is honest.
 # Live census: a 50-cap pull returned 31 records of which only 5 were
@@ -531,15 +549,18 @@ def parse_reviews(response: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[
     return comments, stats
 
 
-def _remaining_lane_budget(elapsed: float) -> int:
+def _remaining_lane_budget(elapsed: float, deadline: Optional[float] = None) -> int:
     """Compute the review lane's wall-clock budget.
 
     Returns the lesser of LANE_DEADLINE and whatever remains of the foreground
-    contract. If the remaining time is below MIN_USEFUL_REVIEW_BUDGET, returns
-    0 (skip the lane entirely) rather than firing doomed short pulls that spend
-    Bright Data credits without returning reviews.
+    contract (and ``deadline``, when provided). If the remaining time is below
+    MIN_USEFUL_REVIEW_BUDGET, returns 0 (skip the lane entirely) rather than
+    firing doomed short pulls that spend Bright Data credits without returning
+    reviews.
     """
     remaining = FOREGROUND_CONTRACT - elapsed - RENDER_MARGIN
+    if deadline is not None:
+        remaining = min(remaining, deadline - time.monotonic())
     if remaining < MIN_USEFUL_REVIEW_BUDGET:
         return 0
     return int(min(LANE_DEADLINE, remaining))
@@ -555,6 +576,7 @@ def enrich_with_reviews(
     brand: str = "",
     keyword: str = "",
     fetcher=None,
+    deadline: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Attach review samples to the top products, in parallel, under a deadline.
 
@@ -567,7 +589,11 @@ def enrich_with_reviews(
     Returns (enriched_products, status_detail). status_detail is None when
     enrichment succeeded normally, or a string describing a degraded outcome:
     - ``"review lane skipped (budget 0s)"`` -- crumb budget, lane did not run
-    - ``"review lane timed out"`` -- all pulls dropped by the deadline
+    - ``"review lane timed out"`` -- no pull completed and the deadline dropped some
+    - ``"review pulls failed"`` -- no pull completed; each one errored
+
+    Every product is stamped ``reviews_attempted`` once pulls were fired, so
+    finalize does not fire (and wait on) the same lane a second time.
     """
     enriched = [dict(p) for p in products]
     pull_count = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["default"])
@@ -575,7 +601,7 @@ def enrich_with_reviews(
         _log(f"depth={depth}: discovery only, no review pulls")
         return enriched, None
 
-    budget = _remaining_lane_budget(elapsed)
+    budget = _remaining_lane_budget(elapsed, deadline=deadline)
     if budget <= 0:
         _log(f"review lane skipped (budget {budget}s, floor {MIN_USEFUL_REVIEW_BUDGET}s)")
         return enriched, "review lane skipped (budget 0s)"
@@ -587,6 +613,8 @@ def enrich_with_reviews(
         return enriched, None
 
     by_asin = {p["asin"]: p for p in enriched}
+    for product in enriched:
+        product["reviews_attempted"] = True
     pull = fetcher or (
         lambda url: fetch_reviews(
             url, max_reviews=max_reviews, config=config,
@@ -634,10 +662,11 @@ def enrich_with_reviews(
 
     _log(f"review lane finished in {time.monotonic() - started:.0f}s")
 
-    # Report degraded outcome if all pulls dropped (none completed)
+    # Report a degraded outcome when no pull completed: dropped by the
+    # deadline, or each one came back as an error.
     status_detail = None
-    if completed_count == 0 and dropped_count > 0:
-        status_detail = "review lane timed out"
+    if completed_count == 0:
+        status_detail = "review lane timed out" if dropped_count else "review pulls failed"
 
     return enriched, status_detail
 
@@ -651,6 +680,7 @@ def enrich_source_items(
     elapsed: float = 0.0,
     max_reviews: int = MAX_REVIEWS,
     fetcher=None,
+    deadline: Optional[float] = None,
 ) -> List[Any]:
     """Attach review samples to the amazon SourceItems that survived dedupe.
 
@@ -667,7 +697,7 @@ def enrich_source_items(
             continue
         metadata = getattr(item, "metadata", None) or {}
         asin = str(metadata.get("asin") or "").strip()
-        if not asin or metadata.get("top_comments"):
+        if not asin or metadata.get("top_comments") or metadata.get("reviews_attempted"):
             continue
         products.append(
             {
@@ -688,6 +718,7 @@ def enrich_source_items(
     enriched, _status = enrich_with_reviews(
         products, depth=depth, config=config, elapsed=elapsed,
         max_reviews=max_reviews, keyword=keyword, fetcher=fetcher,
+        deadline=deadline,
     )
     for product in enriched:
         item = by_asin.get(product["asin"])

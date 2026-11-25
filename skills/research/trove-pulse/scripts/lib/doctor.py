@@ -47,6 +47,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import time
 import urllib.error
@@ -54,7 +55,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import backends, brightdata, env, health, http, prescriptions, reddit_search, x_api
+from . import (
+    backends,
+    brightdata,
+    deepline,
+    digg,
+    env,
+    health,
+    http,
+    prescriptions,
+    private_files,
+    proxy,
+    reddit_health,
+    trustpilot,
+    x_api,
+)
 from .backends import TIER_ERROR, TIER_OK, TIER_WARN
 
 # Rollup tiers (R1). ok/warn/error are U2's; only "off" is doctor's own.
@@ -67,6 +82,7 @@ TIER_BY_STATUS: Dict[str, str] = {
     health.DEGRADED: TIER_WARN,
     "opt-in": TIER_OFF,
     "unconfigured": TIER_OFF,
+    "excluded": TIER_OFF,
     health.MISSING: TIER_ERROR,
     health.BROKEN: TIER_ERROR,
     health.TIMEOUT: TIER_ERROR,
@@ -100,9 +116,12 @@ AUDIT_GROUPS = (
 )
 
 # Sources that need neither credentials nor a CLI: they always serve, so with
-# no run evidence and no probe they are WORKING, not UNVERIFIED.
+# no run evidence and no probe they are WORKING, not UNVERIFIED. Reddit is not
+# one: every anonymous Reddit route closed in 2026, and its keyless floor rides
+# third-party web search and an archive that can each refuse this network, so
+# it is WORKING only on run or probe evidence.
 KEYLESS_ALWAYS_ON = frozenset(
-    {"reddit", "hackernews", "polymarket", "github", "library"}
+    {"hackernews", "polymarket", "github", "library"}
 )
 
 # Fresh-run outcome states -> audit bucket for a tier-ok source. Anything not
@@ -140,6 +159,8 @@ def audit_state(
             return AUDIT_UNVERIFIED
         return AUDIT_NOT_WORKING
     if probe_result is not None:
+        if probe_result.get("partial"):
+            return AUDIT_UNVERIFIED
         if probe_result.get("ok"):
             return AUDIT_WORKING
         # A transient refusal (host rate-limited THIS probe) is not evidence the
@@ -165,6 +186,7 @@ SOURCE_ORDER = (
     "digg",
     "techmeme",
     "arxiv",
+    "yahoo_finance",
     "trustpilot",
     "amazon",
     "meta_ads",
@@ -176,9 +198,11 @@ SOURCE_ORDER = (
     "truthsocial",
     "perplexity",
     "linkedin",
+    "deepline",
     "pinterest",
     "xiaohongshu",
     "jobs",
+    "patents",
     "library",
 )
 
@@ -192,6 +216,7 @@ CLI_DEPENDENCIES = {
     "digg": "digg-pp-cli",
     "techmeme": "techmeme-pp-cli",
     "arxiv": "arxiv-pp-cli",
+    "yahoo_finance": "yahoo-finance-pp-cli",
     "trustpilot": "trustpilot-pp-cli",
     # The only entry that also needs auth; _amazon_record reports the
     # installed-but-unauthenticated state the shared CLI helper cannot.
@@ -206,6 +231,8 @@ KEY_PRESENCE_VARS = (
     "XAI_API_KEY",
     "XQUIK_API_KEY",
     "X_BEARER_TOKEN",
+    "DEEPLINE_API_KEY",
+    "BRIGHTDATA_API_KEY",
     "BRAVE_API_KEY",
     "EXA_API_KEY",
     "SERPER_API_KEY",
@@ -214,6 +241,7 @@ KEY_PRESENCE_VARS = (
     "OPENAI_API_KEY",
     "GOOGLE_API_KEY",
     "GEMINI_API_KEY",
+    "GOOGLE_GENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "PERPLEXITY_API_KEY",
     "GITHUB_TOKEN",
@@ -353,7 +381,24 @@ def _chained_record(source: str, config: Dict[str, Any]) -> Dict[str, Any]:
                        fix=res.prescription,
                        requires=active.requires if active else "", **common)
 
-    # res.tier == error: separate "nothing configured" (tier off) from
+    # res.tier == error: when explicitly pinned, attribute status/detail/requires/fix
+    # strictly to the pinned backend rather than unrelated chain entries.
+    if res.pinned and res.pin in by_name:
+        pinned_finding = by_name[res.pin]
+        pin_status = (
+            pinned_finding.status
+            if pinned_finding.status in TIER_BY_STATUS
+            else health.ERROR
+        )
+        return _record(
+            status=pin_status,
+            fix=pinned_finding.prescription or res.prescription,
+            detail=pinned_finding.detail,
+            requires=pinned_finding.requires,
+            **common,
+        )
+
+    # Unpinned error: separate "nothing configured" (tier off) from
     # "configured but broken" (tier error).
     if res.findings and all(f.status == health.MISSING for f in res.findings):
         return _record(
@@ -393,12 +438,42 @@ def _sc_fix() -> str:
     return _fix_text(prescriptions.get("scrapecreators", "key_missing"))
 
 
+def _sc_key_detail(config: Dict[str, Any]) -> str:
+    """How the ScrapeCreators lane is keyed: the user's key or the API key proxy."""
+    if proxy.is_sentinel(config.get("SCRAPECREATORS_API_KEY")):
+        return "ScrapeCreators via API key"
+    return "SCRAPECREATORS_API_KEY present"
+
+
 def _sc_gated_record(config: Dict[str, Any], purpose: str) -> Dict[str, Any]:
     if config.get("SCRAPECREATORS_API_KEY"):
         return _record(status=health.OK, requires="SCRAPECREATORS_API_KEY",
-                       detail=f"SCRAPECREATORS_API_KEY present ({purpose})")
+                       detail=f"{_sc_key_detail(config)} ({purpose})")
+    if purpose in ("tiktok", "instagram") and env.is_shortform_oss_available(config, purpose):
+        return _record(
+            status=health.OK,
+            requires="yt-dlp + web discovery (SearXNG/Serper/Exa/Brave/keyless floor/host search)",
+            detail=_shortform_keyless_detail(config, purpose),
+        )
     return _record(status="unconfigured", requires="SCRAPECREATORS_API_KEY",
                    fix=_sc_fix())
+
+
+def _shortform_keyless_detail(config: Dict[str, Any], purpose: str) -> str:
+    """Which discovery sources the keyless lane has, and how much to expect.
+
+    Exa serves no Instagram posts, so its key is not listed there.
+    """
+    armed = ", ".join(env.shortform_discovery_sources(config, purpose))
+    if purpose == "instagram":
+        return (
+            f"keyless lane armed via {armed}; best effort, low recall (public pages, "
+            "no views or comments); ScrapeCreators key absent"
+        )
+    comments = ("top comments from the public endpoint" if env.is_tiktok_public_comments_on(config)
+                else "comments off")
+    return (f"keyless lane armed via {armed}; {comments}; finds videos through "
+            "creators, not keyword search; ScrapeCreators key absent")
 
 
 def _sc_optin_record(config: Dict[str, Any], source: str, purpose: str) -> Dict[str, Any]:
@@ -415,7 +490,7 @@ def _sc_optin_record(config: Dict[str, Any], source: str, purpose: str) -> Dict[
         return _record(status="unconfigured", requires=requires, fix=_sc_fix())
     if source in env.include_sources(config):
         return _record(status=health.OK, requires=requires,
-                       detail=f"SCRAPECREATORS_API_KEY present ({purpose})")
+                       detail=f"{_sc_key_detail(config)} ({purpose})")
     return _record(
         status="opt-in", requires=requires,
         fix=f"add {source} to INCLUDE_SOURCES (or request it via --search {source})",
@@ -499,7 +574,25 @@ def _x_record(config):
     # HOWEVER: pending bird must NOT replace a record that has a configured
     # auto-chain backend in ERROR/DEGRADED/BROKEN/TIMEOUT. Same rule as the
     # grok normalizer: only upgrade when no auto backend is configured-but-broken.
+    pin = env.x_backend_pin(config)
     auto_chain_names = set(env.x_auto_chain(config))
+    all_auto_missing = all(
+        b.get("status") == health.MISSING
+        for b in record.get("backends", []) if b.get("name") in auto_chain_names
+    )
+    bird_finding = next(
+        (b for b in record.get("backends", []) if b.get("name") == "bird"),
+        None,
+    )
+    pinned_bird_missing = bool(
+        record.get("pinned")
+        and pin == "bird"
+        and bird_finding is not None
+        and bird_finding.get("status") == health.MISSING
+    )
+    can_apply_browser_auth = (
+        (not record.get("pinned") and all_auto_missing) or pinned_bird_missing
+    )
     pending_bird = policy.cookie_discovery and env.x_pending_browser_auth(
         config, local_only=True
     )
@@ -513,22 +606,20 @@ def _x_record(config):
         denied_browsers = sorted(reported_denials & known_browsers)
     else:
         denied_browsers = []
-    if denied_browsers and record.get("pinned") and env.x_backend_pin(config) != "bird":
+    if denied_browsers and record.get("pinned") and pin != "bird":
         observation = (
             "Last setup: permission denied reading X cookies from "
             f"{', '.join(denied_browsers)}; current access not checked"
         )
         record["note"] = f"{record['note']}; {observation}" if record["note"] else observation
         return record
-    if (pending_bird or denied_browsers) and record["status"] in ("unconfigured", health.ERROR):
-        backends_list = record.get("backends", [])
-        auto_backends = [b for b in backends_list if b.get("name") in auto_chain_names]
-        # Only apply pending-bird upgrade if ALL auto-chain backends are MISSING.
-        # If any auto backend is configured but broken, keep that error.
-        all_auto_missing = all(
-            b.get("status") == health.MISSING for b in auto_backends
-        )
-        if all_auto_missing:
+    if (pending_bird or denied_browsers) and record["status"] in (
+        "unconfigured", health.ERROR, health.MISSING,
+    ):
+        # Apply pending-bird / browser-cookie denial only when unpinned with all
+        # auto-chain backends missing, or when pinned specifically to bird and
+        # bird's only gap is missing static cookies.
+        if can_apply_browser_auth:
             if denied_browsers:
                 record["status"] = health.ERROR
                 record["tier"] = TIER_BY_STATUS[health.ERROR]
@@ -538,10 +629,36 @@ def _x_record(config):
                 )
                 record["fix"] = env.X_COOKIE_ACCESS_FIX
                 return record
+            node = health.probe_dependency("node")
+            if node.status != health.OK:
+                node_status = (
+                    node.status if node.status in TIER_BY_STATUS else health.ERROR
+                )
+                record["status"] = node_status
+                record["tier"] = TIER_BY_STATUS[node_status]
+                record["detail"] = node.detail
+                record["fix"] = node.prescription
+                record["requires"] = (
+                    bird_finding.get("requires")
+                    if bird_finding is not None and bird_finding.get("requires")
+                    else "X browser cookies (AUTH_TOKEN/CT0) + node"
+                )
+                record["note"] = ""
+                if bird_finding is not None:
+                    bird_finding["status"] = node_status
+                    bird_finding["detail"] = node.detail
+                    bird_finding["fix"] = node.prescription
+                return record
             record["status"] = health.OK
             record["tier"] = TIER_BY_STATUS[health.OK]
+            record["detail"] = ""
             if policy.official_only:
                 record["note"] = "will use: bird (pinned)"
+            elif record.get("pinned"):
+                record["note"] = (
+                    f"will use: bird (pinned via {env.X_BACKEND_PIN_VAR}; "
+                    "browser cookies; session not verified until a run)"
+                )
             else:
                 record["note"] = (
                     "will use: bird (browser cookies; session not verified until a run "
@@ -577,12 +694,8 @@ def _x_record(config):
         and not pending_bird
     ):
         backends_list = record.get("backends", [])
-        auto_backends = [b for b in backends_list if b.get("name") in auto_chain_names]
         # Only normalize if ALL auto-chain backends are MISSING (not configured).
         # If any auto backend is ERROR/DEGRADED/BROKEN/TIMEOUT, keep that error.
-        all_auto_missing = all(
-            b.get("status") == health.MISSING for b in auto_backends
-        )
         if not all_auto_missing:
             # An auto-chain backend is configured but broken — do NOT normalize.
             # Keep the original error and its repair guidance.
@@ -591,6 +704,24 @@ def _x_record(config):
             (b for b in backends_list if b.get("name") == "grok"),
             None,
         )
+        # A probe that raised is an unavailable check, not a broken credential store.
+        if (
+            grok_finding
+            and grok_finding.get("status") == health.ERROR
+            and str(grok_finding.get("detail") or "").startswith("probe failed:")
+        ):
+            xapi_ok = any(
+                b.get("name") == "xapi" and b.get("status") in (health.OK, health.DEGRADED)
+                for b in backends_list
+            )
+            record["status"], record["tier"] = "unconfigured", TIER_OFF
+            record["note"] = "X unconfigured; grok CLI availability could not be checked"
+            if xapi_ok:
+                record["note"] += "; pin LAST30DAYS_X_BACKEND=xapi to enable the X API backend"
+                record["fix"] = ""
+            else:
+                record["fix"] = _fix_text(prescriptions.for_x(config, "cookies_missing"))
+            return record
         if grok_finding and grok_finding.get("status") in (
             health.OK,
             health.DEGRADED,
@@ -625,6 +756,13 @@ def _x_record(config):
             )
             record["fix"] = ""
             return record
+    if policy.official_only and record.get("pinned") and not record.get("active_backend"):
+        if pin in ("bird", "grok") and not record.get("note"):
+            state_label = (
+                "is not configured" if record["status"] == health.MISSING else "is unavailable"
+            )
+            record["note"] = f"pinned backend {pin} {state_label}"
+            record["detail"] = ""
     return record
 
 
@@ -633,16 +771,9 @@ def _youtube_record(config):
     if record["status"] != health.OK:
         return record
     notes: List[str] = []
-    # yt-dlp already provides search + transcripts. A transcription key only
-    # backfills captions for the occasional caption-free video - an enhancement,
-    # not a sign YouTube is broken.
-    if not env.transcription_providers(config):
-        entry = prescriptions.get("youtube", "transcription_key_missing")
-        notes.append(
-            "search + transcripts work; a transcription key only adds "
-            "captions for caption-free videos"
-        )
-        record["fix"] = _fix_text(entry)
+    # No transcription-key advice here: the caption-free transcription module
+    # (lib/transcribe.py) is not called by any source yet, so a GROQ_API_KEY or
+    # OPENAI_API_KEY would change nothing.
     # Comment *text* is free via yt-dlp, so this caveat only fires when yt-dlp
     # is absent and the legacy ScrapeCreators path is the only one left. Never
     # prescribe a paid key for something the installed toolchain already does.
@@ -651,8 +782,7 @@ def _youtube_record(config):
             "comment text needs yt-dlp (free) or a ScrapeCreators key "
             "+ youtube_comments opt-in"
         )
-        # Actionable fix, matching the transcription branch. The transcription
-        # fix takes precedence when both caveats fire (one fix line per record).
+        # Actionable fix for the comment-text caveat.
         if not record["fix"]:
             if not config.get("SCRAPECREATORS_API_KEY"):
                 record["fix"] = _sc_fix()
@@ -705,7 +835,25 @@ def _digg_record(config):
     probe = health.probe_dependency("digg-pp-cli")
     requires = "digg-pp-cli on the agent-subprocess PATH"
     if probe.ok:
-        return _record(status=health.OK, detail=probe.detail, requires=requires)
+        if probe.outdated:
+            # Below the oldest release the engine can call, so its searches
+            # fail: degraded, with the pinned upgrade as the fix. The detail
+            # names both versions.
+            return _record(
+                status=health.DEGRADED, fix=probe.prescription,
+                note="digg-pp-cli is older than the engine can call; upgrade it",
+                detail=probe.detail, requires=requires,
+            )
+        if digg.cli_searches_all_topics() is not False:
+            # Current, or its help could not be read: nothing known to fix.
+            return _record(status=health.OK, detail=probe.detail, requires=requires)
+        # An older CLI still answers, on AI and tech only, so the source
+        # stays ok and carries the upgrade as its fix.
+        outdated = prescriptions.get("digg", "pp_cli_outdated")
+        return _record(
+            status=health.OK, fix=_fix_text(outdated), note=outdated.cause,
+            detail=probe.detail, requires=requires,
+        )
     entry = prescriptions.for_dependency_probe(probe)
     fix = _fix_text(entry) if entry else probe.prescription
     if probe.status == health.MISSING and not probe.off_path:
@@ -718,13 +866,17 @@ def _digg_record(config):
 def _cli_gated_record(config, cli_name: str, purpose: str):
     """A source gated purely on a keyless downloaded CLI (mirrors _digg_record).
 
-    ok -> installed and functional; opt-in -> never installed (an optional
-    source simply not enabled); its failing status -> installed off-PATH,
-    broken, or timing out (configured-but-broken).
+    ok -> installed and functional, with upgrade guidance if limited;
+    opt-in -> never installed; failing status -> off-PATH, broken, or timing out.
     """
     probe = health.probe_dependency(cli_name)
     requires = f"{cli_name} on the agent-subprocess PATH"
     if probe.ok:
+        if probe.outdated:
+            return _record(
+                status=health.OK, fix=probe.prescription, note=probe.detail,
+                detail=probe.detail, requires=requires,
+            )
         return _record(status=health.OK, detail=probe.detail, requires=requires)
     entry = prescriptions.for_dependency_probe(probe)
     fix = _fix_text(entry) if entry else probe.prescription
@@ -741,29 +893,95 @@ def _arxiv_record(config):
     return _cli_gated_record(config, "arxiv-pp-cli", "arxiv")
 
 
+def _yahoo_finance_record(config):
+    """The share-price line. Unlike a search source it runs only for a topic
+    that resolves to a listed company, so a working install records nothing on
+    most runs; the note says so, so that quiet is not read as a fault."""
+    record = _cli_gated_record(config, "yahoo-finance-pp-cli", "yahoo_finance")
+    if record["status"] == health.OK:
+        record["note"] = (
+            "share-price line for topics that resolve to a listed company; "
+            "no price line on other topics is expected"
+        )
+    return record
+
+
 def _trustpilot_record(config):
-    return _cli_gated_record(config, "trustpilot-pp-cli", "trustpilot")
+    """Installed is not the same as able to run: the lane needs opt-in
+    (INCLUDE_SOURCES=trustpilot) AND a browser session that lasts four
+    minutes, or a cached company record."""
+    requires = "trustpilot-pp-cli on the agent-subprocess PATH + INCLUDE_SOURCES=trustpilot"
+    record = _cli_gated_record(config, "trustpilot-pp-cli", "trustpilot")
+    record["requires"] = requires
+    if record["status"] != health.OK:
+        return record
+    if "trustpilot" not in env.include_sources(config):
+        return _record(
+            status="opt-in",
+            requires=requires,
+            detail=record["detail"],
+            fix="add trustpilot to INCLUDE_SOURCES (or request it via --search trustpilot)",
+            note="CLI installed; opt-in, never auto-activates",
+        )
+    if not trustpilot._harvest_allowed(config):
+        return _record(
+            status="excluded",
+            requires=requires,
+            detail=record["detail"],
+            fix=f"unset {trustpilot.NO_BROWSER_ENV} (or set it to 0) to allow Trustpilot",
+            note=(
+                f"disabled by {trustpilot.NO_BROWSER_ENV}; research runs skip "
+                "Trustpilot even with a fresh browser session"
+            ),
+        )
+    state = trustpilot.can_run_now(config)
+    if state["session_fresh"]:
+        record["note"] = "browser session is fresh; can run now"
+    elif state["cached_companies"]:
+        count = state["cached_companies"]
+        record["note"] = (
+            f"no fresh browser session; {count} cached company "
+            f"record{'s' if count != 1 else ''} can be read"
+        )
+    else:
+        record["status"] = health.DEGRADED
+        record["tier"] = TIER_BY_STATUS[health.DEGRADED]
+        record["fix"] = (
+            "run `trustpilot-pp-cli auth login` for a fresh browser session (~3 minutes)"
+        )
+        record["note"] = (
+            "cannot run now: no fresh browser session and no cached company record "
+            "(a research run never opens a browser; `trustpilot-pp-cli auth login` "
+            "gives a session for about 3 minutes)"
+        )
+    return record
 
 
 def _amazon_record(config):
-    """Amazon buyer signals: CLI-gated *and* auth-gated.
+    """Amazon buyer signals: CLI-gated, auth-gated, AND opt-in-gated.
 
     Unlike the other CLI-gated sources, a present binary is not enough --
-    the Bright Data CLI owns its own login, so a user can have `brightdata`
-    on PATH and still get nothing. Report those states separately: an
-    unauthenticated install is configured-but-broken (a real fix exists and
-    the user wants to hear it), while a missing binary is just an optional
-    source nobody opted into.
+    the Bright Data CLI owns its own login, AND pipeline.available_sources()
+    requires INCLUDE_SOURCES=amazon (or --search amazon). Report those states
+    separately so doctor and the pipeline agree.
     """
     probe = health.probe_dependency(brightdata.CLI_BIN)
-    requires = f"{brightdata.CLI_BIN} on the agent-subprocess PATH, logged in"
+    requires = f"{brightdata.CLI_BIN} on the agent-subprocess PATH, logged in + INCLUDE_SOURCES=amazon"
     if probe.ok:
-        if brightdata.has_credentials(config):
+        if not brightdata.has_credentials(config):
+            return _record(
+                status="unconfigured",
+                fix="run `brightdata login` to activate the amazon source",
+                detail="brightdata is installed but has no credentials",
+                requires=requires,
+            )
+        if "amazon" in env.include_sources(config):
             return _record(status=health.OK, detail=probe.detail, requires=requires)
         return _record(
-            status="unconfigured",
-            fix="run `brightdata login` to activate the amazon source",
-            detail="brightdata is installed but has no credentials",
+            status="opt-in",
+            fix="add amazon to INCLUDE_SOURCES (or request it via --search amazon)",
+            note="brightdata CLI installed and logged in; opt-in, never auto-activates",
+            detail=probe.detail,
             requires=requires,
         )
     entry = prescriptions.for_dependency_probe(probe)
@@ -806,7 +1024,7 @@ def _telegram_record(config):
             return _record(
                 status=health.OK,
                 requires=requires,
-                detail=f"SCRAPECREATORS_API_KEY present, {len(channels)} channel(s) configured",
+                detail=f"{_sc_key_detail(config)}, {len(channels)} channel(s) configured",
             )
         return _record(
             status="unconfigured",
@@ -893,30 +1111,47 @@ def _linkedin_record(config):
     )
 
 
-def _pinterest_record(config):
-    requires = "SCRAPECREATORS_API_KEY; requested-only (--search pinterest)"
-    if not config.get("SCRAPECREATORS_API_KEY"):
-        return _record(status="unconfigured", requires=requires, fix=_sc_fix())
+def _deepline_record(config):
+    """Person-run lanes (LinkedIn profile and posts, name lookup).
+
+    Uses the run's own availability check, so doctor and a person run agree.
+    """
+    requires = "DEEPLINE_API_KEY; used by person runs only"
+    if not deepline.is_available(config):
+        return _record(
+            status="unconfigured", requires=requires,
+            fix="set DEEPLINE_API_KEY to read LinkedIn profiles and posts in person runs",
+        )
     return _record(
-        status="opt-in", requires=requires,
-        fix="request it explicitly via --search pinterest (or INCLUDE_SOURCES)",
-        note="key present; runs only when requested",
+        status=health.OK, requires=requires,
+        note="key present; paid calls run only for a person run",
     )
+
+
+def _pinterest_record(config):
+    return _sc_optin_record(config, "pinterest", "pinterest")
 
 
 def _xiaohongshu_record(config):
     requires = (
-        "logged-in Xiaohongshu browser-session service; requested-only "
-        "(--search xhs)"
+        "logged-in Xiaohongshu browser-session service + "
+        "INCLUDE_SOURCES=xiaohongshu (or --search xhs)"
     )
     entry = prescriptions.get("xiaohongshu", "service_unreachable")
+    opted_in = "xiaohongshu" in env.include_sources(config)
     if config.get("XIAOHONGSHU_API_BASE"):
+        if opted_in:
+            return _record(
+                status=health.OK, requires=requires,
+                note=(
+                    "XIAOHONGSHU_API_BASE configured; service reachability is not "
+                    "probed (doctor makes no network calls)"
+                ),
+            )
         return _record(
-            status=health.OK, requires=requires,
-            note=(
-                "XIAOHONGSHU_API_BASE configured; service reachability is not "
-                "probed (doctor makes no network calls)"
-            ),
+            status="opt-in", requires=requires,
+            fix="add xiaohongshu to INCLUDE_SOURCES (or request it via --search xhs)",
+            note="XIAOHONGSHU_API_BASE configured; opt-in, runs only when opted in or requested",
         )
     return _record(
         status="opt-in",
@@ -934,6 +1169,21 @@ def _jobs_record(config):
         status="opt-in",
         requires="none; activates for company topics or --hiring-signals",
         note="on-demand source: no configuration needed",
+    )
+
+
+def _patents_record(config):
+    """The patent digest. Like the share-price line it runs only for a topic
+    that is a company, and a company may have published nothing, so a quiet
+    run is the usual case; the note says so."""
+    return _record(
+        status="opt-in",
+        requires="none (public USPTO search); activates for company topics",
+        note=(
+            "on-demand source: no configuration needed; no patents line is "
+            "expected for topics that are not companies, for companies with "
+            "no filings in the window, or if USPTO starts requiring sign-in"
+        ),
     )
 
 
@@ -1001,6 +1251,7 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "digg": _digg_record,
     "techmeme": _techmeme_record,
     "arxiv": _arxiv_record,
+    "yahoo_finance": _yahoo_finance_record,
     "trustpilot": _trustpilot_record,
     "amazon": _amazon_record,
     "meta_ads": _meta_ads_record,
@@ -1012,9 +1263,11 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "truthsocial": _truthsocial_record,
     "perplexity": _perplexity_record,
     "linkedin": _linkedin_record,
+    "deepline": _deepline_record,
     "pinterest": _pinterest_record,
     "xiaohongshu": _xiaohongshu_record,
     "jobs": _jobs_record,
+    "patents": _patents_record,
     "library": _library_record,
 }
 
@@ -1031,7 +1284,10 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
 # doctor-cache block below already uses for its own schema stamp).
 # ---------------------------------------------------------------------------
 
-REPORT_CACHE_SCHEMA_VERSION = "last30days-report-cache/v1"
+# Must equal last30days.REPORT_CACHE_VERSION: a stamp the engine no longer
+# writes makes every run read as "No saved run found"
+# (tests/test_doctor_postmortem_after_run.py holds the two together).
+REPORT_CACHE_SCHEMA_VERSION = "last30days-report-cache/v2"
 REPORT_CACHE_FILENAME = "last-report.json"
 DEFAULT_REPORT_CACHE_TTL_SECONDS = 3600
 
@@ -1124,8 +1380,13 @@ def _x_auth_path(config: Dict[str, Any]) -> Dict[str, Any]:
     policy = env.x_policy(config)
     if not policy.official_only:
         has_key = bool(config.get("XAI_API_KEY") or config.get("XQUIK_API_KEY"))
-        cookie = bool(env.x_pending_browser_auth(config, local_only=True))
-        if has_key:
+        cookie = bool(
+            env.x_pending_browser_auth(config, local_only=True)
+            and health.probe_dependency("node").status == health.OK
+        )
+        if has_key and proxy.is_sentinel(config.get("XAI_API_KEY")) and not config.get("XQUIK_API_KEY"):
+            note = "xAI via API key (verified, cookie-free; paid per call)"
+        elif has_key:
             note = "XAI_API_KEY key-backed path (verified, cookie-free)"
         elif cookie:
             note = (
@@ -1140,10 +1401,12 @@ def _x_auth_path(config: Dict[str, Any]) -> Dict[str, Any]:
     source = env.get_x_source(config, local_only=True)
     if source == "xapi":
         note = f"X_BEARER_TOKEN path ({X_BEARER_CAVEAT})"
+    elif source == "xai" and proxy.is_sentinel(config.get("XAI_API_KEY")):
+        note = "xAI licensed path via API key"
     elif source == "xai":
         note = "XAI_API_KEY licensed path (console.x.ai)"
     elif source == "xurl":
-        note = "X API through the xurl CLI (stored OAuth2 login)"
+        note = "X API through the xurl CLI (stored app-only bearer)"
     elif source:
         note = "explicit backend pin"
     else:
@@ -1152,6 +1415,134 @@ def _x_auth_path(config: Dict[str, Any]) -> Dict[str, Any]:
             "X_BEARER_TOKEN or XAI_API_KEY)"
         )
     return {"name": "X auth path", "armed": bool(source), "note": note}
+
+
+# One row per keyless Reddit path (site search, each keyless web rung, the
+# Arctic Shift archive), with the last run's outcome read back from
+# last-report.json, any persisted skip, and what to do about it.
+_REDDIT_PATH_LABELS = (
+    ("search", "Reddit site search"),
+    ("brave", "Brave web search"),
+    ("ddg", "DuckDuckGo web search"),
+    ("startpage", "Startpage web search"),
+    ("arctic", "Arctic Shift archive"),
+)
+
+
+def _reddit_last_run(path: str, outcomes: Dict[str, str]) -> Optional[str]:
+    """This path's outcome in the saved run: a failure token, ``served``, or None."""
+    if path in outcomes:
+        return outcomes[path]
+    if path in reddit_health.WEB_RUNGS and outcomes.get("web") == "served":
+        return "served"
+    return None
+
+
+def _reddit_path_action(path: str, last_run: Optional[str], until: Optional[str]) -> str:
+    if until:
+        return "none needed while another path serves; the skip lifts at the time shown"
+    if last_run == reddit_health.BLOCKED:
+        if path == "search":
+            return "none: Reddit refuses its site search on this network, so the web floor serves instead"
+        return "none needed while another path serves; a refused path is skipped for 6 h"
+    if last_run == reddit_health.THROTTLED:
+        return "none: a rate limit skips this path for one run only"
+    if last_run == reddit_health.DOWN:
+        if path == "arctic":
+            return "wait for Arctic Shift to recover; threads keep their search-result data meanwhile"
+        return "none: the next run asks it again"
+    if last_run == reddit_health.SKIPPED_CACHED:
+        return "none: a recent refusal was still in force; the skip expires after 6 h"
+    return "none"
+
+
+def _reddit_session_row(config: Dict[str, Any], outcomes: Dict[str, str]) -> Dict[str, Any]:
+    """The logged-in session's row: its consent state, the browser setup
+    recorded, whether this run would use it, and its last outcome. Reads the
+    config and the health cache only, never a cookie (the gate is pure)."""
+    from datetime import datetime, timedelta, timezone
+
+    consent = env.reddit_consent_state(config)
+    browser = str(config.get(env.REDDIT_FROM_BROWSER_VAR) or "")
+    probe = dict(config)
+    probe["_BROWSER_COOKIE_MODE"] = "read"  # doctor itself is plan-only
+    allowed, why = env.reddit_session_gate(probe)
+    entry = reddit_health.entries().get("session") or {}
+    until = None
+    if entry.get("state") == reddit_health.BLOCKED:
+        try:
+            at = datetime.fromisoformat(str(entry.get("at")))
+            at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+            lift = at + timedelta(seconds=reddit_health.SKIP_TTL_SECONDS)
+            if lift > datetime.now(timezone.utc):
+                until = lift.strftime("%Y-%m-%d %H:%M UTC")
+        except (TypeError, ValueError):
+            pass
+    last_run = outcomes.get("session")
+    if consent != "granted":
+        action = (
+            "off: you declined it" if consent == "refused"
+            else "off: opt in with setup --reddit-session (reads your reddit.com login)"
+        )
+    elif not allowed:
+        action = f"off this run: {why}"
+    elif last_run == reddit_health.SESSION_EXPIRED or str(entry.get("reason") or "").startswith("session-expired"):
+        action = f"log in to reddit.com in {browser or 'your browser'}; a new login clears the skip"
+    else:
+        action = "none"
+    return {
+        "path": "session",
+        "name": "Logged-in Reddit session",
+        "consent": consent,
+        "browser": browser or None,
+        "would_run": allowed,
+        "last_run": last_run,
+        "skip_until": until,
+        "action": action,
+    }
+
+
+def _reddit_path_rows(
+    outcome: Optional[Dict[str, Any]], config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Doctor rows for the Reddit paths. Reads the health cache and the saved
+    run only: no request, no cookie."""
+    outcomes = reddit_health.parse_detail((outcome or {}).get("detail"))
+    rows: List[Dict[str, Any]] = [_reddit_session_row(config or {}, outcomes)]
+    for path, label in _REDDIT_PATH_LABELS:
+        until_dt = reddit_health.skip_until(path)
+        until = until_dt.strftime("%Y-%m-%d %H:%M UTC") if until_dt else None
+        last_run = _reddit_last_run(path, outcomes)
+        rows.append({
+            "path": path,
+            "name": label,
+            "last_run": last_run,
+            "skip_until": until,
+            "action": _reddit_path_action(path, last_run, until),
+        })
+    return rows
+
+
+def _mark_reddit_skips_cleared(report: Dict[str, Any], cleared: List[str]) -> None:
+    """Note on each Reddit row whose skip this doctor run cleared."""
+    record = (report.get("sources") or {}).get("reddit") or {}
+    for row in record.get("paths") or []:
+        if row.get("path") in cleared:
+            row["skip_cleared"] = True
+            row["action"] = "doctor cleared this skip; the next run asks this path again"
+
+
+def _reddit_sc_last_run(outcome: Optional[Dict[str, Any]]) -> str:
+    detail = str((outcome or {}).get("detail") or "")
+    if not detail:
+        return ""
+    if "ScrapeCreators backfill failed" in detail:
+        return "; last run: backfill failed"
+    if reddit_health.parse_detail(detail).get("sc") == "served":
+        return "; last run: backfill served"
+    if "ScrapeCreators backfill ran" in detail:
+        return "; last run: backfill ran, added nothing"
+    return "; last run: not needed"
 
 
 def _sub_lanes_for(source: str, config: Dict[str, Any]):
@@ -1177,8 +1568,24 @@ def _sub_lanes_for(source: str, config: Dict[str, Any]):
         backups.append(_x_auth_path(config))
     elif source == "tiktok":
         comments = {"enabled": bool(env.is_tiktok_comments_available(config))}
+        backups.append({
+            "name": "yt-dlp + web discovery",
+            "armed": env.is_shortform_oss_available(config, "tiktok"),
+            "note": (
+                "used when ScrapeCreators is missing or 402s; via "
+                + ", ".join(env.shortform_discovery_sources(config, "tiktok"))
+            ),
+        })
     elif source == "instagram":
         comments = {"enabled": bool(env.is_instagram_comments_available(config))}
+        backups.append({
+            "name": "yt-dlp + web discovery",
+            "armed": env.is_shortform_oss_available(config, "instagram"),
+            "note": (
+                "used when ScrapeCreators is missing or 402s; best effort, low recall; via "
+                + ", ".join(env.shortform_discovery_sources(config, "instagram"))
+            ),
+        })
     return backups, comments
 
 
@@ -1200,7 +1607,11 @@ def _engine_version() -> str:
 
 
 def _setup_block(config: Dict[str, Any]) -> Dict[str, Any]:
-    keys_present = {var: bool(config.get(var)) for var in KEY_PRESENCE_VARS}
+    # A lane served by the API-key proxy is not a key the user holds.
+    keys_present = {
+        var: bool(config.get(var)) and not proxy.is_sentinel(config.get(var))
+        for var in KEY_PRESENCE_VARS
+    }
     keys_present["x_browser_cookies"] = bool(
         config.get("AUTH_TOKEN") and config.get("CT0")
     )
@@ -1210,6 +1621,8 @@ def _setup_block(config: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "setup_complete": env.is_setup_complete(config),
         "keys_present": keys_present,
+        # Paid lanes served through LAST30DAYS_API_MODE=proxy (names only).
+        "via_api_key": proxy.via_api_key(config),
         # get_config() rejected these before any presence check ran, so
         # keys_present already reads them as absent. Carrying the names here is
         # what lets the text renderer say *why* they are absent instead of
@@ -1217,6 +1630,24 @@ def _setup_block(config: Dict[str, Any]) -> Dict[str, Any]:
         # unset are listed: one whose placeholder fell through to a real
         # lower-priority credential is configured and does not appear.
         "unsubstituted_templates": env.templated_config_keys(config),
+    }
+
+
+def _brief_capture_hooks_block(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Read-only summary of installed brief-capture hooks and archived finished briefs."""
+    from . import brief_capture, hook_installer, library
+
+    memory_dir = Path(
+        config.get("LAST30DAYS_MEMORY_DIR") or library.DEFAULT_MEMORY_DIR
+    ).expanduser()
+    finished_dir = memory_dir / brief_capture.FINISHED_SUBDIR
+    finished_count = (
+        sum(1 for _ in finished_dir.glob("*.md")) if finished_dir.is_dir() else 0
+    )
+    return {
+        "harnesses": hook_installer.hook_status(),
+        "finished_briefs": finished_count,
+        "finished_dir": str(finished_dir),
     }
 
 
@@ -1228,13 +1659,49 @@ def _permissions_block(config: Dict[str, Any]) -> Dict[str, Any]:
     return diag["permission_preflight"]
 
 
+def _is_excluded(source: str, excluded: set[str]) -> bool:
+    return source in excluded
+
+
+def _excluded_record(source: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    tokens = env.excluded_source_tokens(source, config) or [source]
+    token_list = ", ".join(tokens)
+    if len(tokens) == 1:
+        fix_tokens = tokens[0]
+    elif len(tokens) == 2:
+        fix_tokens = f"{tokens[0]} and {tokens[1]}"
+    else:
+        fix_tokens = f"{', '.join(tokens[:-1])}, and {tokens[-1]}"
+    descriptor = backends.DESCRIPTORS.get(source)
+    extra: Dict[str, Any] = {}
+    if descriptor is not None:
+        extra.update(
+            mode=descriptor.mode,
+            backends_list=[],
+            active_backend=None,
+            pin_var=descriptor.pin_var,
+            pin_flag=descriptor.pin_flag,
+            pinned=False,
+        )
+    return _record(
+        status="excluded",
+        note=f"excluded via EXCLUDE_SOURCES ({token_list})",
+        fix=f"remove {fix_tokens} from EXCLUDE_SOURCES to re-enable",
+        **extra,
+    )
+
+
 def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
     """Aggregate every health provider into one report dict.
 
     Per-source exceptions are isolated: a failing builder yields an
     ``error`` record for that source and the rest of the report survives.
     """
+    excluded = env.exclude_sources(config)
+
     def _build_one(name: str) -> Dict[str, Any]:
+        if _is_excluded(name, excluded):
+            return _excluded_record(name, config)
         try:
             return _SOURCE_BUILDERS[name](config)
         except Exception as exc:  # one bad probe must not blank the report
@@ -1260,12 +1727,18 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
     # live probe runs, is layered on in run() before render).
     evidence = load_run_evidence(config)
     for source, record in sources.items():
+        if _is_excluded(source, excluded):
+            record["run_outcome"] = None
+            record["audit_state"] = audit_state(source, record, None)
+            continue
         record["run_outcome"] = evidence["outcomes"].get(source) if evidence["fresh"] else None
         record["audit_state"] = audit_state(source, record, record["run_outcome"])
 
     # U3: annotate each CLI-dependent source with its binary's health so the
     # per-source marker and the dedicated CLI-health block can render (R2).
     for source, cli_name in CLI_DEPENDENCIES.items():
+        if _is_excluded(source, excluded):
+            continue
         record = sources.get(source)
         if record is None:
             continue
@@ -1283,11 +1756,26 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # U7: attach backup + comment sub-lanes to their parent source.
     for source, record in sources.items():
+        if _is_excluded(source, excluded):
+            continue
         backups, comments = _sub_lanes_for(source, config)
         if backups:
             record["backups"] = backups
         if comments is not None:
             record["comments"] = comments
+
+    # Reddit: one row per path, from the health cache and the saved run (any
+    # age: the row says what the last run saw, the skip says what is in force).
+    reddit_record = sources.get("reddit")
+    if reddit_record is not None and not _is_excluded("reddit", excluded):
+        reddit_outcome = evidence["outcomes"].get("reddit")
+        try:
+            reddit_record["paths"] = _reddit_path_rows(reddit_outcome, config)
+        except Exception:
+            pass
+        for backup in reddit_record.get("backups") or []:
+            if backup.get("name") == "ScrapeCreators backfill":
+                backup["note"] = f"{backup.get('note') or ''}{_reddit_sc_last_run(reddit_outcome)}"
 
     # Sequential on purpose: the permission preflight composes pipeline
     # diagnostics and must not race the source builders.
@@ -1295,6 +1783,11 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
         permissions = _permissions_block(config)
     except Exception as exc:
         permissions = {"status": "unavailable", "error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        brief_hooks = _brief_capture_hooks_block(config)
+    except Exception as exc:
+        brief_hooks = {"error": f"{type(exc).__name__}: {exc}", "harnesses": {}, "finished_briefs": 0}
 
     return {
         "engine_version": _engine_version(),
@@ -1307,6 +1800,7 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
             "host_lane_file_ignored": bool(config.get("_X_HOST_LANE_FILE_IGNORED")),
         },
         "setup": _setup_block(config),
+        "brief_capture_hooks": brief_hooks,
         "permissions": permissions,
         "sources": sources,
         "mode": "config",
@@ -1373,6 +1867,8 @@ def _audit_source_line(name: str, record: Dict[str, Any], state: str) -> str:
         descriptors.append(record["detail"])
     if descriptors:
         parts.append(" — " + "; ".join(descriptors))
+    if (record.get("probe") or {}).get("partial"):
+        parts.append("; " + str(record["probe"].get("detail") or "partial probe"))
     evidence = _run_evidence_suffix(record, state)
     if evidence:
         parts.append(evidence)
@@ -1391,6 +1887,17 @@ def _audit_source_line(name: str, record: Dict[str, Any], state: str) -> str:
 def _sub_lane_lines(record: Dict[str, Any]) -> List[str]:
     """Indented backup/comment sub-lane lines under a source (R8, R9)."""
     lines: List[str] = []
+    for row in record.get("paths") or []:
+        seen = row.get("last_run") or "no saved run"
+        parts = [f"last run {seen}" if row.get("last_run") else seen]
+        if row.get("consent"):
+            browser = f" ({row['browser']})" if row.get("browser") else ""
+            parts.insert(0, f"consent {row['consent']}{browser}")
+        if row.get("skip_until"):
+            parts.append(f"skipped until {row['skip_until']}")
+        lines.append(
+            f"      path: {row['name']} - {'; '.join(parts)} - action: {row.get('action') or 'none'}"
+        )
     for backup in record.get("backups") or []:
         state = "armed" if backup.get("armed") else "off"
         note = f" - {backup['note']}" if backup.get("note") else ""
@@ -1461,6 +1968,11 @@ def render_text(report: Dict[str, Any]) -> str:
         + (", ".join(present) if present else "none")
         + " (values never shown)"
     )
+    via_key = setup.get("via_api_key") or []
+    if via_key:
+        lines.append(
+            "paid lanes via API key (LAST30DAYS_API_MODE=proxy): " + ", ".join(via_key)
+        )
     templated = setup.get("unsubstituted_templates") or []
     if templated:
         lines.append(
@@ -1508,6 +2020,29 @@ def render_text(report: Dict[str, Any]) -> str:
     if cli_block:
         lines.append("")
         lines.extend(cli_block)
+
+    hooks_info = report.get("brief_capture_hooks") or {}
+    harnesses = hooks_info.get("harnesses") or {}
+    if harnesses:
+        active = [
+            f"{name} ({entry['status']})"
+            for name, entry in harnesses.items()
+            if entry.get("status") in {"installed", "plugin-active"}
+        ]
+        finished_count = hooks_info.get("finished_briefs", 0)
+        if active:
+            active_label = ", ".join(active)
+        else:
+            bundled_note = (
+                " (Claude plugin hook available when installed as a plugin)"
+                if (harnesses.get("claude") or {}).get("plugin_bundled_available")
+                else ""
+            )
+            active_label = (
+                f"none active{bundled_note} — run `last30days.py setup --install-hooks`"
+            )
+        lines.append("")
+        lines.append(f"brief capture hooks: {active_label}; finished briefs: {finished_count}")
 
     lines.append("")
     lines.append(
@@ -1672,7 +2207,12 @@ DEFAULT_CACHE_TTL_SECONDS = 900
 # carries no secrets by design (key presence is booleans only); this belt-and-
 # suspenders check refuses to persist the cache if a seeded value ever leaks.
 _SECRET_CONFIG_VARS = KEY_PRESENCE_VARS + (
-    "AUTH_TOKEN", "CT0", "APIFY_API_TOKEN", "GOOGLE_GENAI_API_KEY",
+    "AUTH_TOKEN",
+    "CT0",
+    "APIFY_API_TOKEN",
+    "LAST30DAYS_PUBLISH_PASSWORD",
+    "LAST30DAYS_API_KEY",
+    env.REDDIT_SESSION_COOKIE_VAR,
 )
 
 # Backend pin vars folded into the config fingerprint. Pin values are
@@ -1685,6 +2225,9 @@ _FINGERPRINT_PIN_VARS = (
     env.YOUTUBE_BACKEND_PIN_VAR,
     env.X_HOST_VAR,
     env.X_HOST_LANE_VAR,
+    # The Reddit session's consent and browser change the session row.
+    env.REDDIT_CONSENT_VAR,
+    env.REDDIT_FROM_BROWSER_VAR,
 )
 
 # Top-level report keys the renderers read unguarded; a cached report
@@ -1721,19 +2264,58 @@ def _config_fingerprint(config: Dict[str, Any]) -> str:
 
     Inputs are key-presence BOOLEANS (never credential values — the same
     ``keys_present`` set the setup block renders), backend pin values
-    (backend names, not secrets), and INCLUDE_SOURCES (not a secret).
-    Adding or removing a credential, changing a pin, or toggling an opt-in
-    source yields a new fingerprint, so ``read_cached_report`` treats the
-    old cache as stale instead of serving pre-change conclusions.
+    (backend names, not secrets), and non-secret switches affecting doctor's
+    conclusions. Adding or removing a credential, changing a pin, or toggling
+    any tracked source/host/storage knob yields a new fingerprint, so
+    ``read_cached_report`` treats the old cache as stale.
     """
     config = config or {}
+
+    def _cfg_or_env(key: str) -> str:
+        raw = config.get(key)
+        if raw is None:
+            raw = os.environ.get(key)
+        return str(raw or "")
+
+    from . import permission_preflight
+
+    raw_hosted_key = config.get("LAST30DAYS_API_KEY")
+    if raw_hosted_key is None:
+        raw_hosted_key = env.read_secret_env("LAST30DAYS_API_KEY")
+    hosted_key_present = (
+        bool(str(raw_hosted_key or "").strip()) and not proxy.is_sentinel(raw_hosted_key)
+    )
+    hosted_api_base = _cfg_or_env("LAST30DAYS_API_BASE").strip()
+    if not hosted_api_base:
+        hosted_endpoint_state = "unset"
+    elif permission_preflight._valid_hosted_api_base(hosted_api_base):
+        hosted_endpoint_state = "valid"
+    else:
+        hosted_endpoint_state = "invalid"
+
     signals = {
         "keys_present": _setup_block(config)["keys_present"],
+        "via_api_key": proxy.via_api_key(config),
+        "hosted_key_present": hosted_key_present,
+        "hosted_api_mode": _cfg_or_env("LAST30DAYS_API_MODE").strip().lower(),
+        "hosted_endpoint_state": hosted_endpoint_state,
+        "corpus_dirs": permission_preflight._configured_corpus_dirs(config),
         "pins": {var: str(config.get(var) or "") for var in _FINGERPRINT_PIN_VARS},
         "include_sources": str(config.get("INCLUDE_SOURCES") or ""),
+        "exclude_sources": str(config.get("EXCLUDE_SOURCES") or ""),
+        "trustpilot_no_browser": _cfg_or_env(trustpilot.NO_BROWSER_ENV),
+        "telegram_sources": _cfg_or_env("TELEGRAM_SOURCES"),
+        "xiaohongshu_api_base": str(config.get("XIAOHONGSHU_API_BASE") or ""),
+        "native_search": _cfg_or_env("LAST30DAYS_NATIVE_SEARCH"),
+        "claudecode": _cfg_or_env("CLAUDECODE"),
+        "setup_complete": str(config.get("SETUP_COMPLETE") or ""),
+        "reddit_sc_min_items": str(config.get("LAST30DAYS_REDDIT_SC_MIN_ITEMS") or ""),
+        "memory_dir": str(config.get("LAST30DAYS_MEMORY_DIR") or ""),
+        "library_context": str(config.get("LAST30DAYS_LIBRARY_CONTEXT") or ""),
         "x_cookie_access_denied": str(config.get("LAST30DAYS_X_COOKIE_ACCESS_DENIED") or ""),
         "browser_consent": str(config.get("BROWSER_CONSENT") or ""),
         "from_browser": str(config.get("FROM_BROWSER") or ""),
+        "x_api_opt_in": env.x_api_opt_in(),
     }
     canonical = json.dumps(signals, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -1769,6 +2351,43 @@ def _report_shape_ok(report: Any) -> bool:
     return True
 
 
+_MAX_DOCTOR_CACHE_BYTES = 4 * 1024 * 1024
+
+
+def _read_cache_text(path: Path) -> str:
+    """Read the doctor cache file without following symlinks/FIFOs and with a size cap."""
+    target = Path(path)
+    if os.name == "posix":
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = os.open(target, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise OSError(f"Expected a regular cache file: {target}")
+            if st.st_size > _MAX_DOCTOR_CACHE_BYTES:
+                raise ValueError("Doctor cache exceeds size limit")
+            with os.fdopen(fd, "rb") as stream:
+                fd = -1
+                data = stream.read(_MAX_DOCTOR_CACHE_BYTES + 1)
+        finally:
+            if fd != -1:
+                os.close(fd)
+        if len(data) > _MAX_DOCTOR_CACHE_BYTES:
+            raise ValueError("Doctor cache exceeds size limit")
+        return data.decode("utf-8")
+    private_files._reject_symlink_or_nonregular(target)
+    with target.open("rb") as stream:
+        data = stream.read(_MAX_DOCTOR_CACHE_BYTES + 1)
+    if len(data) > _MAX_DOCTOR_CACHE_BYTES:
+        raise ValueError("Doctor cache exceeds size limit")
+    return data.decode("utf-8")
+
+
 def read_cached_report(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Return the cached report when present, well-formed, and within TTL.
 
@@ -1783,7 +2402,7 @@ def read_cached_report(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if path is None:
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_cache_text(path))
     except Exception:
         return None
     if not isinstance(payload, dict):
@@ -1800,6 +2419,22 @@ def read_cached_report(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     report["generated_at"] = payload.get("timestamp")
     report["from_cache"] = True
     return report
+
+
+def _cache_secret_values(config: Dict[str, Any]) -> set[str]:
+    secrets: set[str] = set()
+    cfg = config or {}
+    for var in _SECRET_CONFIG_VARS:
+        value = cfg.get(var)
+        if isinstance(value, str) and len(value) >= 4 and not proxy.is_sentinel(value):
+            secrets.add(value)
+    env_api_key = env.read_secret_env("LAST30DAYS_API_KEY")
+    if isinstance(env_api_key, str) and len(env_api_key) >= 4 and not proxy.is_sentinel(env_api_key):
+        secrets.add(env_api_key)
+    for value in http.config_secret_values(cfg):
+        if len(value) >= 4 and not proxy.is_sentinel(value):
+            secrets.add(value)
+    return secrets
 
 
 def _write_cache(report: Dict[str, Any], config: Dict[str, Any]) -> bool:
@@ -1820,12 +2455,11 @@ def _write_cache(report: Dict[str, Any], config: Dict[str, Any]) -> bool:
             "report": report,
         }
         raw = json.dumps(payload, indent=2, sort_keys=True)
-        for var in _SECRET_CONFIG_VARS:
-            value = (config or {}).get(var)
-            if isinstance(value, str) and value and value in raw:
+        for value in _cache_secret_values(config):
+            if value in raw:
                 return False  # never write a cache containing a secret
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(raw, encoding="utf-8")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private_files.replace_private_text(path, raw)
         return True
     except Exception as exc:
         sys.stderr.write(
@@ -1851,26 +2485,26 @@ def _write_cache(report: Dict[str, Any], config: Dict[str, Any]) -> bool:
 
 # Free, keyless liveness endpoints (reachability check, tiny payload).
 _HTTP_PROBE_URLS = {
-    # The keyless engine's real discovery endpoint, built by the lane itself so
-    # the probe cannot drift from what the engine requests (hand-copied URLs
-    # kept certifying endpoints the engine had abandoned).
-    "reddit": reddit_search.search_url("test"),
+    # Reddit's keyless floor as the lane asks it, built by the lane's own
+    # module so the probe cannot drift from what the engine requests
+    # (hand-copied URLs kept certifying endpoints the engine had abandoned,
+    # last of them the anonymous site search). Brave discovery first; the
+    # Arctic Shift /posts/ids hydration step follows in _PROBE_FOLLOW_UPS.
+    "reddit": reddit_health.brave_probe_url(),
     "hackernews": "https://hn.algolia.com/api/v1/search?query=test&hitsPerPage=1",
     "polymarket": "https://gamma-api.polymarket.com/events?limit=1",
     "github": "https://api.github.com/rate_limit",
 }
 
 # Per-source exception to "a 4xx still means the endpoint responded". The
-# keyless Reddit lanes send no credentials, so a 403/429 there is the host
-# refusing this client — the exact failure the engine hits — not reachability.
+# keyless Reddit floor sends no credentials, so a 403/429 there is the host
+# refusing this client (the exact failure the engine hits), not reachability.
 _PROBE_BLOCKED_STATUSES = {"reddit": frozenset({403, 429})}
 
 # Blocked statuses that mean "refused this probe right now", not "the source is
-# down". Reddit answers a burst of keyless probes with 429 while the research
-# lane — which retries with backoff across several endpoints — serves the same
-# query fine. A single unretried 429 was reporting a healthy Reddit as NOT
-# WORKING, so these get one retry and, if still refused, downgrade to unverified
-# rather than a false outage. 403 stays hard: that is a real keyless block.
+# down". A single unretried 429 reported a healthy source as NOT WORKING, so
+# these get one retry and, if still refused, downgrade to unverified rather
+# than a false outage. 403 stays hard: that is a real keyless block.
 _PROBE_TRANSIENT_STATUSES = {"reddit": frozenset({429})}
 
 # One retry only: the probe budget is the per-source deadline, and a source that
@@ -1887,11 +2521,25 @@ _PROBE_HEADERS = {
 }
 
 # Per-source body validators, run on a 2xx: None means the body is the page the
-# lane parses, anything else is the reason it is not. Reddit answers a blocked
-# keyless client with a 200 challenge page, so status alone reads it as working.
+# lane parses, anything else is the reason it is not. A search engine answers a
+# refused client with a 200 challenge page, so status alone reads it as working.
 _PROBE_BODY_CHECKS: Dict[str, Callable[[str], Optional[str]]] = {
-    "reddit": reddit_search.unrecognized_body,
+    "reddit": reddit_health.brave_probe_body,
 }
+
+# Steps probed after the first URL passes: (health path, label, url, headers,
+# body check). Reddit's floor needs both discovery and hydration to serve.
+_PROBE_FOLLOW_UPS: Dict[str, tuple] = {
+    "reddit": (
+        (
+            "arctic", "Arctic Shift", reddit_health.arctic_probe_url(),
+            {"User-Agent": http.USER_AGENT, "Accept": "application/json"},
+            reddit_health.arctic_probe_body,
+        ),
+    ),
+}
+# The health path the first probe URL answers for.
+_PROBE_HEALTH_PATH = {"reddit": ("brave", "Brave")}
 
 DEFAULT_PROBE_TIMEOUT_SECONDS = 10
 
@@ -1988,50 +2636,117 @@ def _transient_probe_detail(name: str, detail: str) -> bool:
     return any(detail == f"HTTP {code}" for code in transient)
 
 
+def _probe_url(
+    name: str,
+    url: str,
+    timeout: float,
+    deadline: float,
+    *,
+    headers: Optional[Dict[str, str]],
+    body_check: Optional[Callable[[str], Optional[str]]],
+) -> Dict[str, Any]:
+    """One URL's probe verdict, with the per-source transient retry."""
+    expired = {"ok": False, "detail": "probe exceeded deadline", "probed": True}
+    probe_kwargs = {
+        "blocked_statuses": _PROBE_BLOCKED_STATUSES.get(name, frozenset()),
+        "headers": headers,
+        "body_check": body_check,
+        "deadline_monotonic": deadline,
+    }
+    ok, detail = _http_ok(url, timeout, **probe_kwargs)
+    if time.monotonic() >= deadline or detail == "probe exceeded deadline":
+        return expired
+    if not ok and _transient_probe_detail(name, detail):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return expired
+        if remaining <= _PROBE_RETRY_DELAY_SECONDS:
+            return {
+                "ok": False,
+                "transient": True,
+                "detail": f"{detail} (retry skipped: insufficient probe budget)",
+                "probed": True,
+            }
+        time.sleep(_PROBE_RETRY_DELAY_SECONDS)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return expired
+        ok, detail = _http_ok(url, remaining, **probe_kwargs)
+        if time.monotonic() >= deadline or detail == "probe exceeded deadline":
+            return expired
+        if not ok and _transient_probe_detail(name, detail):
+            return {
+                "ok": False,
+                "transient": True,
+                "detail": f"{detail} (rate-limited twice; the lane retries with backoff)",
+                "probed": True,
+            }
+    return {"ok": ok, "detail": detail, "probed": True}
+
+
+def _record_probe_health(path: str, res: Dict[str, Any]) -> None:
+    """A doctor re-probe is fresh evidence: a pass clears the path's skip and a
+    403 records one (reddit_health persists both); a 429 stays in memory."""
+    try:
+        if res.get("ok"):
+            reddit_health.record(path, reddit_health.OK, "doctor probe")
+        elif res.get("transient"):
+            reddit_health.record(path, reddit_health.THROTTLED, "doctor probe")
+        elif "HTTP 403" in str(res.get("detail") or ""):
+            reddit_health.record(path, reddit_health.BLOCKED, "doctor probe: HTTP 403")
+    except Exception:
+        pass
+
+
 def _probe_source(name: str, config: Dict[str, Any], timeout: float) -> Optional[Dict[str, Any]]:
+    if _is_excluded(name, env.exclude_sources(config)):
+        return None
     deadline = time.monotonic() + timeout
     expired = {"ok": False, "detail": "probe exceeded deadline", "probed": True}
     if timeout <= 0:
         return expired
     url = _HTTP_PROBE_URLS.get(name)
     if url:
-        blocked = _PROBE_BLOCKED_STATUSES.get(name, frozenset())
-        headers = _PROBE_HEADERS.get(name)
-        probe_kwargs = {
-            "blocked_statuses": blocked,
-            "headers": headers,
-            "body_check": _PROBE_BODY_CHECKS.get(name),
-            "deadline_monotonic": deadline,
-        }
-        ok, detail = _http_ok(url, timeout, **probe_kwargs)
-        if time.monotonic() >= deadline or detail == "probe exceeded deadline":
-            return expired
-        if not ok and _transient_probe_detail(name, detail):
+        res = _probe_url(
+            name, url, timeout, deadline,
+            headers=_PROBE_HEADERS.get(name), body_check=_PROBE_BODY_CHECKS.get(name),
+        )
+        first = _PROBE_HEALTH_PATH.get(name)
+        if first:
+            _record_probe_health(first[0], res)
+        follow_ups = _PROBE_FOLLOW_UPS.get(name) or ()
+        if (name == "reddit" and not res.get("ok")
+                and not res.get("transient")
+                and res.get("detail") != "probe exceeded deadline"):
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                listing = _probe_url(
+                    name, reddit_health.arctic_listing_probe_url(), remaining, deadline,
+                    headers={"User-Agent": http.USER_AGENT, "Accept": "application/json"},
+                    body_check=reddit_health.arctic_probe_body,
+                )
+                if listing.get("ok") and listing.get("detail") == "HTTP 200":
+                    return {
+                        "ok": False,
+                        "partial": True,
+                        "detail": f"Brave: {res['detail']}; Arctic Shift listings reachable",
+                        "probed": True,
+                    }
+        if not res.get("ok") or not follow_ups:
+            return res
+        details = [f"{first[1]} {res['detail']}" if first else res["detail"]]
+        for path, label, step_url, headers, body_check in follow_ups:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return expired
-            if remaining <= _PROBE_RETRY_DELAY_SECONDS:
-                return {
-                    "ok": False,
-                    "transient": True,
-                    "detail": f"{detail} (retry skipped: insufficient probe budget)",
-                    "probed": True,
-                }
-            time.sleep(_PROBE_RETRY_DELAY_SECONDS)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return expired
-            ok, detail = _http_ok(url, remaining, **probe_kwargs)
-            if time.monotonic() >= deadline or detail == "probe exceeded deadline":
-                return expired
-            if not ok and _transient_probe_detail(name, detail):
-                return {
-                    "ok": False,
-                    "transient": True,
-                    "detail": f"{detail} (rate-limited twice; the lane retries with backoff)",
-                    "probed": True,
-                }
-        return {"ok": ok, "detail": detail, "probed": True}
+            step = _probe_url(
+                name, step_url, remaining, deadline, headers=headers, body_check=body_check,
+            )
+            _record_probe_health(path, step)
+            if not step.get("ok"):
+                return {**step, "detail": f"{label}: {step['detail']}"}
+            details.append(f"{label} {step['detail']}")
+        return {"ok": True, "detail": "; ".join(details), "probed": True}
     cli = CLI_DEPENDENCIES.get(name)
     if cli:
         try:
@@ -2050,7 +2765,11 @@ def _probe_sources(config: Dict[str, Any], timeout: int) -> Dict[str, Dict[str, 
     A source that blows its deadline resolves to a probe-failure for that
     source only (never a hung command); other probes are unaffected.
     """
-    names = _probeable_sources()
+    excluded = env.exclude_sources(config)
+    names = tuple(
+        name for name in _probeable_sources()
+        if not _is_excluded(name, excluded)
+    )
     results: Dict[str, Dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(8, len(names) or 1)
@@ -2149,6 +2868,12 @@ def run(
             grok_audit.clear_failed()
         except Exception:
             pass
+        # Same for Reddit's path skips: a doctor run is how a user says "try
+        # that path again". The rows above keep showing what was skipped.
+        try:
+            _mark_reddit_skips_cleared(report, reddit_health.clear())
+        except Exception:
+            pass
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     report["from_cache"] = False
 
@@ -2158,7 +2883,11 @@ def run(
     fresh_run = bool((report.get("run_evidence") or {}).get("fresh"))
     if probe or not fresh_run:
         timeout = probe_timeout_seconds(config)
-        probeable = _probeable_sources()
+        excluded = env.exclude_sources(config)
+        probeable = tuple(
+            name for name in _probeable_sources()
+            if not _is_excluded(name, excluded)
+        )
         sys.stderr.write(
             f"[last30days] doctor live probe: checking {len(probeable)} free/CLI "
             f"sources ({timeout}s each; no credit-gated sources - x/tiktok/"

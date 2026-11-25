@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Iterable
 from datetime import datetime
 
-from . import entity_extract, http, providers, relevance, schema, signals
+from . import digg, entity_extract, http, providers, reddit_refs, relevance, schema, signals
 
 
 # Penalty applied when a candidate does not mention the primary entity
@@ -30,6 +31,8 @@ _FALLBACK_ENTITY_MISS_EXPLANATION = "fallback-local-score (entity-miss demotion)
 # cleared by _apply_first_party_floor. Carries no "entity-miss" substring, so
 # every downstream relevance gate treats the post as grounded.
 _FIRST_PARTY_EXPLANATION = "first-party post (authored by a resolved handle)"
+# The fallback scorer's reason for the same exemption.
+_FIRST_PARTY_FALLBACK_EXPLANATION = "fallback-local-score (first-party authorship)"
 
 # Small additive credit for a post authored by one of the run's resolved
 # handles (see rerank_candidates / _fallback_tuple). Deliberately small: the
@@ -257,6 +260,18 @@ UNTRUSTED_CONTENT_NOTICE = (
 )
 
 
+def candidate_sort_key(candidate: schema.Candidate) -> tuple:
+    """Global ordering for ranked candidates: in-window first, then final_score,
+    measured engagement (0 ahead of unknown None), best native rank, title."""
+    return (
+        1 if schema.candidate_out_of_window(candidate) else 0,
+        -candidate.final_score,
+        -(candidate.engagement if candidate.engagement is not None else -1),
+        min(candidate.native_ranks.values(), default=999),
+        candidate.title,
+    )
+
+
 def rerank_candidates(
     *,
     topic: str,
@@ -283,9 +298,12 @@ def rerank_candidates(
     """
     # Enforce identity before either scoring path and before first-party/rescue
     # floors. A high score or a related author's status cannot revive a namesake.
-    if plan.person_identity_anchors:
+    person_run = getattr(plan, "person_run", False)
+    if plan.person_identity_anchors or person_run:
         candidates = [candidate for candidate in candidates if candidate.source_items and all(
-            entity_extract.matches_person_identity(item, plan.person_identity_anchors, primary_handle)
+            entity_extract.matches_person_identity(
+                item, plan.person_identity_anchors, primary_handle, person_run=person_run,
+            )
             for item in candidate.source_items
         )]
     handles = resolved_handles or set()
@@ -298,8 +316,14 @@ def rerank_candidates(
             response = provider.generate_json(
                 model, _build_prompt(topic, plan, shortlisted, primary_entity, resolved_handles=handles)
             )
-            _apply_llm_scores(shortlisted, response, resolved_handles=handles)
-        except (ValueError, KeyError, json.JSONDecodeError, OSError, http.HTTPError) as exc:
+            _apply_llm_scores(
+                shortlisted,
+                response,
+                primary_entity=primary_entity,
+                resolved_handles=handles,
+                subject_handles=subject,
+            )
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError, OSError, http.HTTPError) as exc:
             import sys
             print(f"[Rerank] LLM reranking failed, using local fallback: {type(exc).__name__}: {exc}", file=sys.stderr)
             _apply_fallback_scores(
@@ -329,15 +353,7 @@ def rerank_candidates(
         primary_handle=primary_handle,
     )
 
-    return sorted(
-        candidates,
-        key=lambda candidate: (
-            -candidate.final_score,
-            -(candidate.engagement or -1),
-            min(candidate.native_ranks.values(), default=999),
-            candidate.title,
-        ),
-    )
+    return sorted(candidates, key=candidate_sort_key)
 
 
 def _intent_hint_block(plan: schema.QueryPlan) -> str:
@@ -464,19 +480,42 @@ Scoring guidance:
 """.strip()
 
 
+def _parse_llm_score(raw: object) -> float | None:
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return max(0.0, min(100.0, value))
+
+
 def _apply_llm_scores(
-    candidates: list[schema.Candidate], payload: dict, *, resolved_handles: set[str] | None = None
+    candidates: list[schema.Candidate],
+    payload: dict,
+    *,
+    primary_entity: str = "",
+    resolved_handles: set[str] | None = None,
+    subject_handles: set[str] | None = None,
 ) -> None:
     handles = resolved_handles or set()
+    raw_scores = payload.get("scores") if isinstance(payload, dict) else None
+    if not isinstance(raw_scores, list):
+        raw_scores = []
     scores = {}
-    for row in payload.get("scores") or []:
+    for row in raw_scores:
         if not isinstance(row, dict):
             continue
         candidate_id = str(row.get("candidate_id") or "").strip()
         if not candidate_id:
             continue
+        parsed = _parse_llm_score(row.get("relevance"))
+        if parsed is None:
+            continue
         scores[candidate_id] = (
-            max(0.0, min(100.0, float(row.get("relevance") or 0.0))),
+            parsed,
             str(row.get("reason") or "").strip() or None,
         )
     for candidate in candidates:
@@ -484,7 +523,12 @@ def _apply_llm_scores(
             rerank_score, reason = scores[candidate.candidate_id]
             provenance = RERANK_PROVENANCE_LLM
         else:
-            rerank_score, reason = _fallback_tuple(candidate, resolved_handles=handles)
+            rerank_score, reason = _fallback_tuple(
+                candidate,
+                primary_entity=primary_entity,
+                resolved_handles=handles,
+                subject_handles=subject_handles,
+            )
             provenance = RERANK_PROVENANCE_FALLBACK
         candidate.rerank_score = rerank_score
         candidate.explanation = reason
@@ -730,6 +774,8 @@ def _apply_interaction_signal(
         if not targets:
             continue
         c.metadata = {**(c.metadata or {}), "interaction_targets": sorted(targets)}
+        if schema.candidate_out_of_window(c):
+            continue
         if not _first_party_floor_eligible(
             c, resolved_handles=resolved_handles, primary_entity=primary_entity, subject_handles=subject
         ):
@@ -761,8 +807,12 @@ def _apply_first_party_floor(
     for c in candidates:
         if not _is_first_party(c, resolved_handles):
             continue
-        if c.final_score < FIRST_PARTY_FLOOR and _first_party_floor_eligible(
-            c, resolved_handles=resolved_handles, primary_entity=primary_entity, subject_handles=subject
+        if (
+            not schema.candidate_out_of_window(c)
+            and c.final_score < FIRST_PARTY_FLOOR
+            and _first_party_floor_eligible(
+                c, resolved_handles=resolved_handles, primary_entity=primary_entity, subject_handles=subject
+            )
         ):
             c.final_score = FIRST_PARTY_FLOOR
         # Clear the entity-miss marker here, at the one site that knows the
@@ -773,6 +823,9 @@ def _apply_first_party_floor(
         # their own name in their own post.
         if c.explanation and "entity-miss" in c.explanation.lower():
             c.explanation = _FIRST_PARTY_EXPLANATION
+
+
+_ENGAGEMENT_SCORE_CAP = 100.0
 
 
 def _apply_engagement_rescue(
@@ -789,13 +842,24 @@ def _apply_engagement_rescue(
     a related handle's off-topic posts are excluded, preserving noise
     suppression.
     """
-    x_cands = [c for c in candidates if _is_x_candidate(c)]
+    x_cands = [
+        c for c in candidates
+        if _is_x_candidate(c) and not schema.candidate_out_of_window(c)
+    ]
     if len(x_cands) < 2:
         return
     subject = _subject_handles(primary_handle, topic)
-    engagements = sorted(_candidate_engagement(c) for c in x_cands)
-    n = len(engagements)
+    engagements: list[float] = []
     for c in x_cands:
+        raw = _candidate_engagement(c)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+            engagements.append(0.0)
+        else:
+            engagements.append(float(raw))
+    n = len(engagements)
+    for c, e in zip(x_cands, engagements):
+        if e <= 0:
+            continue
         # A first-party post qualifies only through _first_party_floor_eligible
         # (which needs positive grounding); the bare grounding pass below would
         # wave a related handle's off-topic post through on a short topic.
@@ -807,9 +871,14 @@ def _apply_engagement_rescue(
             qualifies = _is_entity_grounded(c, primary_entity)
         if not qualifies:
             continue
-        e = _candidate_engagement(c)
-        # Percentile rank in [0, 1]: fraction of the X pool strictly below e.
-        percentile = sum(1 for v in engagements if v < e) / (n - 1)
+        below = sum(1 for v in engagements if v < e)
+        equal = sum(1 for v in engagements if v == e)
+        if e >= _ENGAGEMENT_SCORE_CAP:
+            # Posts clamped at the 0-100 engagement ceiling represent distinct
+            # viral counts; upper-rank preserves their top-tier rescue floor.
+            percentile = (below + equal - 1) / (n - 1)
+        else:
+            percentile = (below + 0.5 * (equal - 1)) / (n - 1)
         floor = _rescue_floor(percentile)
         if floor > c.final_score:
             c.final_score = floor
@@ -939,7 +1008,7 @@ def _fallback_tuple(
         # person) but is not authored in the window, so it is not labeled so.
         if _is_repo_snapshot_candidate(candidate):
             return max(0.0, min(100.0, score)), "fallback-local-score (repo snapshot)"
-        return max(0.0, min(100.0, score)), "fallback-local-score (first-party authorship)"
+        return max(0.0, min(100.0, score)), _FIRST_PARTY_FALLBACK_EXPLANATION
     # Grounding-exempt evidence (currently Amazon): the adapter gated these
     # against the model-supplied keyword before they existed, so the
     # entity-miss demotion below would punish them for a match they were
@@ -1053,24 +1122,29 @@ def prune_fallback_entity_misses(
     if not topic:
         return candidates
 
-    kept: list[schema.Candidate] = []
-    for candidate in candidates:
-        if candidate.explanation != _FALLBACK_ENTITY_MISS_EXPLANATION:
-            kept.append(candidate)
-            continue
-        if _is_corpus_candidate(candidate):
-            kept.append(candidate)
-            continue
-        if candidate.local_relevance >= FALLBACK_ENTITY_MISS_CONFIDENCE_ESCAPE:
-            kept.append(candidate)
-            continue
-        primary_text = f"{candidate.title or ''} {candidate.snippet or ''}"
-        if (
-            relevance.token_overlap_relevance(topic, primary_text)
-            >= FALLBACK_ENTITY_MISS_TOPIC_ESCAPE
-        ):
-            kept.append(candidate)
-    return kept
+    return [
+        candidate for candidate in candidates
+        if candidate.explanation != _FALLBACK_ENTITY_MISS_EXPLANATION
+        or escapes_entity_miss_prune(candidate, topic=topic)
+    ]
+
+
+def escapes_entity_miss_prune(candidate: schema.Candidate, *, topic: str) -> bool:
+    """True when ``prune_fallback_entity_misses`` keeps this candidate however
+    the rerank marks it.
+
+    None of the escapes depends on a rerank score, so this can be asked
+    before reranking to learn which candidates are certain to stay visible.
+    """
+    if not topic or _is_corpus_candidate(candidate):
+        return True
+    if candidate.local_relevance >= FALLBACK_ENTITY_MISS_CONFIDENCE_ESCAPE:
+        return True
+    primary_text = f"{candidate.title or ''} {candidate.snippet or ''}"
+    return (
+        relevance.token_overlap_relevance(topic, primary_text)
+        >= FALLBACK_ENTITY_MISS_TOPIC_ESCAPE
+    )
 
 
 #: Secondary entity-miss penalty applied directly to final_score (not just
@@ -1103,6 +1177,27 @@ OUT_OF_WINDOW_FINAL_MULTIPLIER = 0.35
 ENGAGEMENT_FINAL_WEIGHT = 0.15
 
 
+#: Most a candidate gains in _final_score for being a source of a Digg story
+#: (digg.CONFIRMED_BY_KEY in its metadata), reached when the story's own
+#: engagement score is 100 and scaled down linearly below that. Eight points
+#: is what the whole freshness range is worth and about half of engagement's
+#: 15, so confirmation reorders items of similar relevance without carrying a
+#: weak match past a strong one. It is added before the penalties below, and
+#: is under half of ENTITY_MISS_FINAL_PENALTY, so a confirmed item that
+#: misses the entity still lands below an unconfirmed one that names it.
+DIGG_CONFIRMATION_MAX_BONUS = 8.0
+
+
+def _digg_confirmation_bonus(candidate: schema.Candidate) -> float:
+    story = (candidate.metadata or {}).get(digg.CONFIRMED_BY_KEY)
+    if not isinstance(story, dict):
+        return 0.0
+    engagement = story.get("engagement")
+    if isinstance(engagement, bool) or not isinstance(engagement, (int, float)):
+        return 0.0
+    return DIGG_CONFIRMATION_MAX_BONUS * max(0.0, min(float(engagement), 100.0)) / 100.0
+
+
 #: Candidate.metadata key recording which path produced rerank_score. Set by
 #: _apply_fallback_scores and _apply_llm_scores; the explanation text is not
 #: provenance (an LLM reason may start with any word).
@@ -1124,19 +1219,37 @@ def _is_fallback_scored(candidate: schema.Candidate) -> bool:
     return (candidate.metadata or {}).get(RERANK_PROVENANCE_KEY) == RERANK_PROVENANCE_FALLBACK
 
 
+def _engagement_pending(candidate: schema.Candidate) -> bool:
+    """Whether a Reddit candidate's every Reddit copy has a pending score."""
+    if candidate.source != "reddit":
+        return False
+    copies = [item for item in candidate.source_items if item.source == "reddit"]
+    return bool(copies) and all(reddit_refs.score_pending(item.metadata) for item in copies)
+
+
 def _final_score(candidate: schema.Candidate) -> float:
     normalized_rrf = _normalized_rrf(candidate.rrf_score)
     rerank_score = candidate.rerank_score or 0.0
     # Engagement is already 0-100 on an absolute per-source log scale
     # (signals.engagement_score): ~8 for a 3-like X post, ~50 for a 254-upvote
     # Reddit thread, ~90 for a 380-point HN story.
-    engagement_val = candidate.engagement if candidate.engagement is not None else 0.0
-    base = (
+    known = (
         0.60 * rerank_score
         + 0.20 * normalized_rrf
         + 0.10 * candidate.freshness
         + 0.05 * (candidate.source_quality * 100.0)
+    )
+    if _engagement_pending(candidate):
+        # A thread whose only score is a fresh archive snapshot has unknown
+        # engagement, not zero: it takes the weighted average of the four
+        # signals above (their weights sum to 0.95).
+        engagement_val = known / 0.95
+    else:
+        engagement_val = candidate.engagement if candidate.engagement is not None else 0.0
+    base = (
+        known
         + ENGAGEMENT_FINAL_WEIGHT * max(0.0, min(engagement_val, 100.0))
+        + _digg_confirmation_bonus(candidate)
     )
     # The cliff demotes items a judge explicitly called irrelevant. A fallback
     # score below 20 only means weak lexical overlap, which the 0.60 weight
@@ -1173,7 +1286,7 @@ def score_fun(
         try:
             response = provider.generate_json(model, _build_fun_prompt(topic, pool))
             _apply_fun_scores(pool, response)
-        except (ValueError, KeyError, json.JSONDecodeError, OSError, http.HTTPError) as exc:
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError, OSError, http.HTTPError) as exc:
             import sys
             print(f"[FunJudge] LLM scoring failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             _apply_fun_fallback(pool)
@@ -1256,15 +1369,21 @@ def _extract_comment_text_scored(candidate: schema.Candidate) -> str:
 
 
 def _apply_fun_scores(candidates: list[schema.Candidate], payload: dict) -> None:
+    raw_scores = payload.get("scores") if isinstance(payload, dict) else None
+    if not isinstance(raw_scores, list):
+        raw_scores = []
     scores = {}
-    for row in payload.get("scores") or []:
+    for row in raw_scores:
         if not isinstance(row, dict):
             continue
         cid = str(row.get("candidate_id") or "").strip()
         if not cid:
             continue
+        parsed = _parse_llm_score(row.get("fun"))
+        if parsed is None:
+            continue
         scores[cid] = (
-            max(0.0, min(100.0, float(row.get("fun") or 0.0))),
+            parsed,
             str(row.get("reason") or "").strip() or None,
         )
     for c in candidates:
@@ -1291,6 +1410,82 @@ def _apply_single_fun_fallback(candidate: schema.Candidate) -> None:
     marker_bonus = 10 if any(m in text.lower() for m in markers) else 0
     candidate.fun_score = max(0.0, min(100.0, shortness + vote_bonus + marker_bonus))
     candidate.fun_explanation = "heuristic-fallback"
+
+
+def candidate_counts_for_topic(candidate: schema.Candidate, topic: str) -> bool:
+    """Whether a candidate's engagement and voice belong in the topic's totals.
+
+    Stricter than :func:`candidate_relevance_ok` in one place. A post by one
+    of the run's handles is kept in the evidence whatever it says, since
+    nobody names themselves in their own post; that is right for the topic's
+    own account and wrong for the totals when the handle is a related one
+    (``--x-related``) posting about something else. Such a post counts only
+    when it is on topic by the same test that earns it the first-party floor:
+    its author is the topic's own account, or its text names the entity, or
+    it clears the relevance floor.
+    """
+    if not candidate_relevance_ok(candidate):
+        return False
+    if candidate.explanation not in (_FIRST_PARTY_EXPLANATION, _FIRST_PARTY_FALLBACK_EXPLANATION):
+        return True
+    if _handle_is_topic(_candidate_author_handle(candidate), topic):
+        return True
+    return (
+        _is_entity_positively_grounded(candidate, _primary_entity(topic))
+        or candidate.local_relevance >= relevance.RELEVANCE_FLOOR
+    )
+
+
+# Report artifact: ``[source, url or id]`` of every item behind a candidate the
+# relevance prune removed. Fusion also drops candidates for reasons that say
+# nothing about the topic (the per-author cap, the pool size), so an item with
+# no ranked candidate is only known to be off topic when it is listed here.
+REJECTED_ITEMS_ARTIFACT = "relevance_rejected_items"
+
+
+def _item_key(item: schema.SourceItem) -> tuple[str, str]:
+    return (item.source, item.url or item.item_id)
+
+
+def rejected_item_keys(
+    before: list[schema.Candidate], after: list[schema.Candidate],
+) -> list[list[str]]:
+    """The items behind candidates a relevance prune removed (``before`` minus
+    ``after``), as JSON-safe pairs for ``REJECTED_ITEMS_ARTIFACT``. An item
+    that also sits behind a surviving candidate is not rejected."""
+    kept_ids = {id(candidate) for candidate in after}
+    kept_items = {_item_key(item) for candidate in after for item in candidate.source_items}
+    rejected = {
+        _item_key(item)
+        for candidate in before if id(candidate) not in kept_ids
+        for item in candidate.source_items
+    } - kept_items
+    return [list(key) for key in sorted(rejected)]
+
+
+def item_topic_verdicts(
+    candidates: list[schema.Candidate],
+    topic: str,
+    rejected: Iterable[Iterable[str]] | None = None,
+) -> dict[tuple[str, str], bool]:
+    """Topical verdicts for the items the ranking judged, by ``(source, url or id)``.
+
+    True or False for an item behind a ranked candidate (True when any of its
+    candidates counts for the topic), False for an item listed in ``rejected``
+    (``REJECTED_ITEMS_ARTIFACT``). An item the ranking never judged is absent:
+    it was dropped by a selection limit, not by relevance.
+    """
+    verdicts: dict[tuple[str, str], bool] = {}
+    for pair in rejected or ():
+        pair = tuple(pair)
+        if len(pair) == 2:
+            verdicts[(str(pair[0]), str(pair[1]))] = False
+    for candidate in candidates:
+        counts = candidate_counts_for_topic(candidate, topic)
+        for item in candidate.source_items:
+            key = _item_key(item)
+            verdicts[key] = verdicts.get(key, False) or counts
+    return verdicts
 
 
 def _normalized_rrf(rrf_score: float) -> float:
