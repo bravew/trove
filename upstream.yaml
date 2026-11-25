@@ -116,7 +116,7 @@ sources:
         base_sha: 7869eb17144789b843e6655c41bd3d570aa2288a
         base_tree_digest: sha256:5baa08ad22048554bfdc0eaabd7d91892a36d23e7c6ae5d371786564e11427f1
         local_tree_digest: sha256:0f14a33efc639c00f8b088464a52d34e6fdaa0edfd4c9e3e11d2ec86a8efe45f
-        patch_digest: sha256:6b3dc7c01dc97e362cd7136e15d70f51275229138171157aa7c8d8e9c43d0ff5
+        patch_digest: sha256:96e8cad880abdfa4e1158cd7eb89fcff10c84ee3b5dadee627f1d66457a7ddfc
         checked_sha: 7869eb17144789b843e6655c41bd3d570aa2288a
         checked_at: "2026-11-10T02:50:38Z"
         candidate_sha: null
@@ -182,7 +182,7 @@ sources:
         base_sha: e0e41410de18466aceb505faee5ef998cacee1e8
         base_tree_digest: sha256:204c56b0758a487de0985ef1821e7a277581a20e3def57c9d74ef84b9251d4fe
         local_tree_digest: sha256:43317975716cc0168803745d38a4a8c6a0052bdc83cf538f15886c31d6a6a5b4
-        patch_digest: sha256:d0dbc4a647b3c032a4a336615d663d61fd8ef2f458fe89e25f00d034813a5090
+        patch_digest: sha256:34701c40acd25c0c8dd6d84841915a4b507580f10100f5a10c51084083e94ea1
         checked_sha: e0e41410de18466aceb505faee5ef998cacee1e8
         checked_at: "2026-11-03T06:58:38Z"
         candidate_sha: null

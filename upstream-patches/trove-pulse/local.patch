@@ -247,3 +247,80 @@ diff --git a/scripts/last30days.py b/scripts/last30days.py
              "DEGRADED_TRANSCRIPT_THRESHOLD",
          }
          relevant_config = {}
+diff --git a/scripts/lib/hackernews.py b/scripts/lib/hackernews.py
+index 76b3e32..f1bab0c 100644
+--- a/scripts/lib/hackernews.py
++++ b/scripts/lib/hackernews.py
+@@ -206,12 +206,14 @@ def _flatten_query_for_algolia(text: str) -> str:
+     return " ".join(text.replace(",", " ").replace("-", " ").split())
+ 
+ 
+-def _title_matches_query(title: str, query: str, author: str = "") -> bool:
+-    """Check if any query token appears as a whole word in the title.
++def _title_matches_query(title: str, query: str, author: str = "", text: str = "") -> bool:
++    """Check if any query token appears as a whole word in the story.
+ 
+     Returns True when the query is empty (no filter), or when at least one
+-    query token matches as a whole word in the title after stripping
+-    "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
++    query token matches as a whole word in the title or submission text after
++    stripping "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
++    Algolia searches the submission body, so a title-only check drops stories
++    whose only mention of the topic is there.
+ 
+     We previously required *every* token to appear (all-words), which killed
+     every Algolia hit on multi-keyword themes like "claude, personal agents,
+@@ -228,12 +230,18 @@ def _title_matches_query(title: str, query: str, author: str = "") -> bool:
+     if not query:
+         return True
+     stripped = _HN_PREFIXES.sub("", title).strip()
+-    check_text = stripped.lower()
++    check_text = f"{stripped}\n{text}".lower()
+     # Normalise the query the same way search_hackernews does so post-filter
+     # tokens line up with what Algolia actually saw.
+     query_words = [w for w in _flatten_query_for_algolia(query.lower()).split() if w]
+     if not query_words:
+         return True
++    # Algolia marks every token after the first as optional, so a title that
++    # contains only "video" survives a "remotion video react" search. A
++    # multi-word topic has to match its most distinctive token. One-word
++    # topics keep the any-match behavior.
++    if len(query_words) > 1:
++        query_words = [max(query_words, key=len)]
+     for word in query_words:
+         pattern = _WORD_BOUNDARY_RE_CACHE.get(word)
+         if pattern is None:
+@@ -260,7 +268,12 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+         before = len(hits)
+         hits = [
+             h for h in hits
+-            if _title_matches_query(h.get("title", ""), query, h.get("author", ""))
++            if _title_matches_query(
++                h.get("title", ""),
++                query,
++                h.get("author", ""),
++                h.get("story_text") or "",
++            )
+         ]
+         dropped = before - len(hits)
+         if dropped:
+@@ -285,7 +298,10 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+         rank_score = max(0.3, 1.0 - (i * 0.02))  # 1.0 -> 0.3 over 35 items
+         engagement_boost = min(0.2, math.log1p(points) / 40)
+         if query:
+-            content_score = token_overlap_relevance(query, hit.get("title", ""))
++            content_score = token_overlap_relevance(
++                query,
++                f"{hit.get('title', '')}\n{hit.get('story_text') or ''}",
++            )
+             relevance = min(1.0, 0.6 * rank_score + 0.4 * content_score + engagement_boost)
+         else:
+             relevance = min(1.0, rank_score * 0.7 + engagement_boost + 0.1)
+@@ -296,6 +312,7 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+             "url": article_url,
+             "hn_url": hn_url,
+             "author": hit.get("author", ""),
++            "text": hit.get("story_text") or "",
+             "date": date_str,
+             "engagement": {
+                 "points": points,
