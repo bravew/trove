@@ -1,16 +1,38 @@
+diff --git a/references/runtime-spec.md b/references/runtime-spec.md
+index 364c0c8..23a0a66 100644
+--- a/references/runtime-spec.md
++++ b/references/runtime-spec.md
+@@ -247,7 +247,7 @@ After the response and required citations, stop and wait unless governing instru
+ 
+ **What this skill does NOT do:**
+ - Does not post, like, or modify content on any platform
+-- Cookie reads require explicit consent. The sidecar requires `AGENTCOOKIE=on` or affirmative `BROWSER_CONSENT`. `--preflight` and `--diagnose` do not read browser-cookie values
++- Cookie reads require explicit consent. `--preflight` and `--diagnose` do not read browser-cookie values
+ - Does not use Codex ChatGPT auth as an OpenAI provider credential
+ - Does not share API keys between providers (`APIFY_API_TOKEN` is never sent to ScrapeCreators and does not enable TikTok)
+ - Does not log, cache, or write API keys to output files
 diff --git a/references/setup-wizard.md b/references/setup-wizard.md
-index a9b65c6..04f7a23 100644
+index 05dc2bb..ec63177 100644
 --- a/references/setup-wizard.md
 +++ b/references/setup-wizard.md
+@@ -4,7 +4,7 @@ Read when either root setup or repair gate applies. For first-run setup, follow
+ 
+ **Repair entry (including when `SETUP_COMPLETE=true`):** For a requested repair or a doctor's host-specific prescription, go directly to the applicable **Manual Setup Guide** subsection below. Skip Step 0, its welcome, offers, source-tier prompts, and topic picker. The Manual Setup Guide's completion tail applies only to onboarding: during repair, do not write `SETUP_COMPLETE=true`, and do not start research unless it was requested. Return to the original request after the authorized repair or repair guidance.
+ 
+-Carry out only the authorized repair. Reading this guide or a doctor prescription does not authorize installs, browser launches, cookie reads, or configuration writes. Browser access requires explicit browser-cookie consent. Existing authorization still applies; a refusal, skip, or no answer is not consent. On a `LAST30DAYS_HOST=grok-bot` host, use only **X on a Grok Bot (repair)** for X; never read a browser session or use the Linux / Mac mini repair. Preserve the MacBook exception, human login handoff, and block/challenge/rate-limit stop rules in the applicable subsection.
++Carry out only the authorized repair. Reading this guide or a doctor prescription does not authorize installs, browser launches, cookie reads, or configuration writes. Browser access requires explicit browser-cookie consent. Existing authorization still applies; a refusal, skip, or no answer is not consent. On a `LAST30DAYS_HOST=grok-bot` host, use only **X on a Grok Bot (repair)** for X; never read a browser session. Preserve the MacBook exception, human login handoff, and block/challenge/rate-limit stop rules in the applicable subsection.
+ 
+ ## Step 0: First-Run Setup Wizard
+ 
 @@ -55,7 +55,7 @@ Options:
  **If the user picks Auto setup:**
  
- Get cookie consent first. Check if `BROWSER_CONSENT=true` already exists in `~/.config/last30days/.env`; if so, skip the consent prompt and run `setup --allow-browser-cookies` directly. Otherwise **call AskUserQuestion:**
--Question: "Auto setup installs the free CLIs either way - yt-dlp (YouTube), Digg, arXiv, and Techmeme. May I read your browser's x.com cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop native, CDP, and sidecar reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in ~/.config/last30days/.env. Include X?"
-+Question: "Auto setup installs the free CLIs either way - yt-dlp (YouTube), Digg, arXiv, and Techmeme. May I read your browser's x.com cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop these reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in ~/.config/last30days/.env. Include X?"
+ Get cookie consent first. Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" --resolve-browser-consent` with the same environment and working directory you will use for setup. If the command succeeds and stdout is exactly `granted`, run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --use-recorded-browser-consent` in the same environment and working directory. If setup succeeds and does not print `not-granted`, skip the cookie question and take the root Reddit session offer route. Otherwise **call AskUserQuestion:**
+-Question: "Auto setup installs the free CLIs either way - yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance. May I read your browser's x.com cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop native, CDP, and sidecar reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in your active configuration. Include X?"
++Question: "Auto setup installs the free CLIs either way - yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance. May I read your browser's x.com cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop these reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in your active configuration. Include X?"
  Options (give each option the description shown):
- - "Yes - X cookies + all CLIs" - description: "Read x.com cookies for X/Twitter search AND install yt-dlp (YouTube), Digg, arXiv, and Techmeme." Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --allow-browser-cookies`. The engine saves `BROWSER_CONSENT=true`; do not append a duplicate marker.
- - "Skip X - just the CLIs" - description: "No cookie reads. Still installs yt-dlp (YouTube), Digg, arXiv, and Techmeme." Run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. The engine saves `BROWSER_CONSENT=false`, so the refusal also applies on future runs. If the invocation already includes a topic, immediately research it with `--no-browser-cookies`, then resume Step 4 (and Step 5 if a key is saved) in the same run after the findings; Step 6 stays skipped because the topic was supplied.
+ - "Yes - X cookies + all CLIs" - description: "Read x.com cookies for X/Twitter search AND install yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance." Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --allow-browser-cookies`. The engine saves `BROWSER_CONSENT=true`; do not append a duplicate marker. Then take the root Reddit session offer route and ask its one question.
+ - "Skip X - just the CLIs" - description: "No cookie reads. Still installs yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance." Run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. The engine saves `BROWSER_CONSENT=false`, so the refusal also applies on future runs. Then take the root Reddit session offer route. If the invocation already includes a topic, research it now (`--no-browser-cookies` if Reddit got a no), then resume Step 4 (and Step 5 if a key is saved) in the same run after the findings; Step 6 stays skipped because the topic was supplied.
 @@ -63,12 +63,10 @@ Options (give each option the description shown):
  
  **Grok CLI is an opt-in backup, not a setup-time recommendation.** Do NOT check for grok first or offer it as a primary option during setup. A leftover `~/.grok/auth.json` must never steal the X lane. If the user mentions having a Grok account, tell them: "You can use the Grok CLI by pinning `LAST30DAYS_X_BACKEND=grok` in your `.env` after running `grok login`. This is opt-in because a leftover grok login should not take over X automatically." Do not call it free — it needs a Grok plan.
@@ -18,9 +40,9 @@ index a9b65c6..04f7a23 100644
 -The consented `setup --allow-browser-cookies` run extracts cookies using the platform order explained in the prompt. Unless `FROM_BROWSER` is already configured, setup saves the browsers that supplied complete cookies as a comma-separated `FROM_BROWSER` list, including Chromium browsers. It normalizes Windows Firefox's `firefox-wsl` source label to `firefox`. It never saves cookie values. Later research reads those browser sessions again; macOS Keychain may prompt again. `BROWSER_CONSENT=false` or `FROM_BROWSER=off` disables native, CDP, and sidecar reads. A later consented setup replaces a saved refusal, but an explicit `FROM_BROWSER=off` still blocks reads until changed. `AGENTCOOKIE=off` disables only the sidecar; `on` cannot override refusal.
 +The consented `setup --allow-browser-cookies` run extracts cookies using the platform order explained in the prompt. Unless `FROM_BROWSER` is already configured, setup saves the browsers that supplied complete cookies as a comma-separated `FROM_BROWSER` list, including Chromium browsers. It normalizes Windows Firefox's `firefox-wsl` source label to `firefox`. It never saves cookie values. Later research reads those browser sessions again; macOS Keychain may prompt again. `BROWSER_CONSENT=false` or `FROM_BROWSER=off` disables these reads. A later consented setup replaces a saved refusal, but an explicit `FROM_BROWSER=off` still blocks reads until changed.
  
- Setup also best-effort installs yt-dlp (YouTube), the free keyless Digg CLI (`digg-pp-cli` via `@mvanhorn/printing-press-library install digg --cli-only`; Digg activates only when the binary is on the **agent subprocess PATH**, typically `$HOME/.local/bin`; setup reports honestly if installed off-PATH; recommend-only if `npx` is unavailable), plus the free keyless arXiv and Techmeme CLIs. Show the user what was found and installed - including whether Digg landed on PATH (active) or off-PATH (installed but not yet active).
+ Setup also best-effort installs yt-dlp (YouTube), the free keyless Digg CLI (`digg-pp-cli` via `@mvanhorn/printing-press-library install digg --cli-only`; activates only when on the **agent subprocess PATH**, typically `$HOME/.local/bin`; reports honestly if off-PATH; recommend-only if `npx` is unavailable), plus the free keyless arXiv, Techmeme, and Yahoo Finance CLIs. A Digg CLI too old for the engine is upgraded, or setup prints the upgrade command. Show the user what was found and installed - including whether each CLI landed on PATH (active) or off-PATH (installed but not yet active).
  
--**Extras-host X login (Linux / Mac mini / Darwin agentcookie sink — a MacBook SKIPS this, and so does a `LAST30DAYS_HOST=grok-bot` host, which never runs it).** On a MacBook the Keychain/Firefox/Safari extract above serves X when the OS permits browser-data reads. On an extras host the local Chrome store can't be decrypted, so that extract finds nothing and X stays empty unless you also capture a LIVE login over CDP. After the cookie-consent setup run: run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/box_chrome_login.py"` — it prints the exact host-correct command (or launches it with `--exec`), and on a MacBook it prints "no launch needed" and spawns nothing. When `box-chrome` is on PATH it launches a throwaway profile on the last30days extras port **18800** (the last30days convention `SAND_CHROME_REMOTE_DEBUG_PORT=18800`, not box-chrome's default): `CHROME_USER_DATA_DIR=/tmp/last30days-x-chrome SAND_CHROME_REMOTE_DEBUG_PORT=18800 box-chrome --new-window https://x.com/login`. Wait for the x.com login page, then HAND THE DESKTOP to the human to type — do NOT fill or drive the form. After they sign in, append `BROWSER_CDP_URL=http://127.0.0.1:18800` to `.env` (never `AUTH_TOKEN`/`CT0`; keep `AGENTCOOKIE=off` during the harvest), then re-run `setup --allow-browser-cookies` so extras CDP reads the live pair. Full steps and the block/rate-limit stop rule are in **X on Linux / Mac mini** below. This extras-host login only runs on the consented "Yes - X cookies" path; the Research Continuation Override never skips it when the user said yes to X.
+-**Extras-host X login (Linux / Mac mini / Darwin agentcookie sink, MacBook SKIPS, and `LAST30DAYS_HOST=grok-bot` skips).** After consented setup, use `box_chrome_login.py` and follow the live CDP steps in **X on Linux / Mac mini (repair)**. Hand sign-in to the user. Set `BROWSER_CDP_URL=http://127.0.0.1:18800` when Chrome uses port 18800. Retry setup with the same consent flag. Stop the retry if recorded setup prints `not-granted`. A waiting topic does not defer this step.
 -
  **macOS browser-data permission remediation.** After consented `setup`, if stderr says `X cookie access was permission denied`, name the browser; if it says `Permission denied reading Cookies.binarycookies`, name Safari. Advise: `Check System Settings > Privacy & Security permissions for your terminal or agent app. Full Disk Access may help, but may not unlock another app's data. You can supply AUTH_TOKEN and CT0 manually or use XAI_API_KEY.` Offer ONE retry only when no research topic is waiting; otherwise continue with available sources.
  
@@ -29,55 +51,110 @@ index a9b65c6..04f7a23 100644
  
  **1. Welcome.** Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" --welcome` and show its stdout to the user VERBATIM (do not summarize or reformat). The welcome is engine-owned so it renders the same everywhere.
  
--**2. Cookie consent (ask BEFORE reading anything).** First check if `BROWSER_CONSENT=true` already exists in `~/.config/last30days/.env` (e.g. granted in a prior Claude Code session); if so, skip this prompt and run `setup --allow-browser-cookies` directly. Otherwise ask. Example: `May I read your browser cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop native, CDP, and sidecar reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in ~/.config/last30days/.env. (yes / no)` **Wait for the answer.**
--   - On **yes** → run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --allow-browser-cookies` (the engine saves `BROWSER_CONSENT=true`; do not append a duplicate marker). Unless `FROM_BROWSER` is already configured, setup saves the browsers that supplied complete cookies as a comma-separated `FROM_BROWSER` list, including Chromium browsers. It normalizes Windows Firefox's `firefox-wsl` source label to `firefox`. It never saves cookie values. Later research reads those browser sessions again; macOS Keychain may prompt again. `BROWSER_CONSENT=false` or `FROM_BROWSER=off` disables native, CDP, and sidecar reads. A later consented setup replaces a saved refusal, but an explicit `FROM_BROWSER=off` still blocks reads until changed. `AGENTCOOKIE=off` disables only the sidecar; `on` cannot override refusal. Setup also best-effort installs yt-dlp (YouTube), the free keyless Digg CLI (`digg-pp-cli` via `@mvanhorn/printing-press-library install digg --cli-only`; activates only when on the agent subprocess PATH, typically `$HOME/.local/bin`; reports honestly if off-PATH; recommend-only if `npx` is unavailable), plus the free keyless arXiv and Techmeme CLIs.
--     - **Extras hosts (Linux / Mac mini / Darwin agentcookie sink) — a MacBook SKIPS this, and so does a `LAST30DAYS_HOST=grok-bot` host.** On these hosts the Chrome cookie store can't be decrypted, so the extract above finds nothing and X stays empty unless you capture a LIVE login over CDP. Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/box_chrome_login.py"` (prints the host-correct command; `--exec` launches it; a MacBook prints "no launch needed" and spawns nothing). When `box-chrome` is on PATH it launches a throwaway profile on the last30days extras port **18800** (`SAND_CHROME_REMOTE_DEBUG_PORT=18800`, not box-chrome's default): `CHROME_USER_DATA_DIR=/tmp/last30days-x-chrome SAND_CHROME_REMOTE_DEBUG_PORT=18800 box-chrome --new-window https://x.com/login`. Wait for the x.com login page, then HAND THE DESKTOP to the human to type — do NOT drive the form. After they sign in, append `BROWSER_CDP_URL=http://127.0.0.1:18800` to `.env` (never `AUTH_TOKEN`/`CT0`; keep `AGENTCOOKIE=off` during the harvest) and re-run `setup --allow-browser-cookies`. Full steps and the block/rate-limit stop rule: **X on Linux / Mac mini** below. This extras-host login only runs on the consented **yes** path; a waiting topic never skips it when the user said yes to X.
--   - On **no** → run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. Skips all cookie reads; still installs yt-dlp (YouTube), Digg, arXiv, and Techmeme, still writes `SETUP_COMPLETE`. The engine saves `BROWSER_CONSENT=false`, so later runs also skip native, CDP, and sidecar reads. If the invocation already includes a topic, immediately research it with `--no-browser-cookies`, then resume the deferred onboarding in the same run after the findings: the ScrapeCreators offer (step 4) and source tier (step 4b) if a key is saved. Do not re-ask cookie consent as part of the resume.
-+**2. Cookie consent (ask BEFORE reading anything).** First check if `BROWSER_CONSENT=true` already exists in `~/.config/last30days/.env` (e.g. granted in a prior Claude Code session); if so, skip this prompt and run `setup --allow-browser-cookies` directly. Otherwise ask. Example: `May I read your browser cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop these reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in ~/.config/last30days/.env. (yes / no)` **Wait for the answer.**
-+   - On **yes** → run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --allow-browser-cookies` (the engine saves `BROWSER_CONSENT=true`; do not append a duplicate marker). Unless `FROM_BROWSER` is already configured, setup saves the browsers that supplied complete cookies as a comma-separated `FROM_BROWSER` list, including Chromium browsers. It normalizes Windows Firefox's `firefox-wsl` source label to `firefox`. It never saves cookie values. Later research reads those browser sessions again; macOS Keychain may prompt again. `BROWSER_CONSENT=false` or `FROM_BROWSER=off` disables these reads. A later consented setup replaces a saved refusal, but an explicit `FROM_BROWSER=off` still blocks reads until changed. Setup also best-effort installs yt-dlp (YouTube), the free keyless Digg CLI (`digg-pp-cli` via `@mvanhorn/printing-press-library install digg --cli-only`; activates only when on the agent subprocess PATH, typically `$HOME/.local/bin`; reports honestly if off-PATH; recommend-only if `npx` is unavailable), plus the free keyless arXiv and Techmeme CLIs.
-+   - On **no** → run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. Skips all cookie reads; still installs yt-dlp (YouTube), Digg, arXiv, and Techmeme, still writes `SETUP_COMPLETE`. The engine saves `BROWSER_CONSENT=false`, so later runs also skip these reads. If the invocation already includes a topic, immediately research it with `--no-browser-cookies`, then resume the deferred onboarding in the same run after the findings: the ScrapeCreators offer (step 4) and source tier (step 4b) if a key is saved. Do not re-ask cookie consent as part of the resume.
+-**2. Cookie consent (ask BEFORE reading anything).** Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" --resolve-browser-consent` with the same environment and working directory you will use for setup. If the command succeeds and stdout is exactly `granted`, run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --use-recorded-browser-consent` in the same environment and working directory. If setup succeeds and does not print `not-granted`, skip the cookie question and take the root Reddit session offer route. Otherwise ask. Example: `May I read your browser cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop native, CDP, and sidecar reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in your active configuration. (yes / no)` **Wait for the answer.**
++**2. Cookie consent (ask BEFORE reading anything).** Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" --resolve-browser-consent` with the same environment and working directory you will use for setup. If the command succeeds and stdout is exactly `granted`, run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --use-recorded-browser-consent` in the same environment and working directory. If setup succeeds and does not print `not-granted`, skip the cookie question and take the root Reddit session offer route. Otherwise ask. Example: `May I read your browser cookies for X/Twitter and other logged-in sources now and on later research runs? On macOS I check Chrome and other Chromium browsers first, then Firefox and Safari. On Windows and Linux I use Firefox, with Windows Firefox as a fallback under WSL. Your existing browser selection takes precedence. Setup remembers successful browser names, never cookie values. macOS Keychain may prompt again on later runs; choose Always Allow if you want continuing OS access. You can stop these reads by setting BROWSER_CONSENT=false or FROM_BROWSER=off in your active configuration. (yes / no)` **Wait for the answer.**
+    - On **yes** → run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup --allow-browser-cookies` (the engine saves `BROWSER_CONSENT=true`; do not append a duplicate marker), then, as its own step, take the root Reddit session offer route and ask its separate yes/no. Unless `FROM_BROWSER` is already configured, setup saves the browsers that supplied complete cookies as a comma-separated `FROM_BROWSER` list, including Chromium browsers. It normalizes Windows Firefox's `firefox-wsl` source label to `firefox`. It never saves cookie values; the Modal Flow's later-read and refusal rules apply. Setup also best-effort installs yt-dlp (YouTube), the free keyless Digg CLI (`digg-pp-cli` via `@mvanhorn/printing-press-library install digg --cli-only`; activates only when on the agent subprocess PATH, typically `$HOME/.local/bin`; reports honestly if off-PATH; recommend-only if `npx` is unavailable), plus the free keyless arXiv, Techmeme, and Yahoo Finance CLIs.
+-     - **Extras hosts (Linux / Mac mini / Darwin agentcookie sink, MacBook SKIPS, and `LAST30DAYS_HOST=grok-bot` skips).** After consented setup, use `box_chrome_login.py` and follow the live CDP steps in **X on Linux / Mac mini (repair)**. Hand sign-in to the user. Set `BROWSER_CDP_URL=http://127.0.0.1:18800` when Chrome uses port 18800. Retry setup with the same consent flag. Stop the retry if recorded setup prints `not-granted`. A waiting topic does not defer this step.
+-   - On **no** → run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. Skips all cookie reads; still installs yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance, still writes `SETUP_COMPLETE`. The engine saves `BROWSER_CONSENT=false`, so later runs also skip native, CDP, and sidecar reads. Then take the root Reddit session offer route. If the invocation already includes a topic, research it now (`--no-browser-cookies` if Reddit got a no), then resume the deferred onboarding in the same run after the findings: the ScrapeCreators offer (step 4) and source tier (step 4b) if a key is saved. Do not re-ask cookie consent as part of the resume.
++   - On **no** → run `FROM_BROWSER=off "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/last30days.py" setup`. Skips all cookie reads; still installs yt-dlp (YouTube), Digg, arXiv, Techmeme, and Yahoo Finance, still writes `SETUP_COMPLETE`. The engine saves `BROWSER_CONSENT=false`, so later runs also skip these reads. Then take the root Reddit session offer route. If the invocation already includes a topic, research it now (`--no-browser-cookies` if Reddit got a no), then resume the deferred onboarding in the same run after the findings: the ScrapeCreators offer (step 4) and source tier (step 4b) if a key is saved. Do not re-ask cookie consent as part of the resume.
  
  **3. Browser-data permission remediation (macOS only).** After consented `setup`, if stderr says `X cookie access was permission denied`, name the browser; if it says `Permission denied reading Cookies.binarycookies`, name Safari. Advise: `Check System Settings > Privacy & Security permissions for your terminal or agent app. Full Disk Access may help, but may not unlock another app's data. You can supply AUTH_TOKEN and CT0 manually or use XAI_API_KEY.` Offer ONE retry only when no research topic is waiting; otherwise continue with available sources.
  
-@@ -191,30 +188,13 @@ The magic of /last30days is Reddit comments + X posts together - and both are fr
+@@ -191,28 +188,13 @@ The magic of /last30days is Reddit comments + X posts together - and both are fr
  **X/Twitter (pick one - the most important source):**
  - `X_BEARER_TOKEN=xxx` - the official X API v2 (`api.x.com`) with an app-only bearer from the X developer console. Recent posts, about a week back on the Basic tier, unless your X developer project has full-archive access. Persist it with `setup --store-key X_BEARER_TOKEN` (value on stdin, masked in output). Outside a Grok Bot host also add `LAST30DAYS_X_BACKEND=xapi` so the engine selects it (`doctor` says so when the bearer is set without it).
- - **Grok CLI (no X credential):** install with `curl -fsSL https://x.ai/cli/install.sh | bash`, then `grok login`. No X account, no cookies, no API key. Needs a Grok plan; calls draw on it.
+ - **Grok CLI (no X credential):** install with `npm install -g @xai-official/grok` (or the official installer at https://x.ai/cli/install.sh), then `grok login`. No X account, no cookies, no API key. Needs a Grok plan; calls draw on it.
 -- `FROM_BROWSER=auto` - free. Reads your x.com login cookies live at search time: Firefox and Safari first, then Chromium browsers on macOS; Firefox only on Windows and Linux, with a Windows Firefox fallback under WSL. Cookie values are never saved to disk. Chromium reads may prompt for macOS Keychain access again; choose Always Allow for continuing OS access. A saved `BROWSER_CONSENT=false` blocks these reads until you consent again. Set `BROWSER_CONSENT=false` or `FROM_BROWSER=off` to disable native, CDP, and sidecar reads.
 +- `FROM_BROWSER=auto` - free. Reads your x.com login cookies live at search time: Firefox and Safari first, then Chromium browsers on macOS; Firefox only on Windows and Linux, with a Windows Firefox fallback under WSL. Cookie values are never saved to disk. Chromium reads may prompt for macOS Keychain access again; choose Always Allow for continuing OS access. A saved `BROWSER_CONSENT=false` blocks these reads until you consent again. Set `BROWSER_CONSENT=false` or `FROM_BROWSER=off` to disable these reads.
  - `XAI_API_KEY=xxx` - no browser access needed. Get a key at api.x.ai. Best for servers.
  - `XQUIK_API_KEY=xxx` - keyless-style X via Xquik.
  - `AUTH_TOKEN=xxx` + `CT0=xxx` - paste your X cookies manually (x.com → F12 → Application → Cookies).
  
- **X on a Grok Bot (repair).** On a `LAST30DAYS_HOST=grok-bot` host X runs only through official access, so if X returns nothing there: confirm Grok Bot's built-in X tools (namespace `x`) are in the session and the fetch ran before the engine command; otherwise add the "X for Grok Bot" plugin and connect X inside Grok Bot (the X connector lane), or add `X_BEARER_TOKEN` (recent posts, about the last week, unless your X developer project has full-archive access) or `XAI_API_KEY` from console.x.ai through `setup --store-key <NAME>`, or, when the footer reports X API credits exhausted (`payment-required`), top up credits in the X developer console. Nothing in the Linux / Mac mini repair section below applies on a Grok Bot.
+-**X on a Grok Bot (repair).** On a `LAST30DAYS_HOST=grok-bot` host X runs only through official access, so if X returns nothing there: confirm Grok Bot's built-in X tools (namespace `x`) are in the session and the fetch ran before the engine command; otherwise add the "X for Grok Bot" plugin and connect X inside Grok Bot (the X connector lane), or add `X_BEARER_TOKEN` (recent posts, about the last week, unless your X developer project has full-archive access) or `XAI_API_KEY` from console.x.ai through `setup --store-key <NAME>`, or, when the footer reports X API credits exhausted (`payment-required`), top up credits in the X developer console. Nothing in the Linux / Mac mini repair section below applies on a Grok Bot.
++**X on a Grok Bot (repair).** On a `LAST30DAYS_HOST=grok-bot` host X runs only through official access, so if X returns nothing there: confirm Grok Bot's built-in X tools (namespace `x`) are in the session and the fetch ran before the engine command; otherwise add the "X for Grok Bot" plugin and connect X inside Grok Bot (the X connector lane), or add `X_BEARER_TOKEN` (recent posts, about the last week, unless your X developer project has full-archive access) or `XAI_API_KEY` from console.x.ai through `setup --store-key <NAME>`, or, when the footer reports X API credits exhausted (`payment-required`), top up credits in the X developer console.
  
 -**X on Linux / Mac mini (repair).** These hosts (never a `LAST30DAYS_HOST=grok-bot` host) can't decrypt a local Chrome cookie store, so if X returns nothing there, feed bird a cookie pair one of these ways (a MacBook does NOT do any of this — it uses its Keychain / Firefox / Safari extract; do not launch box-chrome on a MacBook):
--- **agentcookie sidecar:** install the `agentcookie` CLI so the engine can read your `auth_token`/`ct0` from it automatically. Cookie refusal blocks it; `AGENTCOOKIE=off` also disables it.
+-- **agentcookie sidecar:** get permission before reading cookies. Install the CLI and set `AGENTCOOKIE=on` or `BROWSER_CONSENT=true`. Cookie refusal and `AGENTCOOKIE=off` disable it.
 -  - For sidecar-only access, get explicit permission to read `agentcookie` cookies and withdraw refusal. Set `AGENTCOOKIE=on`; remove `BROWSER_CONSENT` and `FROM_BROWSER` from the process environment, global `.env` (honor `LAST30DAYS_CONFIG_DIR`), and trusted `.claude/last30days.env`. Both must stay absent to keep native/CDP reads off; `BROWSER_CONSENT=true` permits CDP.
 -- **Live Chrome login over CDP (the proven extras-host path).** The engine reads a live signed-in Chrome over the DevTools Protocol, but you must LAUNCH that Chrome on the extras port and log in first — `setup --allow-browser-cookies` alone opens no window. Steps (a MacBook skips all of this):
 -  1. Set `AGENTCOOKIE=off` for this harvest so a sidecar can't mix in a different pair (leave it unset again after success).
--  2. Launch a throwaway login Chrome on the last30days extras port **18800** — this port is the last30days convention (`SAND_CHROME_REMOTE_DEBUG_PORT=18800`), NOT box-chrome's built-in default (`9222` + the display number). **Launch via the host `box-chrome` wrapper** (which sets `--class=box-chrome`); do NOT launch raw `google-chrome-stable`, and in particular do NOT launch raw Chrome with a custom `--class` — a raw Chrome with `--class=l30d-…` failed where `box-chrome` (class `box-chrome`) succeeded. Do NOT rely on any `GrokAgent` user-agent token: it is not required and may be disabled on the host (`/tmp/sand-ua-token-disabled`), so never tell users it must be present. Run `"${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/box_chrome_login.py"` to print the exact host-correct command (add `--exec` to launch it); on a MacBook it prints "no launch needed" and spawns nothing. When `box-chrome` is on PATH the command is:
+-  2. Launch a throwaway login Chrome on extras port **18800** (`SAND_CHROME_REMOTE_DEBUG_PORT=18800`, not box-chrome's `9222`+display default) via `box-chrome` (`--class=box-chrome`) — never raw `google-chrome-stable` or a custom `--class`, and do not require a `GrokAgent` UA token (`/tmp/sand-ua-token-disabled`). Run with `--exec` so the helper verifies a private `0700` per-user profile dir before launch (omit `--exec` to print the recipe; MacBook skips):
 -     ```
--     mkdir -p /tmp/last30days-x-chrome
--     CHROME_USER_DATA_DIR=/tmp/last30days-x-chrome SAND_CHROME_REMOTE_DEBUG_PORT=18800 box-chrome --new-window https://x.com/login
+-     "${LAST30DAYS_PYTHON}" "${SKILL_DIR}/scripts/box_chrome_login.py" --exec
 -     ```
--     If `box-chrome` is missing, do NOT invent a google-chrome flag soup (a raw Chrome with a custom `--class` is what failed) — sign into x.com in a Chrome that already exposes a remote-debugging port and pin `BROWSER_CDP_URL` to that endpoint instead.
+-     On an unsafe/unusable profile directory error (e.g., symlinked `~/.cache`), stop and retry with `--profile-dir <dir>` pointing to a private `0700` dir under a trusted non-symlink path. If `box-chrome` is missing, sign into x.com in an existing remote-debugging Chrome and pin `BROWSER_CDP_URL` to it instead.
 -  3. Do NOT fill the login form and do NOT drive the page (no Playwright/Puppeteer/computerUse/xdotool, no typing credentials). Wait until the x.com login page is actually visible, THEN hand the desktop / computer-preview to the human: "Log into X in this Chrome window." (A HUD over the login is OK only as a handoff, never to click the page.)
--  4. After they hand back, confirm the window is signed in (x.com/home). Append `BROWSER_CDP_URL=http://127.0.0.1:<port>` to `~/.config/last30days/.env` (append-only), using the debug port the Chrome actually listens on — `18800` if you launched with the command above, or the real port otherwise (a live harvest pinned `http://127.0.0.1:9334`). Do NOT write `AUTH_TOKEN` or `CT0` — the pair is read live each run. Then run `setup --allow-browser-cookies`; extras CDP reads the live pair. Pinning `BROWSER_CDP_URL` after login is also the guard if a stale/logged-out Chrome happens to answer on `18800`.
+-  4. After the user hands back the window, confirm they are signed in at x.com/home. Set `BROWSER_CDP_URL=http://127.0.0.1:<port>` using Chrome's actual debug port (`18800` in the command above). If `LAST30DAYS_CONFIG_DIR` is empty, set the endpoint in the research environment and skip the setup retry that writes configuration. For a fresh yes, set `BROWSER_CONSENT=true` in that research process too. For a recorded grant, keep the active consent settings. Honor `FROM_BROWSER=off` in either case. Otherwise, set the endpoint in the setup retry's environment. To persist a new endpoint, append it to the `.env` under `LAST30DAYS_CONFIG_DIR` when nonempty or to `~/.config/last30days/.env` when unset. Do NOT write `AUTH_TOKEN` or `CT0`. The engine reads the pair live. For onboarding, retry with the same consent flag. For a standalone repair, run `setup --allow-browser-cookies` only after a fresh yes. Stop the retry if recorded setup prints `not-granted`.
 -  5. If X shows a block / challenge / rate-limit, STOP — tell them to wait and retry later. Do not keep launching Chromes.
 -- **`XAI_API_KEY=xxx`** - key-based X, no browser at all.
 -- **Grok CLI** - run `grok login`, then pin `LAST30DAYS_X_BACKEND=grok` (pin-only; a leftover grok login never auto-steals the X lane). Needs a Grok plan.
--
+ 
  **Reddit (free, works out of the box):**
  - Free keyless discovery (Reddit search + shreddit) gives threads + top comments with upvote counts. No setup required.
- - `SCRAPECREATORS_API_KEY=xxx` - optional Reddit search backfill when the free path returns **fewer than 5 items** (default floor). A run makes at most one ScrapeCreators Reddit backfill per distinct query, date window, and subreddit set, and a backfill is several API calls (searches plus comment fetches, roughly 10 at default depth). Set `LAST30DAYS_REDDIT_SC_MIN_ITEMS=0` to backfill only when the free path returns nothing, or `LAST30DAYS_REDDIT_BACKEND=scrapecreators` to make ScrapeCreators primary.
+diff --git a/scripts/capture_brief_hook.py b/scripts/capture_brief_hook.py
+old mode 100755
+new mode 100644
+diff --git a/scripts/last30days.py b/scripts/last30days.py
+index 89e52f2..751cd92 100644
+--- a/scripts/last30days.py
++++ b/scripts/last30days.py
+@@ -2046,7 +2046,7 @@ def _cache_research_options(
+         }
+         research_keys = {
+             "INCLUDE_SOURCES", "EXCLUDE_SOURCES", "TELEGRAM_SOURCES", "BSKY_HANDLE",
+-            "BSKY_SEARCH_HOST", "FROM_BROWSER", "BROWSER_CONSENT", "BROWSER_CDP_URL",
++            "BSKY_SEARCH_HOST", "FROM_BROWSER", "BROWSER_CONSENT",
+             "DEGRADED_TRANSCRIPT_THRESHOLD",
+         }
+         relevant_config = {}
+diff --git a/scripts/lib/doctor.py b/scripts/lib/doctor.py
+index a83b966..cb082da 100644
+--- a/scripts/lib/doctor.py
++++ b/scripts/lib/doctor.py
+@@ -666,28 +666,6 @@ def _x_record(config):
+                 )
+             record["fix"] = ""
+             return record
+-    # PATH presence explains an unconfigured sidecar; it does not authorize it.
+-    # Refusals, backend pins and configured failures retain their own diagnosis.
+-    if (
+-        not policy.official_only
+-        and not record.get("pinned")
+-        and all_auto_missing
+-        and record["status"] in ("unconfigured", health.ERROR)
+-        and not env.cookie_access_denied(config)
+-        and str(config.get("AGENTCOOKIE") or env.read_secret_env("AGENTCOOKIE") or "").strip().lower() != "off"
+-    ):
+-        from . import agentcookie
+-
+-        if (
+-            agentcookie.is_disabled(config)
+-            and env.x_extras_enabled(config)
+-            and shutil.which(agentcookie.AGENTCOOKIE_BIN)
+-        ):
+-            record["status"] = "opt-in"
+-            record["tier"] = TIER_OFF
+-            record["note"] = "agentcookie is on PATH; sidecar cookie access is not enabled"
+-            record["fix"] = "set AGENTCOOKIE=on to allow sidecar X cookie reads"
+-            return record
+     #
+     # Grok is opt-in only: a leftover ~/.grok/auth.json must never steal the X
+     # lane. The grok backend appears in the chain findings (for visibility) but
+@@ -2337,7 +2315,6 @@ def _config_fingerprint(config: Dict[str, Any]) -> str:
+         "x_cookie_access_denied": str(config.get("LAST30DAYS_X_COOKIE_ACCESS_DENIED") or ""),
+         "browser_consent": str(config.get("BROWSER_CONSENT") or ""),
+         "from_browser": str(config.get("FROM_BROWSER") or ""),
+-        "agentcookie": str(config.get("AGENTCOOKIE") or env.read_secret_env("AGENTCOOKIE") or ""),
+         "x_api_opt_in": env.x_api_opt_in(),
+     }
+     canonical = json.dumps(signals, sort_keys=True, separators=(",", ":"))
 diff --git a/scripts/lib/env.py b/scripts/lib/env.py
-index 71556bf..3d3590e 100644
+index f3ebf50..c7c9f39 100644
 --- a/scripts/lib/env.py
 +++ b/scripts/lib/env.py
-@@ -718,14 +718,6 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
-         ('FROM_BROWSER', None),
-         ('BROWSER_CONSENT', None),
+@@ -879,14 +879,6 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
+         # every run look scheduled.
+         (SCHEDULED_RUN_VAR, None),
          ('LAST30DAYS_X_COOKIE_ACCESS_DENIED', None),
 -        # agentcookie sidecar: soft-dep X cookie source (lib/agentcookie.py),
 -        # active only on extra hosts (Linux / Mac mini / Darwin sink) or when
@@ -90,7 +167,7 @@ index 71556bf..3d3590e 100644
          ('LAST30DAYS_TRUST_PROJECT_CONFIG', None),
          ('SETUP_COMPLETE', None),
          ('INCLUDE_SOURCES', ''),
-@@ -917,10 +909,6 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
+@@ -1188,10 +1180,6 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
      return config
  
  
@@ -101,7 +178,7 @@ index 71556bf..3d3590e 100644
  
  def _mac_model() -> str:
      """Darwin hardware model via ``sysctl -n hw.model``, or "" otherwise.
-@@ -955,32 +943,12 @@ def _is_mac_mini() -> bool:
+@@ -1226,32 +1214,12 @@ def _is_mac_mini() -> bool:
  
  
  def x_extras_enabled(config: dict[str, Any]) -> bool:
@@ -139,7 +216,7 @@ index 71556bf..3d3590e 100644
      return False
  
  
-@@ -1009,60 +977,18 @@ def _apply_browser_extract(config: dict[str, Any]) -> None:
+@@ -1280,60 +1248,18 @@ def _apply_browser_extract(config: dict[str, Any]) -> None:
  
  
  def _discover_and_apply_x_credentials(config: dict[str, Any]) -> None:
@@ -208,42 +285,148 @@ index 71556bf..3d3590e 100644
  
  
  # ---------------------------------------------------------------------------
-@@ -1583,11 +1509,7 @@ def x_pending_browser_auth(config: dict[str, Any], local_only: bool = False) ->
+@@ -2202,12 +2128,7 @@ def x_pending_browser_auth(config: dict[str, Any], local_only: bool = False) ->
      same cookies and authenticate X fine. This predicate reports that
      "available pending browser auth" state without reading a single cookie — it
      keys only on the resolved browser list (``cookie_extraction_browsers``
 -    derives it from ``FROM_BROWSER`` alone, no secrets) OR — on extra hosts
--    only (``x_extras_enabled``) — the agentcookie sidecar being on PATH (a plain
--    ``which`` lookup), bird being installed, and X having a cookie-domain
--    mapping. A plain MacBook must NOT predict bird from an agentcookie binary on
--    PATH (R18), so the sidecar leg is gated behind ``x_extras_enabled``.
+-    only (``x_extras_enabled``) — the agentcookie sidecar having explicit consent
+-    and being on PATH (a plain ``which`` lookup), bird being installed, and X
+-    having a cookie-domain mapping. A plain MacBook must NOT predict bird from
+-    an agentcookie binary on PATH (R18), so the sidecar leg is gated behind
+-    ``x_extras_enabled``.
 +    derives it from ``FROM_BROWSER`` alone, no secrets).
      Side-effect free, so the safe-inspection contract of diagnose/preflight is
      preserved.
  
-@@ -1616,13 +1538,6 @@ def x_pending_browser_auth(config: dict[str, Any], local_only: bool = False) ->
+@@ -2241,14 +2162,6 @@ def x_pending_browser_auth(config: dict[str, Any], local_only: bool = False) ->
      # A FROM_BROWSER browser is a run-time cookie source on any host.
      if cookie_extraction_browsers(config):
          return True
 -    # The agentcookie sidecar is a run-time cookie source ONLY on extra hosts
 -    # (Linux / Mac mini / Darwin sink / AGENTCOOKIE=on). Gating this keeps a
 -    # plain MacBook from predicting bird off a stray agentcookie binary (R18).
--    if x_extras_enabled(config):
--        from . import agentcookie
--        if agentcookie.is_available(config):
--            return True
+-    # Admission precedes host classification so a refused sidecar never reads
+-    # its role file or probes the hardware model merely to predict availability.
+-    from . import agentcookie
+-    if agentcookie.is_available(config) and x_extras_enabled(config):
+-        return True
      return False
  
  
-diff --git a/scripts/last30days.py b/scripts/last30days.py
---- a/scripts/last30days.py
-+++ b/scripts/last30days.py
-@@ -1512,7 +1512,7 @@
-         }
-         research_keys = {
-             "INCLUDE_SOURCES", "EXCLUDE_SOURCES", "TELEGRAM_SOURCES", "BSKY_HANDLE",
--            "BSKY_SEARCH_HOST", "FROM_BROWSER", "BROWSER_CONSENT", "BROWSER_CDP_URL",
-+            "BSKY_SEARCH_HOST", "FROM_BROWSER", "BROWSER_CONSENT",
-             "DEGRADED_TRANSCRIPT_THRESHOLD",
-         }
-         relevant_config = {}
+diff --git a/scripts/lib/hackernews.py b/scripts/lib/hackernews.py
+index b4576e8..4359bd0 100644
+--- a/scripts/lib/hackernews.py
++++ b/scripts/lib/hackernews.py
+@@ -240,12 +240,14 @@ def _word_boundary_pattern(word: str) -> "re.Pattern[str]":
+     return pattern
+ 
+ 
+-def _title_matches_query(title: str, query: str, author: str = "") -> bool:
+-    """Check if any query token appears as a whole token in the title.
++def _title_matches_query(title: str, query: str, author: str = "", text: str = "") -> bool:
++    """Check if any query token appears as a whole token in the story.
+ 
+     Returns True when the query is empty (no filter), or when at least one
+-    query token matches as a whole token in the title after stripping
+-    "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
++    query token matches as a whole token in the title or submission text after
++    stripping "Tell HN:", "Show HN:", "Ask HN:", "Launch HN:" prefixes.
++    Algolia searches the submission body, so a title-only check drops stories
++    whose only mention of the topic is there.
+ 
+     We previously required *every* token to appear (all-words), which killed
+     every Algolia hit on multi-keyword themes like "claude, personal agents,
+@@ -263,12 +265,18 @@ def _title_matches_query(title: str, query: str, author: str = "") -> bool:
+     if not query:
+         return True
+     stripped = _HN_PREFIXES.sub("", title).strip()
+-    check_text = stripped.lower()
++    check_text = f"{stripped}\n{text}".lower()
+     # Normalise the query the same way search_hackernews does so post-filter
+     # tokens line up with what Algolia actually saw.
+     query_words = [w for w in _normalize_query(query).lower().split() if w]
+     if not query_words:
+         return True
++    # Algolia marks every token after the first as optional, so a title that
++    # contains only "video" survives a "remotion video react" search. A
++    # multi-word topic has to match its most distinctive token. One-word
++    # topics keep the any-match behavior.
++    if len(query_words) > 1:
++        query_words = [max(query_words, key=len)]
+     for word in query_words:
+         if _word_boundary_pattern(word).search(check_text):
+             return True
+@@ -291,7 +299,12 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+         before = len(hits)
+         hits = [
+             h for h in hits
+-            if _title_matches_query(h.get("title", ""), query, h.get("author", ""))
++            if _title_matches_query(
++                h.get("title", ""),
++                query,
++                h.get("author", ""),
++                h.get("story_text") or "",
++            )
+         ]
+         dropped = before - len(hits)
+         if dropped:
+@@ -316,7 +329,10 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+         rank_score = max(0.3, 1.0 - (i * 0.02))  # 1.0 -> 0.3 over 35 items
+         engagement_boost = min(0.2, math.log1p(points) / 40)
+         if query:
+-            content_score = token_overlap_relevance(query, hit.get("title", ""))
++            content_score = token_overlap_relevance(
++                query,
++                f"{hit.get('title', '')}\n{hit.get('story_text') or ''}",
++            )
+             relevance = min(1.0, 0.6 * rank_score + 0.4 * content_score + engagement_boost)
+         else:
+             relevance = min(1.0, rank_score * 0.7 + engagement_boost + 0.1)
+@@ -327,6 +343,7 @@ def parse_hackernews_response(response: Dict[str, Any], query: str = "") -> List
+             "url": article_url,
+             "hn_url": hn_url,
+             "author": hit.get("author", ""),
++            "text": hit.get("story_text") or "",
+             "date": date_str,
+             "engagement": {
+                 "points": points,
+diff --git a/scripts/lib/permission_preflight.py b/scripts/lib/permission_preflight.py
+index f356ff0..76dc39b 100644
+--- a/scripts/lib/permission_preflight.py
++++ b/scripts/lib/permission_preflight.py
+@@ -12,7 +12,6 @@ from . import corpus, env, providers as provider_endpoints, proxy
+ 
+ 
+ ENDPOINT_OVERRIDE_KEYS = {
+-    "BROWSER_CDP_URL",
+     "BSKY_SEARCH_HOST",
+     "LAST30DAYS_AMAZON_DOMAIN",
+     "LAST30DAYS_API_BASE",
+@@ -158,23 +157,9 @@ def _dedupe_writes(writes: list[dict[str, str]]) -> list[dict[str, str]]:
+ 
+ 
+ def _conditional_x_cookie_routes(config: dict[str, Any]) -> list[str]:
+-    if (
+-        not env.x_policy(config).cookie_discovery
+-        or env.cookie_access_denied(config)
+-        or (config.get("AUTH_TOKEN") and config.get("CT0"))
+-    ):
+-        return []
+-    from . import agentcookie, chrome_cdp
+-
+-    routes = []
+-    if agentcookie.is_available(config):
+-        routes.append("agentcookie (if available)")
+-    if chrome_cdp.cookie_access_allowed(config) and any(
+-        not endpoint.strip().lower().startswith(("https://", "wss://"))
+-        for endpoint in chrome_cdp.candidate_endpoints(config)
+-    ):
+-        routes.append("Chrome CDP (if available)")
+-    return routes if routes and env.x_extras_enabled(config) else []
++    # The agentcookie sidecar and Chrome CDP lanes are not vendored in Trove,
++    # so no conditional cookie route exists beyond the FROM_BROWSER browsers.
++    return []
+ 
+ 
+ def build(

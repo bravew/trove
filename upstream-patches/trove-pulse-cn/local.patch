@@ -53,3 +53,272 @@ index 6955990..0ee2a21 100644
  WEIBO_COOKIE=          # or: login weibo
  ZHIHU_COOKIE=          # or: login zhihu
  BILIBILI_COOKIE=       # reduces Bilibili 412 risk control
+diff --git a/scripts/lib/crawler_bridge.py b/scripts/lib/crawler_bridge.py
+index a9857e2..6e9fb33 100644
+--- a/scripts/lib/crawler_bridge.py
++++ b/scripts/lib/crawler_bridge.py
+@@ -245,15 +245,15 @@ def _write_private(path: Path, text: str) -> None:
+     """Write a file readable only by the current user (cookies are secrets)."""
+     path.parent.mkdir(parents=True, exist_ok=True)
+     fd, tmp_name = tempfile.mkstemp(prefix=path.name, dir=str(path.parent))
+-    os.close(fd)
+     tmp = Path(tmp_name)
+     try:
+-        tmp.write_text(text, encoding="utf-8")
+-        try:
+-            os.chmod(tmp, 0o600)
+-        except OSError:
+-            pass
++        with os.fdopen(fd, "w", encoding="utf-8") as handle:
++            handle.write(text)
++            handle.flush()
++            os.fchmod(handle.fileno(), 0o600)
+         os.replace(tmp, path)
++        if os.name != "nt" and (path.stat().st_mode & 0o077):
++            raise OSError(f"{path} is readable by other users")
+     finally:
+         if tmp.exists():
+             try:
+@@ -351,12 +351,13 @@ def import_cookie_header(platform: str, cookie_header: str) -> int:
+         raise ValueError(f"未知平台: {platform}")
+     domains = (spec["domain"],) + tuple(spec.get("extra_domains", ()))
+     cookies = []
++    expected = set(spec["cookies"])
+     for part in (cookie_header or "").split(";"):
+         if "=" not in part:
+             continue
+         name, _, value = part.strip().partition("=")
+         name = name.strip()
+-        if not name:
++        if name not in expected:
+             continue
+         for domain in domains:
+             cookies.append({
+diff --git a/scripts/lib/env.py b/scripts/lib/env.py
+index d48f1ed..46c3ca0 100644
+--- a/scripts/lib/env.py
++++ b/scripts/lib/env.py
+@@ -2,9 +2,13 @@
+ 
+ Author: Jesse (https://github.com/Jesseovo)
+ 
+-Priority: process environment > project ``.claude/last30days-cn.env`` >
++Priority: process environment > trusted project ``.claude/last30days-cn.env`` >
+ global ``~/.config/last30days-cn/.env``.
+ 
++A project file is loaded only when ``LAST30DAYS_TRUST_PROJECT_CONFIG`` is true
++in the process environment or the global config. The project file cannot grant
++that trust to itself.
++
+ v4:
+ - Runtime switches written in the .env files (``LAST30DAYS_DISABLE_BROWSER``,
+   ``LAST30DAYS_BROWSER_PATH``, ``EXCLUDE_SOURCES``, ``INCLUDE_SOURCES`` ...)
+@@ -82,6 +86,20 @@ RUNTIME_SETTINGS = (
+ DEFAULT_XHS_MCP_CANDIDATES = ("http://127.0.0.1:18060",)
+ 
+ 
++def _truthy(value: Any) -> bool:
++    if value is None:
++        return False
++    return str(value).strip().lower() in {"1", "true", "yes", "on"}
++
++
++def _project_config_trusted(global_env: Dict[str, str]) -> bool:
++    """Trust comes from the process or the home config, never the project file."""
++    process_value = os.environ.get("LAST30DAYS_TRUST_PROJECT_CONFIG")
++    if process_value is not None:
++        return _truthy(process_value)
++    return _truthy(global_env.get("LAST30DAYS_TRUST_PROJECT_CONFIG"))
++
++
+ def _check_file_permissions(path: Path) -> None:
+     if os.name == "nt":
+         return
+@@ -148,9 +166,9 @@ def apply_runtime_settings(file_env: Dict[str, str]) -> List[str]:
+ 
+ 
+ def get_config() -> Dict[str, Any]:
+-    """Load configuration: os.environ overrides project .env overrides global .env."""
++    """Load configuration: os.environ overrides a trusted project .env, then global .env."""
+     file_env = load_env_file(CONFIG_FILE) if CONFIG_FILE else {}
+-    project_env_path = _find_project_env()
++    project_env_path = _find_project_env() if _project_config_trusted(file_env) else None
+     project_env = load_env_file(project_env_path) if project_env_path else {}
+     merged_env = {**file_env, **project_env}
+     apply_runtime_settings(merged_env)
+diff --git a/scripts/lib/hot_board.py b/scripts/lib/hot_board.py
+index 8c71ada..81c7200 100644
+--- a/scripts/lib/hot_board.py
++++ b/scripts/lib/hot_board.py
+@@ -199,8 +199,12 @@ def render_page(data: Dict[str, Any], per_board: int, max_topics: int, site_titl
+     filter_note = '<span>关键词「{}」</span>'.format(_text(data["topic_filter"])) if data.get("topic_filter") else ""
+     style = (_ASSETS / "hot_board.css").read_text(encoding="utf-8")
+     script = (_ASSETS / "hot_board.js").read_text(encoding="utf-8")
+-    sprite = base64.b64encode((_ASSETS / "hot_board_cat.png").read_bytes()).decode("ascii")
+-    style += '\n:root { --cat-sprite: url("data:image/png;base64,' + sprite + '"); }'
++    # The sprite is excluded from the vendored tree. Rendering stays usable
++    # without it; the CSS variable is set only when the file is actually present.
++    sprite_path = _ASSETS / "hot_board_cat.png"
++    if sprite_path.is_file():
++        sprite = base64.b64encode(sprite_path.read_bytes()).decode("ascii")
++        style += '\n:root { --cat-sprite: url("data:image/png;base64,' + sprite + '"); }'
+     theme_init = "try{var t=localStorage.getItem('last30days-hot-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}"
+     return '''<!doctype html>
+ <html lang="zh-CN">
+diff --git a/scripts/lib/http.py b/scripts/lib/http.py
+index 9db702e..94ef35b 100644
+--- a/scripts/lib/http.py
++++ b/scripts/lib/http.py
+@@ -246,10 +246,53 @@ def looks_like_antibot(body: str) -> bool:
+     return any(marker in head for marker in ANTIBOT_MARKERS)
+ 
+ 
++# urllib copies almost all headers across 3xx. Drop credentials when the origin changes.
++_CROSS_ORIGIN_AUTH_HEADERS = frozenset(
++    {"authorization", "cookie", "x-api-key", "x-csrf-token", "x-subscription-token"}
++)
++
++
++def _request_origin(url: str) -> Tuple[str, str, int]:
++    parts = urlsplit(url)
++    scheme = parts.scheme.lower()
++    host = (parts.hostname or "").lower()
++    if parts.port is not None:
++        port = parts.port
++    elif scheme == "https":
++        port = 443
++    elif scheme == "http":
++        port = 80
++    else:
++        port = 0
++    return scheme, host, port
++
++
++class _StripAuthOnCrossOriginRedirect(urllib.request.HTTPRedirectHandler):
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        new = super().redirect_request(req, fp, code, msg, headers, newurl)
++        if new is None:
++            return None
++        if _request_origin(req.full_url) != _request_origin(new.full_url):
++            for store in (new.headers, getattr(new, "unredirected_hdrs", None)):
++                if not store:
++                    continue
++                for name in list(store):
++                    if name.lower() in _CROSS_ORIGIN_AUTH_HEADERS:
++                        del store[name]
++        return new
++
++
++_opener = urllib.request.build_opener(_StripAuthOnCrossOriginRedirect)
++_DEFAULT_URLOPEN = urllib.request.urlopen
++
++
+ def _open(req: urllib.request.Request, timeout: int, opener=None):
+     if opener is not None:
+         return opener.open(req, timeout=timeout)
+-    return urllib.request.urlopen(req, timeout=timeout)
++    # A test that replaces urllib.request.urlopen keeps that replacement.
++    if urllib.request.urlopen is not _DEFAULT_URLOPEN:
++        return urllib.request.urlopen(req, timeout=timeout)
++    return _opener.open(req, timeout=timeout)
+ 
+ 
+ def _send(
+diff --git a/scripts/lib/render.py b/scripts/lib/render.py
+index 20014a7..a93679b 100644
+--- a/scripts/lib/render.py
++++ b/scripts/lib/render.py
+@@ -457,17 +457,29 @@ def _window_days(report: schema.Report) -> int:
+         return 30
+ 
+ 
++def _write_private(path: Path, text: str) -> None:
++    """Reports can contain queries and result text, so only the owner can read them."""
++    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
++    if os.name != "nt":
++        fd = os.open(path, flags, 0o600)
++    else:
++        fd = os.open(path, flags)
++    with os.fdopen(fd, "w", encoding="utf-8") as handle:
++        handle.write(text)
++    if os.name != "nt" and path.stat().st_mode & 0o077:
++        raise OSError(f"{path} is readable by other users")
++
++
+ def write_outputs(report: schema.Report):
+     """Write report.json, report.md, report.html, and last30days.context.md."""
+     ensure_output_dir()
+-    with open(OUTPUT_DIR / "report.json", "w", encoding="utf-8") as f:
+-        json.dump(report.to_dict(), f, indent=2, ensure_ascii=False)
+-    with open(OUTPUT_DIR / "report.md", "w", encoding="utf-8") as f:
+-        f.write(render_full_report(report))
+-    with open(OUTPUT_DIR / "report.html", "w", encoding="utf-8") as f:
+-        f.write(render_html_report(report))
+-    with open(OUTPUT_DIR / "last30days.context.md", "w", encoding="utf-8") as f:
+-        f.write(render_context_snippet(report))
++    _write_private(
++        OUTPUT_DIR / "report.json",
++        json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
++    )
++    _write_private(OUTPUT_DIR / "report.md", render_full_report(report))
++    _write_private(OUTPUT_DIR / "report.html", render_html_report(report))
++    _write_private(OUTPUT_DIR / "last30days.context.md", render_context_snippet(report))
+ 
+ 
+ def get_context_path() -> str:
+diff --git a/scripts/lib/upstream_bridge.py b/scripts/lib/upstream_bridge.py
+index e68e579..5dbe44e 100644
+--- a/scripts/lib/upstream_bridge.py
++++ b/scripts/lib/upstream_bridge.py
+@@ -84,10 +84,22 @@ def find_upstream() -> Optional[Path]:
+     return None
+ 
+ 
++def _safe_interpreter(candidate: str) -> bool:
++    """An interpreter override must be an executable file, not a search-path name."""
++    if not candidate or any(part in candidate for part in ("\x00", "\n", "\r")):
++        return False
++    path = Path(candidate).expanduser()
++    if not path.is_absolute():
++        return False
++    return path.is_file() and os.access(path, os.X_OK)
++
++
+ def upstream_python() -> Tuple[Optional[str], str]:
+     override = os.environ.get(UPSTREAM_PYTHON_ENV, "").strip()
+     if override:
+-        return override, f"{UPSTREAM_PYTHON_ENV}={override}"
++        if not _safe_interpreter(override):
++            return None, f"{UPSTREAM_PYTHON_ENV} 必须是绝对路径上的可执行文件"
++        return str(Path(override).expanduser()), f"{UPSTREAM_PYTHON_ENV}={override}"
+     if sys.version_info >= (3, 12):
+         return sys.executable, f"当前解释器 Python {sys.version_info.major}.{sys.version_info.minor}"
+     return None, (
+diff --git a/scripts/lib/crawler_bridge.py b/scripts/lib/crawler_bridge.py
+index 0e45088..0c57992 100644
+--- a/scripts/lib/crawler_bridge.py
++++ b/scripts/lib/crawler_bridge.py
+@@ -255,7 +255,7 @@ def _cookie_read_dir(platform: str = "") -> Path:
+ 
+ def _ensure_cookie_dir() -> Path:
+     try:
+-        ensure_writable_directory(COOKIE_DIR)
++        ensure_writable_directory(COOKIE_DIR, private=True)
+         return COOKIE_DIR
+     except OSError:
+         fallback = _cookie_fallback_dir()
+diff --git a/scripts/lib/storage.py b/scripts/lib/storage.py
+index 9efc9c7..2e48f64 100644
+--- a/scripts/lib/storage.py
++++ b/scripts/lib/storage.py
+@@ -20,6 +20,10 @@ def ensure_writable_directory(path: Path, create: bool = True, private: bool = F
+     if create:
+         path.mkdir(mode=0o700 if private else 0o777, parents=True, exist_ok=True)
+     if private:
++        if path.is_symlink():
++            raise PermissionError(f"Not a private directory: {path}")
++        if os.name != "nt":
++            os.chmod(path, 0o700)
+         check_private_directory(path)
+     with tempfile.TemporaryFile(dir=str(path)):
+         pass

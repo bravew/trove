@@ -56,14 +56,19 @@ import os
 import sys
 import tempfile
 import zlib
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
-from _common.runner import fail_if_classified
+from _common.runner import ffmpeg_failure_extra, JsonTooDeep, fail_if_classified, read_json
 from _common import (beat_grid, snap_points, decode_pcm_mono, rms_envelope, BEAT_MIN_CONFIDENCE)
 from _common import require_tool
-from _common.probe import TS_EXTS, signatures_match, stream_signature
-from _common.decision import grid_at_or_after
-from _common import warn, record_fallback, refuse_existing_outputs, sibling_temp, source_codec_video_args, STATE, add_common, apply_common, audio_codec_for, emit, aac_args, cfr_args, default_output, die, ffmpeg_base, info, is_audio_output, time_arg, probe, run, X264_PRESETS, keyframes_near, MissingFpsError, concat_list_line, place_output, refuse_output_is_input, fmt_secs, measure_frame_timing, dry_run_input_pending
+from _common.probe import PROBED_AUDIO, PROBED_VIDEO, TS_EXTS, probed_maps, several_av_streams, signatures_match, stream_signature
+from _common.runner import subtitle_codec_for, subtitle_container_holds, declare_time_map, segments_map, with_mapped_chapters
+from _common.decision import PAD_SOUND_FROM_ZERO, SEEK_MARGIN, delivered_rate, frame_rate, grid_at_or_after, stream_starts, on_frame as decision_on_frame
+from _common.timeline import output_timecode_args
+from _common.emit import refuse_still
+from _common.decision import UNWRITTEN_AUDIO_EXT
+from _common import refuse_unwritten_output
+from _common import warn, record_fallback, refuse_existing_outputs, sibling_temp, source_codec_video_args, STATE, add_common, apply_common, audio_codec_for, emit, aac_args, cfr_args, cfr_filter, graph_with_cfr, default_output, die, ffmpeg_base, info, is_audio_output, time_arg, probe, run, X264_PRESETS, keyframes_near, concat_list_line, place_output, refuse_output_is_input, fmt_secs, measure_frame_timing, dry_run_input_pending
 
 # outputs whose re-encode dropped a subtitle/data stream (reported as dropped_non_av_streams)
 DROPPED_STREAMS: List[str] = []
@@ -79,12 +84,27 @@ def _t(value: str, fps, flag: str = "--segments") -> float:
     return time_arg(value, flag, fps)
 
 
-def keep_ranges_after_removing(removed: List[Tuple[float, float]], total: float, fps=None) -> List[Tuple[float, float]]:
+def keep_ranges_after_removing(removed: List[Tuple[float, float]], total: float, fps=None,
+                               picture: Optional[Tuple[float, float]] = None,
+                               dropped: Optional[List[Tuple[float, float]]] = None) -> List[Tuple[float, float]]:
     """--remove: what is left of [0, total] once `removed` is dropped (merged where they overlap,
     clamped to the file). A leftover shorter than one frame (10 ms without a frame rate) is not a
-    piece anyone asked to keep. Refuses a removal that would leave nothing."""
+    piece anyone asked to keep. With `picture` (where the video starts and ends, for a video
+    output), neither is a leftover that holds less than one frame of it: sound before the first
+    frame or after the last (a track that outlasts its picture) has no picture to cut, and was
+    kept and then refused as a segment the caller never gave (#462 A51). Such leftovers are added
+    to `dropped`. Refuses a removal that would leave nothing."""
     least = 1.0 / fps if fps else 0.01
     keep, cursor = [], 0.0
+
+    def add(a: float, b: float) -> None:
+        if b - a < least:
+            return
+        if picture is not None and min(b, picture[1]) - max(a, picture[0]) < least - 1e-6:
+            if dropped is not None:
+                dropped.append((a, b))
+            return
+        keep.append((a, b))
     outside = [(s, e) for s, e in removed if min(total, e) <= min(total, max(0.0, s))]
     if outside:
         die("--remove " + ", ".join(f"{s:g}-{e:g}" for s, e in outside) + f" lies outside the file (0-{total:.3f}s), "
@@ -92,12 +112,14 @@ def keep_ranges_after_removing(removed: List[Tuple[float, float]], total: float,
     for s, e in sorted((min(total, max(0.0, s)), min(total, e)) for s, e in removed):
         if e <= cursor:
             continue
-        if s - cursor >= least:
-            keep.append((cursor, s))
+        add(cursor, s)
         cursor = max(cursor, e)
-    if total - cursor >= least:
-        keep.append((cursor, total))
+    add(cursor, total)
     if not keep:
+        if dropped:
+            die(f"--remove leaves only sound with no picture ({', '.join(f'{a:.3f}-{b:.3f}s' for a, b in dropped)}, "
+                f"outside the video's {picture[0]:.3f}-{picture[1]:.3f}s); nothing with a picture would be left to keep. "
+                "Write the sound out with an audio -o (e.g. -o part.wav) instead", kind="input")
         die(f"--remove drops the whole file ({total:.3f}s); nothing would be left to keep")
     return keep
 
@@ -146,7 +168,30 @@ def copy_args(meta: dict, dst: str) -> List[str]:
     return args
 
 
-LOSSLESS_AUDIO = {"pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "flac"}
+def stream_maps(meta: dict, dst: str, copy: bool) -> List[str]:
+    """The -map arguments of a cut: the picture and the sound probe() describes, which every
+    measurement here (keyframes, start skew, timecode, length) is taken from. ffmpeg's default
+    selection wrote the largest picture and the track with the default disposition or the most
+    channels instead (A258). A stream copy of a file with one picture and one sound keeps the
+    default selection, command for command (it also carries a subtitle stream into a container
+    whose muxer names a subtitle codec, such as Matroska). With several, the first subtitle stream
+    is mapped when the container holds it as it is, and is otherwise left out and reported
+    (DROPPED_STREAMS)."""
+    audio_only = is_audio_output(dst) or not meta.get("video")
+    if copy and not several_av_streams(meta):
+        return []
+    maps = probed_maps(meta, video=not audio_only)
+    subs = meta.get("subtitle_stream_details") or []
+    if copy and not audio_only and subs:
+        codec, ext = subs[0].get("codec") or "", os.path.splitext(dst)[1].lstrip(".").lower()
+        if subtitle_container_holds(codec, ext) and subtitle_codec_for(codec, ext) == "copy":
+            maps += ["-map", "0:s:0"]
+        else:
+            DROPPED_STREAMS.append(dst)
+    return maps
+
+
+LOSSLESS_AUDIO = {"pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s32le", "pcm_f32le", "flac"}  # pcm_s16be: .aif/.aiff/.caf (#517)
 
 
 def precision_of(meta: dict, dst: str, reencoded: bool) -> str:
@@ -218,6 +263,38 @@ def _outcome(meta: dict, dst: str, reencoded: bool, reasons: List[str], **copy) 
 EDIT_LIST_EXTS = (".mp4", ".mov", ".m4v")
 
 
+def possible_reencode_reason(mode: str, outcomes: List[dict], segments: int) -> List[str]:
+    """Under --dry-run, the reencode_reason values a real run may still add to a plan of mode copy
+    or smart, which would then report hybrid or accurate (#510): the dry run reads no packets for a
+    single copy, so where its copy lands, and every check a real run makes on the written file,
+    are not known yet. [] for a real run and for a plan that already re-encodes."""
+    if not STATE.dry_run:
+        return []
+    if mode == "smart":
+        return ["smart_fallback"]  # the checks run on the written file (smart.checks is null)
+    if mode != "copy":
+        return []
+    possible = ["copy_failed", "stream_lost"]
+    if any(o.get("length_unjudged") for o in outcomes):
+        possible.append("tolerance")
+    if segments > 1:
+        possible.append("concat_fallback")
+    return possible
+
+
+def possible_reencode_note(mode: str, possible: List[str], tolerance: float) -> str:
+    """The plan's notes line for possible_reencode_reason."""
+    if mode == "smart":
+        return ("planned as a smart cut: a real run checks the written cut against the source and re-encodes "
+                "the whole cut instead (mode accurate, reencode_reason smart_fallback) when a check fails")
+    why = ("planned as a stream copy: a real run may re-encode it instead (mode hybrid, reencode_reason "
+           + ", ".join(possible) + ")")
+    if "tolerance" in possible:
+        why += (f"; where the copy lands is measured only from the written file, and a copy that lands "
+                f"{tolerance:.2f}s (--tolerance) or more from the requested cut is re-encoded")
+    return why
+
+
 def _with_notes(outcome: dict, notes: List[str]) -> dict:
     """An outcome with the notes of the attempt that led to it put first."""
     outcome["notes"] = list(notes) + list(outcome.get("notes") or [])
@@ -252,11 +329,12 @@ def source_skew(src: str, meta: dict, t: float) -> float:
 
 def video_end(src: str, meta: dict):
     """Where the video stream ends on the cut's clock (seconds from the file's start), or None when
-    the stream's length is unknown."""
-    v = meta.get("video") or {}
-    if not v.get("duration"):
-        return None
-    return (v.get("start_time") or 0.0) + v["duration"] - file_origin(src)
+    the stream's length is unknown. A Matroska/WebM stream states no duration, only its DURATION
+    tag, which is already that end (own_end()); read from `duration` alone, a .mkv had no picture
+    end and --remove kept a sound-only leftover past it."""
+    from _common.emit import own_end
+    end = own_end(meta.get("video"))
+    return None if end is None else end - file_origin(src)
 
 
 _SEEK_SHIFTS: dict = {}
@@ -350,6 +428,41 @@ def copy_presentation(t: float, key, edit_list: bool, fps) -> dict:
         # hidden: the pictures decoded from the keyframe up to the first one presented
         return {"start_snapped": False, "stored_preroll_seconds": round(max(0.0, first - k_pts), 6)}
     return {"start_snapped": abs(k_pts - t) > frame + 1e-6, "stored_preroll_seconds": None}
+
+
+def first_frame_from(src: str, meta: dict, start: float, reencode: bool, edit_list: bool):
+    """Seconds from the source picture's first frame to the frame a cut from `start` begins on,
+    for its start timecode: the first frame at or after `start` for a re-encode and an edit-listed
+    copy that hides its keyframe's pre-roll, the keyframe for any other copy (it shows the
+    pre-roll). None when where a copy lands cannot be read, and for an MXF source, whose demuxer
+    lands a seek on another keyframe than seek_keyframe's read (-ss 1.5: the one at 1.44 s, read as
+    the one at 0.96 s), so no label would be known to be right."""
+    v0, rate = stream_starts(meta)[0], frame_rate(meta)
+    if reencode:
+        # a start before the picture's first frame (a video that starts after the file's origin)
+        # begins on that first frame, not on a grid frame before it
+        return grid_at_or_after(max(start, v0), v0, rate) - v0
+    if "mxf" in str(meta.get("format") or "").split(","):
+        return None
+    key = seek_keyframe(src, start)
+    if key is None:
+        return None
+    if edit_list and key[0] <= start + 1e-6:
+        return None if key[2] is None else key[2] - v0
+    return key[0] - v0
+
+
+def copied_lead(meta: dict, start: float, end: float) -> Optional[float]:
+    """The seconds of a sound's late start that an audio-only stream copy of start..end leaves out
+    (#515): the copy begins at the first packet, so a sound that starts after `start` on the file's
+    clock (stream_starts) comes out that much early. None when it is less than one frame of the
+    source's picture (1 ms without one), which no picture could show, or when the start is unknown."""
+    audio = meta.get("audio") or {}
+    if not isinstance(audio.get("start_time"), (int, float)):
+        return None
+    lead = min(stream_starts(meta)[1], end) - start
+    fps = (meta.get("video") or {}).get("fps")
+    return round(lead, 6) if lead >= (1.0 / float(fps) if fps else 0.001) else None
 
 
 def av_skew(out_meta: dict, edit_list_remedy: bool = False, expected: float = 0.0):
@@ -842,13 +955,29 @@ def cut_one(src: str, start: float, end: float, dst: str, reencode: bool, crf: i
         reasons.append("pcm_container")
     edit_list = False
     notes: List[str] = []
+    if reencode and os.path.splitext(dst)[1].lower() in UNWRITTEN_AUDIO_EXT:
+        # a .wma is written only as a stream copy of WMA sound: a copy this run judged and is about
+        # to re-encode (its length, a lost stream, a failed copy) is refused, not encoded into ASF,
+        # and the copy it wrote is removed, so a failed run leaves no file under the name (#517).
+        # A copy that failed wrote nothing there (run() replaces an existing path only on success),
+        # so the file is the caller's earlier one under --overwrite and is left
+        if _reasons and _reasons[-1] in ("stream_lost", "tolerance") and not STATE.dry_run and os.path.isfile(dst):
+            os.remove(dst)  # the copy this run just wrote and judged (the recursion's last reason)
+        if "tolerance" in reasons:
+            info(f"the stream copy into {dst} is re-encoded for its length, and a .wma cannot be encoded; "
+                 "--tolerance -1 keeps the copy as it lands")
+        refuse_unwritten_output(dst)
     if reencode:
         if is_audio_output(dst) or not meta.get("video"):
             # -ss before -i seeks, then decoding discards samples up to the exact start
             # (accurate_seek); atrim bounds the decoded stream to the requested length at sample
-            # resolution.
-            cmd = ffmpeg_base() + ["-ss", f"{start:.6f}", "-i", src, "-t", f"{dur:.6f}"]
-            cmd += ["-af", f"atrim=end={dur:.6f},asetpts=PTS-STARTPTS"]
+            # resolution. The input seek counts from the file's start, so a sound that starts after
+            # it (late against its picture) arrives at its offset from `start`; it is padded with
+            # silence from 0, as the --segments re-cut pads it (av_trim), not rebased to its own
+            # first sample, which moved it earlier and made the cut shorter than asked (#462 A46)
+            cmd = ffmpeg_base() + ["-ss", f"{start:.6f}", "-i", src, "-t", f"{dur:.6f}"] + stream_maps(meta, dst, copy=False)
+            pad = PAD_SOUND_FROM_ZERO if audio_codec_for(dst)[1] == "flac" else "aresample=async=1:first_pts=0"
+            cmd += ["-af", f"atrim=end={dur:.6f},{pad}"]
         else:
             # Seek SEEK_MARGIN early, then drop the margin on the output side, which decodes and
             # discards it from both streams alike. An input seek straight to `start` can land (the
@@ -856,6 +985,11 @@ def cut_one(src: str, start: float, end: float, dst: str, reencode: bool, crf: i
             # `start` and lose the frames before it (-ss 9.9 on a B-frame HEVC file began at 10.0).
             m = min(SEEK_MARGIN, start)
             cmd = ffmpeg_base() + ["-ss", f"{start - m:.6f}", "-i", src, "-ss", f"{m:.6f}", "-t", f"{dur:.6f}"]
+            cmd += stream_maps(meta, dst, copy=False)
+            # a VFR source is conformed by the fps filter at the rate cfr_args() delivers: the
+            # encoder line's -fps_mode cfr alone let a frame run up to two frames late (#512). Its
+            # grid is laid from the output-side seek, so the cut lands on a slot (#538)
+            cmd += ["-vf", cfr_filter(meta, seek=m)] if cfr_filter(meta) else []
         # ffmpeg's default stream selection also picks one subtitle stream; a re-encode cannot
         # trim it (the cues kept their timestamps and the container grew to 2 s for a 1 s cut,
         # sweep F2), so the re-encode carries video/audio only and the result says so
@@ -878,7 +1012,8 @@ def cut_one(src: str, start: float, end: float, dst: str, reencode: bool, crf: i
     elif audio_only:
         # output-side seek: an input seek on a video file lands on the previous video keyframe and on
         # FLAC/MP3 on a coarse index; reading from the start and dropping packets is exact to the packet
-        cmd = ffmpeg_base() + ["-i", src, "-ss", f"{start:.6f}", "-t", f"{dur:.6f}"] + copy_args(meta, dst) + ["-avoid_negative_ts", "make_zero", dst]
+        cmd = (ffmpeg_base() + ["-i", src, "-ss", f"{start:.6f}", "-t", f"{dur:.6f}"] + stream_maps(meta, dst, copy=True)
+               + copy_args(meta, dst) + ["-avoid_negative_ts", "make_zero", dst])
     else:
         # With --edit-list a single MP4/MOV output keeps the edit list the plain copy writes: the
         # keyframe's pre-roll is stored but hidden, so the picture and the sound start at `start`.
@@ -890,14 +1025,18 @@ def cut_one(src: str, start: float, end: float, dst: str, reencode: bool, crf: i
         # Other concat parts (Matroska, MPEG-TS) keep make_zero.
         edit_list = (edit_list_ok or copy_t is not None) and os.path.splitext(dst)[1].lower() in EDIT_LIST_EXTS
         cmd = (ffmpeg_base() + ["-ss", f"{start:.6f}", "-i", src, "-t", f"{dur if copy_t is None else copy_t:.6f}"]
-               + copy_args(meta, dst) + ([] if edit_list else ["-avoid_negative_ts", "make_zero"]) + [dst])
+               + stream_maps(meta, dst, copy=True) + copy_args(meta, dst)
+               + ([] if edit_list else ["-avoid_negative_ts", "make_zero"]) + [dst])
+    if not audio_only and (meta.get("timecode") or {}).get("value"):
+        cmd[-1:-1] = output_timecode_args(meta, first_frame_from(src, meta, start, reencode, edit_list and copy_t is None),
+                                          delivered_rate(meta) if reencode else None)
     proc = run(cmd, check=False)
     if proc.returncode != 0:
         if not reencode:
             fail_if_classified(proc)  # a full disk fails the re-encode too: its error, not a retry (#415)
             info("stream copy failed, falling back to re-encode")
             return cut_one(src, start, end, dst, True, crf, preset, tolerance, meta, reasons + ["copy_failed"], edit_list_ok)
-        die(f"ffmpeg failed:\n{proc.stderr.strip()}", kind="ffmpeg")
+        die(f"ffmpeg failed:\n{proc.stderr.strip()}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr))
     out_meta = probe(dst) if not reencode and not STATE.dry_run and copy_t is None else None
     if out_meta is not None:
         # #367: a copy from MPEG-TS whose window holds no video keyframe writes no video at all
@@ -935,11 +1074,34 @@ def cut_one(src: str, start: float, end: float, dst: str, reencode: bool, crf: i
             info(f"stream copy landed on a keyframe {abs(got - dur):.2f}s away from the requested cut "
                  f"(> {tolerance:.2f}s tolerance); re-encoding this segment for accuracy{alt}")
             return _with_notes(cut_one(src, start, end, dst, True, crf, preset, tolerance, meta, reasons + ["tolerance"], edit_list_ok), notes)
-    if reencode or audio_only:
+    if audio_only and not reencode:
+        # an audio-only copy is judged by its written length too (above): a dry run that wrote
+        # nothing says a real run may still re-encode it (#510 review)
+        pending = {"length_unjudged": True} if (STATE.dry_run and copy_t is None and tolerance >= 0) else {}
+        if pending and os.path.splitext(dst)[1].lower() in UNWRITTEN_AUDIO_EXT:
+            notes.append(f"a run judges the copy by its written length: one that comes out --tolerance or more off "
+                         f"is refused (output_extension_unsupported), since a .wma cannot be encoded; --tolerance -1 "
+                         "keeps the copy as it lands")
+        lead = copied_lead(meta, start, end)
+        if lead:
+            # a copy cannot add silence: the sound starts at its first packet, `lead` earlier than it
+            # sat after `start` (#515). Kept within --tolerance, as a start that snapped is, and said.
+            # A dry run says it for a lead of --tolerance or more too: the run judges the written
+            # length, which is short by up to a packet less than the lead (0.351 s for a lead of
+            # 0.355), so it may keep that copy; it re-encodes and pads it otherwise (#542 review)
+            unsure = STATE.dry_run and 0 <= tolerance <= lead
+            notes.append(f"the sound starts {lead:.3f}s after {start:.3f}s in the source; a stream copy cannot "
+                         f"add silence, so the extraction starts with the sound, {lead:.3f}s early against the "
+                         "picture (--accurate pads it from the start"
+                         + ("; a run re-encodes and pads it instead when the copy comes out --tolerance or more short)" if unsure else ")"))
+        return _outcome(meta, dst, False, reasons, notes=notes, audio_lead_dropped_seconds=lead or None, **pending)
+    if reencode:
         return _outcome(meta, dst, reencode, reasons)
     if STATE.dry_run:
-        # the planned copy: whether it keeps an edit list is known; where it lands is not
-        return _outcome(meta, dst, False, reasons, edit_list=edit_list and edit_list_ok, start_snapped=None)
+        # the planned copy: whether it keeps an edit list is known; where it lands is not, so a
+        # real run that judges the written copy by its length may still re-encode it (#510)
+        return _outcome(meta, dst, False, reasons, edit_list=edit_list and edit_list_ok, start_snapped=None,
+                        length_unjudged=copy_t is None and tolerance >= 0)
     fps = (meta.get("video") or {}).get("fps")
     # a concat part's edit list does not hide its pre-roll in the join, so it presents from the keyframe
     shown = edit_list and edit_list_ok
@@ -956,9 +1118,6 @@ JOIN_CHUNK = 32
 # plays as a click: measured on a 440 Hz tone, the step at the join was 14x the tone's own largest
 # sample-to-sample change. A 20 ms fade is too short to hear as a dip and long enough to remove it.
 DECLICK_S = 0.02
-# how far before a segment the fallback seeks, so a start inside the B-frame reorder delay before a
-# keyframe still decodes from the keyframe BEFORE it
-SEEK_MARGIN = 1.0
 # codecs whose configuration travels in the packets, so a part with no extradata is not missing any
 _PARTS: dict = {}
 
@@ -1018,7 +1177,6 @@ def _fraction_rate(text: str) -> float:
 
 # the first frame at or after t on the source's grid; shared with the tools that cut both streams
 # on one set of bounds (#409)
-_grid_at_or_after = grid_at_or_after
 
 
 def _join_chunk(src: str, segments: List[Tuple[float, float]], dst: str, meta: dict, crf: int, preset: str,
@@ -1064,8 +1222,8 @@ def _join_chunk(src: str, segments: List[Tuple[float, float]], dst: str, meta: d
             # output's grid, and the constant-rate output duplicated one (65 frames for 64 on
             # FFmpeg 6.1). The video trim sits half a frame before each grid point, so no FFmpeg
             # version rounds a frame on the boundary in or out.
-            a = m + (_grid_at_or_after(s, v0, rate) - s)
-            b = m + (_grid_at_or_after(e, v0, rate) - s)
+            a = m + (grid_at_or_after(s, v0, rate) - s)
+            b = m + (grid_at_or_after(e, v0, rate) - s)
             half = 0.5 / rate
         # both streams shift by the same constant, so an offset between them (audio that starts
         # late) survives; the audio is then padded to the segment's origin
@@ -1075,7 +1233,7 @@ def _join_chunk(src: str, segments: List[Tuple[float, float]], dst: str, meta: d
             # concat filter starts the next segment after the longer stream, so a short picture
             # would leave a hole in the video there
             pad = f"tpad=stop_mode=clone:stop_duration={e - vend + 1.0:.6f}," if first + i in hold else ""
-            graph.append(f"[{i}:v:0]{pad}trim=start={a - half:.6f}:end={b - half:.6f},setpts=PTS-{a:.6f}/TB[v{i}]")
+            graph.append(f"[{i}:{PROBED_VIDEO}]{pad}trim=start={a - half:.6f}:end={b - half:.6f},setpts=PTS-{a:.6f}/TB[v{i}]")
             pads += f"[v{i}]"
         if has_a:
             # fade only the sides that meet another segment: the file's own start and end stay as cut
@@ -1086,13 +1244,16 @@ def _join_chunk(src: str, segments: List[Tuple[float, float]], dst: str, meta: d
                 fades += f",afade=t=in:st=0:d={fade:.6f}"
             if fade > 0 and n < (len(segments) if total is None else total) - 1:
                 fades += f",afade=t=out:st={b - a - fade:.6f}:d={fade:.6f}"
-            graph.append(f"[{i}:a:0]atrim=start={a:.6f}:end={b:.6f},asetpts=PTS-{a:.6f}/TB,"
+            graph.append(f"[{i}:{PROBED_AUDIO}]atrim=start={a:.6f}:end={b:.6f},asetpts=PTS-{a:.6f}/TB,"
                          f"aresample=async=1:first_pts=0{fades}[a{i}]")
             pads += f"[a{i}]"
     outs = ("[v]" if has_v else "") + ("[a]" if has_a else "")
     graph.append(f"{pads}concat=n={len(segments)}:v={int(has_v)}:a={int(has_a)}{outs}")
-    cmd += ["-filter_complex", ";".join(graph)]
-    for pad in ("[v]" if has_v else None, "[a]" if has_a else None):
+    # a VFR source is conformed by the fps filter after the concat, at the rate cfr_args() delivers
+    # (#512); a constant-rate source's graph is unchanged
+    fc, vpad = graph_with_cfr(";".join(graph), "[v]", meta) if has_v else (";".join(graph), None)
+    cmd += ["-filter_complex", fc]
+    for pad in (vpad, "[a]" if has_a else None):
         if pad:
             cmd += ["-map", pad]
     if intermediate:
@@ -1102,7 +1263,12 @@ def _join_chunk(src: str, segments: List[Tuple[float, float]], dst: str, meta: d
     # the source's rate, stated: FFmpeg 7.0 encoded the trimmed, concatenated pictures at 25 fps
     # and dropped frames to fit (98 frames for 117 at 30 fps)
     rate_out = ["-r", rate_arg] if has_v and rate_arg and rate and "-r" not in codec else []
-    cmd += ["-sn", "-dn"] + codec + rate_out + [dst]
+    # a join's frames after the first range are not the source's next frames: no start timecode
+    # labels them, so the output carries none (a single range's cut moves it to its first frame)
+    if not intermediate:
+        # the chapters land where their ranges do (#696): FFmpeg kept the source's times
+        cmd = with_mapped_chapters(cmd, meta, segments_map(segments), None)
+    cmd += ["-sn", "-dn"] + codec + rate_out + ([] if intermediate or not has_v else output_timecode_args(meta, None)) + [dst]
     run(cmd)
     return codec
 
@@ -1122,7 +1288,7 @@ def join_from_source(src: str, segments: List[Tuple[float, float]], dst: str, me
     if len(segments) <= JOIN_CHUNK:
         _join_chunk(src, segments, dst, meta, crf, preset, has_v, vend=vend, hold=hold)
         return
-    ext = os.path.splitext(dst)[1] or ".mp4"
+    ext = os.path.splitext(dst)[1].lower() or ".mp4"  # IMG_0001.MOV is a .mov
     # Matroska chunks with PCM audio: no edit lists and no AAC priming to carry into the join (MP4
     # chunks measured the video 23 ms late against the audio after a copy concat)
     # the chunks' codec tag (hvc1), which a stream copy out of Matroska does not carry into an MP4
@@ -1161,23 +1327,28 @@ def join_from_source(src: str, segments: List[Tuple[float, float]], dst: str, me
         for c in chunks:
             fh.write(concat_list_line(c) + "\n")
     audio = [] if not meta.get("audio") else (aac_args() if has_v else audio_codec_for(dst))
-    run(ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile]
+    run(with_mapped_chapters(ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile], meta, segments_map(segments), None)
         + (["-c:v", "copy"] + (tag if ext in (".mp4", ".mov", ".m4v") else []) if has_v else ["-vn"]) + audio
-        + (["-movflags", "+faststart"] if ext in (".mp4", ".mov", ".m4v") and has_v else []) + [dst])
+        + (["-movflags", "+faststart"] if ext in (".mp4", ".mov", ".m4v") and has_v else [])
+        + (output_timecode_args(meta, None) if has_v else []) + [dst])
 
 
 BEAT_RATE = 22050  # the decode rate the onset pass uses, matching scenes.py --beats
 
 
-def _grid_from_source(path: str, min_confidence: float) -> "dict":
+def _grid_from_source(path: str, min_confidence: float, named: bool = False) -> "dict":
     """The beat grid of `path`: a scenes.py --json document if that is what it is, otherwise a
     media file to measure. Reading a document is how a caller avoids a second decode."""
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
+        doc = read_json(path)   # a media file is not UTF-8 or not JSON: a ValueError, then measured
+    except JsonTooDeep as exc:
+        die(f"--snap-source {path}: {exc}", kind="input")
     except (OSError, ValueError):
         doc = None
     if isinstance(doc, dict) and doc.get("beat_grid"):
+        if not isinstance(doc["beat_grid"], dict) or not isinstance(doc.get("beats") or [], list):
+            die(f"--snap-source {path}: beat_grid must be an object and beats a list "
+                "(regenerate it with `scenes.py MUSIC --beats --json`)", kind="input")
         grid = dict(doc["beat_grid"])
         grid["beats"] = doc.get("beats") or []
         # A scenes.py document carries the supported subset since 1.17; one written by an older
@@ -1203,7 +1374,15 @@ def _grid_from_source(path: str, min_confidence: float) -> "dict":
     if isinstance(doc, dict):
         die(f"--snap-source {path}: this JSON has no beat_grid -- produce one with "
             "`scenes.py MUSIC --beats --json`", kind="input")
+    if doc is not None:
+        die(f"--snap-source {path}: this JSON is not a scenes.py document (it is a {type(doc).__name__}, "
+            "not an object with beat_grid) -- produce one with `scenes.py MUSIC --beats --json`", kind="input")
     samples = decode_pcm_mono(path, BEAT_RATE, check=False)
+    if not samples and named:
+        # not "no reliable beat grid in this audio": nothing was decoded, so nothing was measured (#404)
+        die(f"--snap-source {path}: no audio could be decoded from it, and it is not a scenes.py --beats --json "
+            "document, so no beat grid was measured", kind="input",
+            hint="pass the music bed (a media file with sound) or the JSON `scenes.py MUSIC --beats --json` prints")
     block = max(1, int(round(BEAT_RATE * 0.01)))
     env = rms_envelope(samples, block)
     # the envelope's real step is block / rate (220 / 22050 = 9.977 ms), not the 10 ms asked for:
@@ -1238,7 +1417,7 @@ def snap_segments(args, segments, meta, total):
         die("--min-confidence must be greater than 0: at 0 every grid is 'reliable', including "
             "one measured from noise, which is exactly what --snap beats must not cut to. Use "
             "--snap none if you do not want the points moved at all.", kind="input")
-    grid = _grid_from_source(source, args.min_confidence)
+    grid = _grid_from_source(source, args.min_confidence, named=bool(args.snap_source))
     confidence = float(grid.get("confidence") or 0.0)
     tempo = grid.get("tempo_bpm")
     if confidence < args.min_confidence or not grid.get("beats"):
@@ -1333,7 +1512,7 @@ def run_smart(args, segments, output: str, meta: dict, forced: List[str], hold_n
         # line can outgrow Windows' limit, and the full re-encode joins in chunks of this size
         return fallback(f"{len(segments)} segments with sound: the smart join takes at most {JOIN_CHUNK}, the "
                         "full re-encode joins them in chunks", "segments")
-    ext = os.path.splitext(output)[1] or ".mp4"
+    ext = os.path.splitext(output)[1].lower() or ".mp4"
     params = _smartcut.stream_params(args.input)
     bad = _smartcut.ineligible(params, meta, ext)
     if bad:
@@ -1434,6 +1613,8 @@ def main() -> int:
     KEEP_HEVC = not args.no_keep_hevc
 
     meta = probe(args.input)
+    # read as a one-frame clip, a still wrote 0.04 s with --start 0 and nothing (kind output) past it (#531)
+    refuse_still(meta, args.input, "cut.py keeps a stretch of a clip's time, and a still has none")
     total = meta.get("duration") or 0.0
     # why every segment re-encodes, if one of these forces it; `requested` is read before the
     # guards below overwrite args.accurate, so a forced re-encode is never reported as asked for
@@ -1450,6 +1631,7 @@ def main() -> int:
         forced.append("codec")
 
     fps = (meta.get("video") or {}).get("fps")
+    remove_notes: List[str] = []
     if args.remove:
         if args.segments or args.end or args.duration or args.start is not None:
             die("--remove names what to drop from the whole file: it does not combine with --segments, --start, --end or --duration")
@@ -1460,7 +1642,23 @@ def main() -> int:
         if not total:
             die(f"--remove needs the input's duration, which {args.input} does not report"
                 + (" yet (it is an earlier step's output)" if dry_run_input_pending(args.input) else ""))
-        args.segments = ",".join(f"{s:.6f}-{e:.6f}" for s, e in keep_ranges_after_removing(parse_segments(args.remove, fps, clamp=True), total, fps))
+        picture = None
+        if (meta.get("video") or {}).get("fps") and not is_audio_output(args.output or "") and not dry_run_input_pending(args.input):
+            vend = video_end(args.input, meta)
+            if vend is not None:
+                picture = ((meta["video"].get("start_time") or 0.0) - file_origin(args.input), vend)
+        sound_only: List[Tuple[float, float]] = []
+        args.segments = ",".join(f"{s:.6f}-{e:.6f}" for s, e in keep_ranges_after_removing(
+            parse_segments(args.remove, fps, clamp=True), total, fps, picture, sound_only))
+        for a, b in sound_only:
+            remove_notes.append(f"--remove left {a:.3f}-{b:.3f}s, which holds sound but no frame of the picture "
+                                f"(the video runs {picture[0]:.3f}-{picture[1]:.3f}s); it is not kept")
+            info(remove_notes[-1])
+    elif args.segments and (args.end or args.duration or args.start is not None):
+        # A50: the single-range flags were accepted beside --segments and not read, where --remove
+        # refuses the same combination
+        die("--segments names every range to keep: it does not combine with --start, --end or --duration "
+            "(give the one range as --segments A-B, or drop --segments)")
     if args.segments:
         segments = parse_segments(args.segments, fps)
     else:
@@ -1488,11 +1686,18 @@ def main() -> int:
     for s, e in segments:
         if total and s >= total:
             die(f"segment start {s:.3f}s is beyond the media duration {total:.3f}s")
-    segments = [(s, min(e, total) if total else e) for s, e in segments]
     # what was asked for, clamped to the media duration as in every 2.x release: requested_* and
     # expected_duration report this, and a segment the join below ends with the video (less than a
     # frame of sound trimmed) shows that trim in duration_delta_seconds and a note instead
-    requested = list(segments)
+    requested = [(s, min(e, total) if total else e) for s, e in segments]
+    # a start or end written in milliseconds is cut on the frame it reads back to (#653): the nearest
+    # frame when that is within half a millisecond either way (1.902 and 1.935 for the frames at
+    # 1.9019 and 1.93527), never one before the first; a sound-only output or a VFR picture has no
+    # grid (decision.on_frame; grid_at_or_after itself is unchanged, since a length also goes through it)
+    on_frame = lambda t, rate=0 if is_audio_output(args.output or "") or (meta.get("video") or {}).get("variable_frame_rate_suspected") else frame_rate(meta): decision_on_frame(t, stream_starts(meta)[0], rate)
+    segments = [(on_frame(s), min(on_frame(e), total or math.inf)) for s, e in requested]
+    if len(segments) == 1:
+        declare_time_map("input seek")  # one range: FFmpeg moves the chapters with the input -ss
     video = meta.get("video") or {}
     if video.get("fps") and not is_audio_output(args.output or ""):
         # a video segment shorter than one frame has no picture to cut: a copy lands on a whole
@@ -1509,8 +1714,9 @@ def main() -> int:
                     + "; give every segment at least one frame", kind="input")
 
     output = args.output or default_output(args.input, "cut")
-    refuse_output_is_input(output, args.input)
-    ext = os.path.splitext(output)[1] or ".mp4"
+    # --snap-source is read for its beat grid and is never an -i of the cut (#522's sweep)
+    refuse_output_is_input(output, args.input, *([args.snap_source] if args.snap_source else []))
+    ext = os.path.splitext(output)[1].lower() or ".mp4"  # an upper-case .MP4 is still faststart
 
     # A segment that runs past the end of the video, with a join after it: whatever joins it (the
     # concat demuxer or the concat filter) starts the next segment after its LONGER stream, so the
@@ -1518,7 +1724,7 @@ def main() -> int:
     # clean copy). clip_length's rule, as join.py uses it: less than a frame past -> end the
     # segment with its picture; more -> hold the last frame for the sound, which only a re-cut
     # can do. The last segment is left as the source had it: nothing is placed after it.
-    join_notes: List[str] = []
+    join_notes: List[str] = list(remove_notes)
     hold_needed = False
     vend = (video_end(args.input, meta) if len(segments) > 1 and video.get("fps") and not is_audio_output(output)
             and not dry_run_input_pending(args.input) else None)
@@ -1690,9 +1896,12 @@ def main() -> int:
                     joined = sibling_temp(output, "join") if checked else output
                     if checked:
                         temps.append(joined)
-                    cmd = ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy"]
+                    cmd = with_mapped_chapters(ffmpeg_base() + ["-f", "concat", "-safe", "0", "-i", listfile], meta,
+                                               segments_map(segments), None) + ["-c", "copy"]
                     if ext in (".mp4", ".mov", ".m4v"):
                         cmd += ["-movflags", "+faststart"]
+                    if not is_audio_output(output):
+                        cmd += output_timecode_args(meta, None)  # a join: no start timecode (_join_chunk)
                     cmd += [joined]
                     proc = run(cmd, check=False)
                     fail_if_classified(proc)  # #415: a full disk is not a reason to re-cut every segment
@@ -1765,6 +1974,27 @@ def main() -> int:
     mode = ("smart" if smart_doc is not None and smart_doc["applied"] else
             "copy" if not reencoded else ("accurate" if args.accurate else "hybrid"))
     notes: List[str] = vfr_notes + join_notes + [n for o in outcomes for n in o.get("notes") or []]
+    verification = smart_verification(smart_doc) if smart_doc is not None and smart_doc.get("checks") else []
+    if not STATE.dry_run and mode == "copy" and len(requested) > 1:
+        # Per-segment keyframe snaps can all be within tolerance and still accumulate
+        # into a materially longer or shorter output. Check the written timeline once.
+        tolerance = min(expected, args.tolerance) if args.tolerance >= 0 else expected
+        if fps and result.get("video"):
+            tolerance = max(tolerance, 1 / fps)
+        delta = got - expected if got is not None else None
+        ok = delta is not None and abs(delta) <= tolerance + 1e-6
+        verification.append({"step": "cut_total_duration", "property": "output_duration",
+                             "expected": round(expected, 6), "measured": round(got, 6) if got is not None else None,
+                             "delta": round(delta, 6) if delta is not None else None,
+                             "tolerance": round(tolerance, 6), "provenance": "user_specified", "ok": ok})
+        if not ok:
+            message = (f"stream-copy total duration: wrote {fmt_secs(got)}, requested {expected:.3f}s "
+                       f"(tolerance {tolerance:.3f}s); use --accurate to re-encode the cut")
+            notes.append(message)
+            info(message)
+    possible = possible_reencode_reason(mode, outcomes, len(segments))
+    if possible:
+        notes.append(possible_reencode_note(mode, possible, args.tolerance))
     single = outcomes[0] if len(outcomes) == 1 else {}
     stored = single.get("stored_preroll_seconds")
     if single.get("edit_list") and stored:
@@ -1810,15 +2040,24 @@ def main() -> int:
                f"(cut writes one audio track, on a stream copy as on a re-encode)")
         warn(msg, "audio_tracks_dropped", source=len(src_audio), kept=kept, dropped=dropped_audio)
         notes.append(msg)
+    # a copied audio extraction that starts with the sound, not where it sat after --start (#515); an
+    # outcome a re-cut replaced carries none, so this is what the written file holds
+    leads = [(i + 1, o["audio_lead_dropped_seconds"]) for i, o in enumerate(outcomes) if o.get("audio_lead_dropped_seconds")]
+    if leads:
+        where = (f" (segment{'s' if len(leads) > 1 else ''} {', '.join(str(i) for i, _ in leads)})"
+                 if len(outcomes) > 1 else "")
+        warn(f"the stream copy left out {sum(s for _, s in leads):.3f}s of silence before the sound{where}, so the "
+             "sound is early against the source's picture; --accurate keeps it", "audio_lead_dropped",
+             seconds=round(sum(s for _, s in leads), 6), segments=[{"index": i, "seconds": s} for i, s in leads])
     emit(output, expected_duration=round(expected, 6), duration_error_ms=error_ms, precision=precision, reencoded=reencoded,
          expect_streams=expect_streams, stream_reference=[meta], stream_windows=[(s, e) for s, e in requested],
          dropped_non_av_streams=bool(DROPPED_STREAMS), dropped_audio_streams=max(dropped_audio, 0),
          requested_start=round(requested[0][0], 6) if len(requested) == 1 else None,
          requested_end=round(requested[0][1], 6) if len(requested) == 1 else None,
          requested_segments=[[round(s, 6), round(e, 6)] for s, e in requested] if len(requested) > 1 else None,
-         requested_duration=round(expected, 6), output_duration=round(got, 6) if got is not None else None,
+         requested_duration=round(expected, 6), output_duration=round(got, 6) if got is not None and not STATE.dry_run else None,
          duration_delta_seconds=round(error_ms / 1000, 6) if error_ms is not None else None,
-         mode=mode, keyframe_snapped=report["keyframe_snapped"], start_snapped=report["start_snapped"],
+         mode=mode, possible_reencode_reason=possible, keyframe_snapped=report["keyframe_snapped"], start_snapped=report["start_snapped"],
          reencode_reason=reencode_reason, least_exact_precision=report["least_exact_precision"],
          segment_precision=report["segment_precision"],
          edit_list=bool(single.get("edit_list")), stored_preroll_seconds=stored, av_start_skew_seconds=skew,
@@ -1833,7 +2072,7 @@ def main() -> int:
                                f"stream copy with no re-encode, {abs(min(NEAREST_KEYFRAMES, key=lambda k: abs(k - segments[0][0])) - segments[0][0]):.2f}s off the requested start")
          if mode == "hybrid" and NEAREST_KEYFRAMES and len(segments) == 1 else None,
          snap=snap_result, **({"smart": smart_doc} if smart_doc is not None else {}),
-         **({"verification": smart_verification(smart_doc)} if smart_doc is not None and smart_doc.get("checks") else {}))
+         verification=verification)
     return 0
 
 

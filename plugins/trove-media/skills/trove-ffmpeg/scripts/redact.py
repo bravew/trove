@@ -25,21 +25,24 @@ Examples:
   python3 redact.py branded.mp4 --x 40 --y 20 --width 180 --height 60 --mode delogo
 """
 import argparse
+import re
 import sys
 
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, fmt_secs
+from _common import add_common, overlay_format, apply_common, aac_args, cfr_args, cfr_at_input, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, fmt_secs
 from _common.emit import note
 from _common.probe import display_size, square_pixels, square_pixels_note
+from _common.decision import boxblur_chroma_radius
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_redact.<ext>)")
-    ap.add_argument("--x", type=int, required=True, help="left edge of the rectangle, in source pixels")
-    ap.add_argument("--y", type=int, required=True, help="top edge of the rectangle, in source pixels")
-    ap.add_argument("--width", type=int, required=True, help="rectangle width in px (must be even)")
-    ap.add_argument("--height", type=int, required=True, help="rectangle height in px (must be even)")
+    ap.add_argument("--rect", metavar="X:Y:W:H", help="the rectangle in one value (left:top:width:height, in source pixels), instead of the four options below")
+    ap.add_argument("--x", type=int, help="left edge of the rectangle, in source pixels")
+    ap.add_argument("--y", type=int, help="top edge of the rectangle, in source pixels")
+    ap.add_argument("--width", type=int, help="rectangle width in px (must be even)")
+    ap.add_argument("--height", type=int, help="rectangle height in px (must be even)")
     ap.add_argument("--mode", choices=["blur", "pixelate", "delogo"], default="blur",
                      help="blur (default), pixelate, or delogo (interpolate a fixed rectangle away; not inpainting, and not a moving region)")
     ap.add_argument("--blur-strength", type=int, default=20, help="box-blur radius in px, --mode blur only (default 20)")
@@ -55,6 +58,10 @@ def main() -> int:
     if args.fps is not None and args.fps <= 0:
         die(f"--fps must be positive, got {args.fps:g}")
 
+    if args.rect and re.fullmatch(r"\d+([:,x]\d+){3}", args.rect):
+        args.x, args.y, args.width, args.height = (int(n) for n in re.split("[:,x]", args.rect))
+    if None in (args.x, args.y, args.width, args.height):
+        die("give the rectangle as --rect X:Y:W:H (four whole numbers) or as --x --y --width --height")
     if args.x < 0 or args.y < 0:
         die(f"--x/--y must be >= 0, got x={args.x} y={args.y}")
     if args.width <= 0 or args.height <= 0:
@@ -98,19 +105,41 @@ def main() -> int:
     output = args.output or default_output(args.input, "redact")
     if args.mode == "delogo":
         cmd = ffmpeg_base() + ["-i", args.input, "-vf",
-                               (square + "," if square else "") + f"delogo=x={args.x}:y={args.y}:w={args.width}:h={args.height}",
+                               with_cfr((square + "," if square else "") + f"delogo=x={args.x}:y={args.y}:w={args.width}:h={args.height}",
+                                        meta, args.fps),
                                "-map", "0:v:0"]
     else:
-        crop = f"crop={args.width}:{args.height}:{args.x}:{args.y}"
+        # exact=1: crop rounds an odd x/y down to the chroma grid of a 4:2:0 frame otherwise, and
+        # overlay always does, so an odd rectangle was taken from and put back one pixel up and
+        # left (its last column and row left as they were, one outside it changed: A170). The
+        # patch is taken exactly, given a transparent first column/row where x/y is odd, and put
+        # at the even position before it: the luma inside the rectangle is replaced, the luma
+        # outside is not (the chroma pair on an odd edge is shared, so it is half mixed)
+        crop = f"crop={args.width}:{args.height}:{args.x}:{args.y}:exact=1"
+        ox, oy = args.x % 2, args.y % 2
         if args.mode == "blur":
             # boxblur refuses a radius above half the plane: the chroma planes of 4:2:0 are half-size,
             # so they get their own (halved) radius; a 30 px region with the default 20 used to fail
             radius = max(1, min(args.blur_strength, min(args.width, args.height) // 2 - 1))
-            chroma = max(1, min(radius // 2, min(args.width, args.height) // 4 - 1))
+            # at least 1 wherever the chroma plane can hold it: radius // 2 alone was 0 at
+            # --blur-strength 1, which left colour-only detail readable (review of #521). (FFmpeg
+            # 7.1 refuses a chroma radius of 1 on a 2 px chroma plane, a 4 px wide region; 6.1
+            # took it.) 0 is only a plane too small to blur: the luma still is
+            # On the chroma planes' own size, which boxblur measures: a 4:1:1 or 4:1:0 source's
+            # quarter-width planes failed at the 4:2:0 bound (a 30x30 region: "radius 7, must be
+            # <= 3", #527's sweep). On 4:2:0 the radius is the one it was
+            chroma = boxblur_chroma_radius(max(1, radius // 2))
             region = f"{crop},boxblur={radius}:{radius}:{chroma}:{radius}"
         else:
             region = f"{crop},scale={max(1, args.width // args.block_size)}:{max(1, args.height // args.block_size)}:flags=neighbor,scale={args.width}:{args.height}:flags=neighbor"
-        fc = f"[0:v]{square + ',' if square else ''}split=2[base][region];[region]{region}[patched];[base][patched]overlay={args.x}:{args.y}[out]"
+        if ox or oy:
+            deep = overlay_format(meta)
+            region += (f",format=yuva444p{'10le' if deep else ''},"
+                       f"pad={args.width + 2 * ox}:{args.height + 2 * oy}:{ox}:{oy}:color=black@0")
+        fc = (f"[0:v]{square + ',' if square else ''}split=2[base][region];[region]{region}[patched];"
+              f"[base][patched]overlay={args.x - ox}:{args.y - oy}{overlay_format(meta)}[out]")
+        # a VFR source (or --fps) is conformed by the fps filter as it is decoded (#512)
+        fc = cfr_at_input(fc, meta, args.fps)
         cmd = ffmpeg_base() + ["-i", args.input, "-filter_complex", fc, "-map", "[out]"]
     if has_audio:
         cmd += ["-map", f"0:a:{args.audio_stream}?"]

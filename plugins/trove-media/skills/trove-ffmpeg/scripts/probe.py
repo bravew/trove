@@ -15,10 +15,11 @@ Examples:
 points a stream copy can start at, and where cut.py --smart's re-encode around a cut ends.
 """
 import argparse
+import json
 import math
 import sys
 
-from _common import add_common, analyze_levels, apply_common, die, keyframe_times, print_json, probe, time_arg
+from _common import STATE, add_common, analyze_levels, apply_common, die, keyframe_times, print_json, probe, time_arg
 
 
 def keyframe_candidates(result: dict, times: list, window: float) -> list:
@@ -62,28 +63,57 @@ def main() -> int:
     if args.keyframes_near is not None and not any(t.strip() for t in args.keyframes_near.split(",")):
         die("--keyframes-near takes one or more times (e.g. 12.4,47), got none")
     results = [probe(p) for p in args.inputs]
+    for result in results:
+        if result.get("dry_run"):
+            # The shared probe's zero-valued stub supports planning arithmetic. It carries
+            # no measurements to publish through the CLI or MCP.
+            for key in ("duration", "size_bytes", "video", "audio", "subtitle_streams", "data_streams"):
+                result[key] = None
     if args.keyframes_near:
         for r in results:
             fps = (r.get("video") or {}).get("fps")
             times = [time_arg(t.strip(), "--keyframes-near", fps) for t in args.keyframes_near.split(",") if t.strip()]
             if any(not math.isfinite(t) or t < 0 for t in times):
                 die("--keyframes-near takes finite times at or after 0")
+            if r.get("dry_run"):
+                continue
             r["keyframes"] = keyframe_candidates(r, times, args.keyframe_window) if r.get("video") else []
     if args.analyze:
         for r in results:
             if r.get("video"):
                 r["levels"] = analyze_levels(r["file"])
+                transfer = r["video"].get("color_transfer")
+                if r["video"].get("hdr") and "error" not in r["levels"]:
+                    # the guess is "flat and desaturated, yet tagged SDR": a PQ/HLG stream is not
+                    # tagged SDR, and its code values were read as if they were (#403)
+                    r["levels"]["looks_like_log"] = None
+                    r["levels"]["reason"] = "not_measured: the stream is tagged HDR (%s), and the Log guess is made for an SDR-tagged picture" % (transfer or r["video"].get("hdr_format") or "HDR")
+                    r["levels"]["note"] = ("the stream is tagged HDR (%s): these are its code values on an 8-bit scale, not display-referred SDR levels, "
+                                           "and whether it looks like Log was not judged" % (transfer or r["video"].get("hdr_format") or "HDR"))
 
     if args.field:
         for r in results:
             cur = r
             for key in args.field.split("."):
                 cur = cur.get(key) if isinstance(cur, dict) else None
-            print(cur if cur is not None else "")
+            # a string as itself; anything else as JSON (true, null, {"codec": ...}), not Python's
+            # repr (True, None, {'codec': ...}), which no caller can parse (through 3.8.8, A123).
+            # Under --json (or --json-brief, which implies it) a missing field is null and a string
+            # is quoted: every line is JSON. Without either a missing field is an empty line, as it
+            # always was, so `[ -z "$(probe.py f --field x)" ]` keeps working
+            if isinstance(cur, str) and not STATE.json:
+                print(cur)
+            elif cur is None and not STATE.json:
+                print("")
+            else:
+                print(json.dumps(cur, ensure_ascii=False))
         return 0
 
     if args.compact:
         for r in results:
+            if r.get("dry_run"):
+                print(f"{r['file']}: not measured (pending input)")
+                continue
             v, a = r.get("video") or {}, r.get("audio") or {}
             dur = r.get("duration")
             line = f"{r['file']}: {dur:.3f}s" if dur is not None else f"{r['file']}: ?s"

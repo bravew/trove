@@ -2,17 +2,37 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import math
 import re
 import unicodedata
 from collections import Counter
 
-from . import categories, competitors, entity_extract, http, log, providers, query, relevance, schema
+from . import (
+    categories, competitors, entity_extract, http, jobs_story, log, polymarket, providers, query, relevance,
+    schema,
+)
 
 # Hebrew Unicode block: U+0590–U+05FF
 _HEBREW_RE = re.compile(r'[\u0590-\u05FF]')
 
 DISCOVERY_SOURCE_ORDER = ("reddit", "hackernews", "digg", "x")
+
+# Installed/opted-in lanes that can be backfilled into a host plan.
+HOST_PLAN_BACKFILL_SOURCES = (
+    "digg",
+    "arxiv",
+    "techmeme",
+    "bluesky",
+    "truthsocial",
+    "stocktwits",
+    "linkedin",
+    "dripstack",
+    "devto",
+    "telegram",
+    "trustpilot",
+)
 
 
 def detect_language(text: str) -> str | None:
@@ -144,6 +164,7 @@ SOURCE_CAPABILITIES = {
     "devto": {"discussion", "link", "reference"},
     "bluesky": {"discussion", "social"},
     "truthsocial": {"discussion", "social"},
+    "linkedin": {"discussion", "social"},
     "polymarket": {"market"},
     "stocktwits": {"social", "market", "finance_social"},
     "dripstack": {"reference", "analysis", "link"},
@@ -161,10 +182,83 @@ SOURCE_CAPABILITIES = {
     "jobs": {"jobs", "company_signal", "link"},
     "corpus": {"reference", "analysis"},
 }
+KNOWN_SOURCES: frozenset[str] = frozenset(SOURCE_CAPABILITIES) | {
+    "threads",
+    "pinterest",
+    "linkedin_profile",
+}
 
 
 def _is_identity_anchor(anchor: object) -> bool:
     return isinstance(anchor, str) and re.search(r"\w", anchor) is not None
+
+
+POLYMARKET_HINT_KINDS = ("team", "company", "person", "product", "other")
+POLYMARKET_HINT_RELATIONS = ("player", "person", "product")
+POLYMARKET_HINT_CAP = polymarket.HINT_CAP
+POLYMARKET_HINT_NAME_MAX = 80
+
+
+def _hint_name(value: object) -> str | None:
+    if isinstance(value, str) and value.strip() and len(value.strip()) <= POLYMARKET_HINT_NAME_MAX:
+        return value.strip()
+    return None
+
+
+def polymarket_hints(value: object) -> dict | None:
+    """Validate and normalize a plan's ``polymarket_hints``.
+
+    Returns None when absent; raises ValueError naming the bad part otherwise.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("polymarket_hints must be an object with kind, aliases, related")
+    unknown = sorted(set(value) - {"kind", "aliases", "related"})
+    if unknown:
+        raise ValueError(f"polymarket_hints has unknown fields {unknown}")
+    hints: dict = {}
+    kind = value.get("kind")
+    if kind is not None:
+        if not isinstance(kind, str) or kind.strip().casefold() not in POLYMARKET_HINT_KINDS:
+            raise ValueError(
+                f"polymarket_hints.kind must be one of {', '.join(POLYMARKET_HINT_KINDS)}"
+            )
+        hints["kind"] = kind.strip().casefold()
+    aliases = value.get("aliases", [])
+    if (
+        not isinstance(aliases, list)
+        or len(aliases) > POLYMARKET_HINT_CAP
+        or not all(_hint_name(alias) for alias in aliases)
+    ):
+        raise ValueError(
+            f"polymarket_hints.aliases must be an array of at most {POLYMARKET_HINT_CAP} "
+            f"non-empty strings of up to {POLYMARKET_HINT_NAME_MAX} characters"
+        )
+    hints["aliases"] = [_hint_name(alias) for alias in aliases]
+    related = value.get("related", [])
+    if (
+        not isinstance(related, list)
+        or len(related) > POLYMARKET_HINT_CAP
+        or not all(
+            isinstance(entry, dict)
+            and set(entry) <= {"name", "relation"}
+            and _hint_name(entry.get("name"))
+            and isinstance(entry.get("relation"), str)
+            and entry["relation"].strip().casefold() in POLYMARKET_HINT_RELATIONS
+            for entry in related
+        )
+    ):
+        raise ValueError(
+            f"polymarket_hints.related must be an array of at most {POLYMARKET_HINT_CAP} "
+            "{name, relation} objects with relation one of "
+            + ", ".join(POLYMARKET_HINT_RELATIONS)
+        )
+    hints["related"] = [
+        {"name": _hint_name(entry["name"]), "relation": entry["relation"].strip().casefold()}
+        for entry in related
+    ]
+    return hints
 
 
 def validate_external_plan(raw: dict) -> None:
@@ -185,6 +279,18 @@ def validate_external_plan(raw: dict) -> None:
     anchors = raw.get("person_identity_anchors", [])
     if not isinstance(anchors, list) or not all(_is_identity_anchor(a) for a in anchors):
         raise ValueError("person_identity_anchors must be an array of non-empty strings")
+    polymarket_hints(raw.get("polymarket_hints"))
+
+    omit_sources = raw.get("omit_sources", [])
+    if not isinstance(omit_sources, list) or not all(
+        isinstance(source, str) and source in HOST_PLAN_BACKFILL_SOURCES
+        for source in omit_sources
+    ):
+        raise ValueError(
+            "omit_sources must be an array of source names eligible for host-plan backfill: "
+            + ", ".join(HOST_PLAN_BACKFILL_SOURCES)
+        )
+    omitted = set(omit_sources)
 
     source_weights = raw.get("source_weights")
     if source_weights is not None and not isinstance(source_weights, dict):
@@ -211,6 +317,11 @@ def validate_external_plan(raw: dict) -> None:
             isinstance(source, str) and source.strip() for source in sources
         ):
             raise ValueError(f"subqueries[{index}].sources must be a non-empty string array")
+        if overlap := omitted.intersection(sources):
+            raise ValueError(
+                f"omit_sources conflicts with subqueries[{index}].sources: "
+                + ", ".join(sorted(overlap))
+            )
         weight = subquery.get("weight")
         if weight is not None and (
             isinstance(weight, bool) or not isinstance(weight, (int, float))
@@ -296,25 +407,39 @@ def build_drill_plan(
             for source in schema.candidate_sources(candidate):
                 if source and source not in sources:
                     sources.append(source)
-    if not sources:
-        raise DrillTargetError(target, report.clusters)
-
-    titles: list[str] = []
-    entity_counts: Counter[str] = Counter()
+    cluster_titles: list[str] = []
+    representative_titles: list[str] = []
     for cluster in matched:
-        titles.append(cluster.title)
-        entity_counts.update(entity_extract.extract_text_entities(cluster.title))
+        cluster_titles.append(cluster.title)
         for candidate_id in cluster.representative_ids:
             candidate = candidates.get(candidate_id)
             if candidate:
-                titles.append(candidate.title)
-                entity_counts.update(entity_extract.extract_text_entities(candidate.title))
+                representative_titles.append(candidate.title)
 
+    if schema.report_has_corpus(report):
+        public_titles, public_sources = _public_drill_evidence(matched, candidates)
+        if public_titles:
+            # A cached cluster title may have come from a private representative.
+            cluster_titles = public_titles[:1]
+            representative_titles = public_titles[1:]
+            sources = list(dict.fromkeys(
+                [source for source in sources if source == "corpus" or source in public_sources]
+                + public_sources
+            ))
+        else:
+            sources = ["corpus"] if "corpus" in sources else []
+
+    if not sources:
+        raise DrillTargetError(target, report.clusters)
+
+    entity_counts: Counter[str] = Counter()
+    for title in [*cluster_titles, *representative_titles]:
+        entity_counts.update(entity_extract.extract_text_entities(title))
     queries: list[str] = []
     for query_text in [
-        " ".join(titles[: len(matched)]),
+        " ".join(cluster_titles),
         " ".join(entity for entity, _ in entity_counts.most_common(8)),
-        *titles[len(matched):],
+        *representative_titles,
     ]:
         query_text = " ".join(query_text.split()).strip()
         if query_text and query_text.lower() not in {item.lower() for item in queries}:
@@ -341,6 +466,8 @@ def build_drill_plan(
         cluster_mode=report.query_plan.cluster_mode,
         raw_topic=report.topic,
         person_identity_anchors=list(report.query_plan.person_identity_anchors),
+        person_run=report.query_plan.person_run,
+        polymarket_hints=copy.deepcopy(report.query_plan.polymarket_hints),
         subqueries=subqueries,
         source_weights={
             source: report.query_plan.source_weights.get(source, 1.0)
@@ -351,6 +478,31 @@ def build_drill_plan(
             "drill-targets:" + ",".join(cluster.cluster_id for cluster in matched),
         ],
     )
+
+
+def _public_drill_evidence(
+    clusters: list[schema.Cluster],
+    candidates: dict[str, schema.Candidate],
+) -> tuple[list[str], list[str]]:
+    titles: list[str] = []
+    sources: list[str] = []
+    for cluster in clusters:
+        for candidate_id in dict.fromkeys([*cluster.representative_ids, *cluster.candidate_ids]):
+            candidate = candidates.get(candidate_id)
+            if candidate is None:
+                continue
+            if schema.candidate_has_corpus(candidate):
+                # A fused candidate can retain public members even when its
+                # chosen title or snippet belongs to a local file.
+                for item in candidate.source_items:
+                    if item.source and item.source != "corpus" and item.title.strip():
+                        titles.append(item.title)
+                        sources.append(item.source)
+            elif candidate.title.strip() and schema.candidate_sources(candidate):
+                titles.append(candidate.title)
+                sources.extend(schema.candidate_sources(candidate))
+    return titles, list(dict.fromkeys(sources))
+
 
 def plan_query(
     *,
@@ -490,6 +642,67 @@ Rules:
 """.strip()
 
 
+def _sanitize_source_weights(
+    raw_weights: object,
+    *,
+    available: set[str],
+    requested: set[str],
+    eligible_sources: list[str],
+    topic: str,
+    intent_hint: str,
+    depth: str,
+) -> dict[str, float]:
+    recognized_sources = KNOWN_SOURCES | available
+    recognized_raw_positive: list[float] = []
+    explicit_weights: dict[str, float] = {}
+    if isinstance(raw_weights, dict):
+        for source, weight in raw_weights.items():
+            # Skip unknown/typo source keys so they neither join the plan nor
+            # trigger normalized-weight detection; real disabled sources still
+            # count in recognized_raw_positive.
+            if source not in recognized_sources or isinstance(weight, bool):
+                continue
+            try:
+                numeric = float(weight)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(numeric):
+                continue
+            if numeric > 0:
+                recognized_raw_positive.append(numeric)
+            if source in available and (not requested or source in requested):
+                explicit_weights[source] = numeric
+    source_weights = dict(explicit_weights)
+    if not source_weights:
+        source_weights = _default_source_weights(_infer_intent(topic), eligible_sources)
+    # Preserve the base weight of 1.0 for raw unnormalized boost maps (e.g.
+    # {"reddit": 3.0} keeps Reddit's 3:1 boost over an unweighted source), and
+    # use the mean of the filtered eligible weights whenever either the filtered
+    # weights or the recognized raw plan weights already sum to ~1.0 so omitted
+    # or backfilled sources sit at the planned mean even when a real planned
+    # source is disabled.
+    basis_weights = explicit_weights if explicit_weights else source_weights
+    positive_basis = [weight for weight in basis_weights.values() if weight > 0]
+    normalized_filtered = (
+        len(positive_basis) >= 2 and abs(sum(positive_basis) - 1.0) <= 0.05
+    )
+    normalized_recognized_raw = (
+        bool(explicit_weights)
+        and len(recognized_raw_positive) >= 2
+        and abs(sum(recognized_raw_positive) - 1.0) <= 0.05
+    )
+    if positive_basis and (normalized_filtered or normalized_recognized_raw):
+        default_weight = sum(positive_basis) / len(positive_basis)
+    else:
+        default_weight = 1.0
+    for source in eligible_sources:
+        source_weights.setdefault(source, default_weight)
+    if intent_hint in DEFAULT_INTENT_CAPABILITIES and depth != "quick":
+        for source in _default_sources_for_intent(intent_hint, eligible_sources):
+            source_weights.setdefault(source, default_weight)
+    return _normalize_weights(source_weights)
+
+
 def _sanitize_plan(
     raw: dict,
     topic: str,
@@ -519,25 +732,15 @@ def _sanitize_plan(
         source for source in available_sources
         if (not requested or source in requested)
     ]
-    source_weights = {
-        source: float(weight)
-        for source, weight in (raw.get("source_weights") or {}).items()
-        if source in available
-    }
-    if requested:
-        source_weights = {source: weight for source, weight in source_weights.items() if source in requested}
-    if not source_weights:
-        source_weights = _default_source_weights(_infer_intent(topic), eligible_sources)
-    # Ensure all eligible sources are available for subqueries. The LLM may
-    # assign high weights to its preferred sources, but omitted sources still
-    # participate with base weight so retrieval can overfetch and let fusion
-    # decide quality.
-    for source in eligible_sources:
-        source_weights.setdefault(source, 1.0)
-    if intent_hint in DEFAULT_INTENT_CAPABILITIES and depth != "quick":
-        for source in _default_sources_for_intent(intent_hint, eligible_sources):
-            source_weights.setdefault(source, 1.0)
-    source_weights = _normalize_weights(source_weights)
+    source_weights = _sanitize_source_weights(
+        raw.get("source_weights"),
+        available=available,
+        requested=requested,
+        eligible_sources=eligible_sources,
+        topic=topic,
+        intent_hint=intent_hint,
+        depth=depth,
+    )
 
     subqueries: list[schema.SubQuery] = []
     for index, subquery in enumerate((raw.get("subqueries") or [])[:_max_subqueries(intent_hint, topic)], start=1):
@@ -557,6 +760,8 @@ def _sanitize_plan(
                 )
                 continue
             sources = list(source_weights)
+        if not sources:
+            continue
         search_query = str(subquery.get("search_query") or "").strip()
         ranking_query = str(subquery.get("ranking_query") or "").strip()
         if not search_query or not ranking_query:
@@ -604,6 +809,10 @@ def _sanitize_plan(
     anchors = raw.get("person_identity_anchors")
     if not isinstance(anchors, list):
         anchors = []
+    try:
+        hints = polymarket_hints(raw.get("polymarket_hints"))
+    except ValueError:
+        hints = None
     return schema.QueryPlan(
         intent=intent,
         freshness_mode=freshness_mode,
@@ -623,6 +832,8 @@ def _sanitize_plan(
         notes=[str(note).strip() for note in raw.get("notes") or [] if str(note).strip()]
         + (_enablement_notes(topic) if not honor_plan_sources and intent == "how_to" and _is_enablement(topic) else []),
         person_identity_anchors=[a.strip() for a in anchors if _is_identity_anchor(a)],
+        polymarket_hints=hints,
+        jobs_queries=jobs_story.clean_terms(raw.get("jobs_queries")),
     )
 
 
@@ -736,15 +947,37 @@ def _fallback_plan(
     note: str = "fallback-plan",
 ) -> schema.QueryPlan:
     intent = _infer_intent(topic)
+    available_set = set(available_sources)
+    if requested_sources:
+        eligible = list(dict.fromkeys(
+            s for s in requested_sources if s in available_set
+        ))
+        effective_requested: list[str] | None = eligible
+    else:
+        eligible = list(dict.fromkeys(available_sources))
+        effective_requested = None
+
     # Hebrew-language topics: elevate web search (grounding) to the front of
     # the source list since Reddit/HN/GitHub are English-dominant platforms.
     # Grounding covers Ynet, Walla, Mako, N12 etc. if a web search key is set.
-    if detect_language(topic) == 'he' and 'grounding' in available_sources:
-        ordered = ['grounding'] + [s for s in available_sources if s != 'grounding']
-        available_sources = ordered
-        if requested_sources:
-            requested_sources = ['grounding'] + [s for s in requested_sources if s != 'grounding']
-    allowed_sources = requested_sources or available_sources
+    # Only reorder when grounding is already eligible — never inject it into an
+    # explicit --search list that omitted grounding.
+    if detect_language(topic) == 'he' and 'grounding' in eligible:
+        eligible = ['grounding'] + [s for s in eligible if s != 'grounding']
+        if effective_requested is not None:
+            effective_requested = list(eligible)
+
+    allowed_sources = eligible
+    if not allowed_sources:
+        return schema.QueryPlan(
+            intent=intent,
+            freshness_mode=_default_freshness(intent),
+            cluster_mode=_default_cluster_mode(intent),
+            raw_topic=topic,
+            subqueries=[],
+            source_weights={},
+            notes=[note] + (_enablement_notes(topic) if intent == "how_to" and _is_enablement(topic) else []),
+        )
     source_weights = _default_source_weights(intent, allowed_sources)
     core = query.extract_core_subject(topic, max_words=6, strip_suffixes=True)
     base_search = _keyword_query(topic, core)
@@ -815,7 +1048,7 @@ def _fallback_plan(
                 intent,
                 depth,
                 list(source_weights),
-                requested_sources=requested_sources,
+                requested_sources=effective_requested,
             )
         ),
         source_weights=_normalize_weights(source_weights),
@@ -839,7 +1072,7 @@ _HOST_FILLER = frozenset(
 _GENERIC_HOST = frozenset("ai agent agents bot bots tool tools app apps assistant llm model".split())
 
 _DEVICE = r"(?:my|the|your|our)\s+(?:own\s+)?(?:computer|mac|pc|desktop|laptop|browser|screen|phone|terminal)s?\b"
-# Mirrors the hosted worker's detect_enablement_intent (last30days-com).
+# Mirrors the hosted service worker's detect_enablement_intent.
 # A tool acting on a device the person owns: "grok bot control my computer",
 # "agent that automates the browser". Plain "use the browser" is ordinary use.
 _ENABLEMENT_TARGET_RE = re.compile(
@@ -1043,11 +1276,11 @@ def _keyword_query(topic: str, core: str) -> str:
     that exact phrase. See 2026-04-19 Hermes Agent Use Cases failure.
     """
     compounds = query.extract_compound_terms(topic)
-    # Only quote title-cased proper nouns (multi-word names). Hyphenated
+    # Only quote short (2-3 word) capitalized/brand proper nouns. Hyphenated
     # compounds go unquoted so platform tokenizers can split and match.
     title_cased = [
         term for term in compounds
-        if re.match(r"^(?:[A-Z][a-z]+\s+){1,}[A-Z][a-z]+$", term)
+        if query.COMPOUND_ENTITY_PHRASE_RE.fullmatch(term)
     ]
     selected = title_cased[:2]
     quoted = " ".join(f'"{term}"' for term in selected)

@@ -12,7 +12,8 @@ The rectangle must lie entirely inside the source frame after accounting for
 any display rotation, and --width/--height must be even (required for 4:2:0
 chroma subsampling, the pixel format every encoder here uses) -- given values
 are validated and refused, never silently rounded, since a caller-specified
-rectangle should do exactly what was asked or fail loudly.
+rectangle should do exactly what was asked or fail loudly. An odd --x/--y is
+taken as given (the crop starts on that pixel), not moved to the chroma grid.
 
 Examples:
   python3 crop.py input.mp4 --x 100 --y 0 --width 1080 --height 1920
@@ -21,8 +22,8 @@ Examples:
 import argparse
 import sys
 
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run, video_args, X264_PRESETS, fmt_secs
-from _common.probe import display_size, square_pixels, square_pixels_note
+from _common import add_common, apply_common, aac_args, cfr_args, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, fmt_secs
+from _common.probe import display_size, probed_maps, square_pixels, square_pixels_note
 from _common.emit import note
 
 
@@ -32,7 +33,7 @@ def main() -> int:
     ap.add_argument("-o", "--output", help="output file (default: <name>_crop.<ext>)")
     ap.add_argument("--x", type=int, required=True, help="left edge of the crop rectangle, in source pixels")
     ap.add_argument("--y", type=int, required=True, help="top edge of the crop rectangle, in source pixels")
-    ap.add_argument("--width", type=int, required=True, help="crop width in px (must be even)")
+    ap.add_argument("--width", type=int, required=True, help="crop width in px (must be even); a size WxH is --width W --height H")
     ap.add_argument("--height", type=int, required=True, help="crop height in px (must be even)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
     ap.add_argument("--preset", default="medium", choices=X264_PRESETS, help="x264 preset")
@@ -61,24 +62,28 @@ def main() -> int:
     has_audio = bool(meta.get("audio"))
 
     output = args.output or default_output(args.input, "crop")
-    vf = [f"crop={args.width}:{args.height}:{args.x}:{args.y}", "setsar=1"]
+    # exact=1: without it crop rounds an odd --x/--y down to the chroma grid of a 4:2:0 frame,
+    # and the rectangle written was one pixel left of / above the one asked for (A170's sibling, A157)
+    vf = [f"crop={args.width}:{args.height}:{args.x}:{args.y}:exact=1", "setsar=1"]
     if square_pixels(meta["video"]):
         vf.insert(0, square_pixels(meta["video"]))
         note(square_pixels_note(meta["video"]))
-    cmd = ffmpeg_base() + ["-i", args.input, "-vf", ",".join(vf)]
+    # the picture the rectangle was checked against, not the largest one default selection takes
+    cmd = ffmpeg_base() + ["-i", args.input] + probed_maps(meta) + ["-vf", with_cfr(",".join(vf), meta, args.fps)]
     cmd += video_args(meta, args.crf, args.preset)
     cmd += cfr_args(meta, args.fps)
     if has_audio:
         cmd += aac_args()
     else:
         cmd += ["-an"]
-    cmd.append(output)
-    run(cmd)
+    # the crop keeps the timeline, so the subtitle/data tracks are copied as fit.py and color.py copy
+    # them, and dropped (said) only where the container refuses them (#520)
+    dropped_streams = run_keeping_subtitles(cmd, output)
 
     result = probe(output, role="output")
     v = result["video"]
     info(f"wrote {output} ({fmt_secs(result['duration'])}, {v['width']}x{v['height']})")
-    emit(output)
+    emit(output, dropped_non_av_streams=dropped_streams)
     return 0
 
 

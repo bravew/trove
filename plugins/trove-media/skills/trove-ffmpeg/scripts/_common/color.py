@@ -57,6 +57,36 @@ NON_BT709_MATRICES = ("smpte170m", "bt470bg", "fcc", "smpte240m")
 _RGB_PIX_FMT_RE = re.compile(r"^(?:rgb|bgr|argb|abgr|0rgb|0bgr|gbr|x2rgb|x2bgr|pal8)")
 
 
+# A probed colour tag passed back to FFmpeg (#454). ffprobe prints av_color_*_name(), which is
+# also the setparams filter's table; the output options -colorspace/-color_primaries/-color_trc
+# parse an older one that differs on three names (6.1, measured): -colorspace refuses `gbr` (its
+# name is `rgb`) and -color_trc refuses `bt470m` and `bt470bg` (its names: `gamma22`, `gamma28`).
+# `gbr` is not carried over at all: it says the stored samples are RGB, which is the pixel
+# format's to say (the PNG encoder tags it itself), and a tool that converts the picture to YUV on
+# the way (a grade's legs, a 4:4:4 alpha line) would label YUV samples as RGB with it.
+_TAG_KIND = {"-colorspace": "colorspace", "-color_primaries": "color_primaries", "-color_trc": "color_trc"}
+_OPTION_NAMES = {"color_trc": {"bt470m": "gamma22", "bt470bg": "gamma28"}}
+
+
+def carried_tag(kind: str, name: Optional[str], dest: str = "option") -> Optional[str]:
+    """The probed tag `name` of `kind` (colorspace, color_primaries, color_trc) spelled the way
+    `dest` ("option": -colorspace & co; "setparams") accepts it, or None when it is not to be
+    passed on: unknown, unspecified, reserved, or the RGB `gbr`/`rgb`."""
+    if not name or name in ("unknown", "unspecified", "reserved") or (kind == "colorspace" and name in ("gbr", "rgb")):
+        return None
+    return _OPTION_NAMES.get(kind, {}).get(name, name) if dest == "option" else name
+
+
+def carried_tag_args(pairs: Sequence[Tuple[str, Optional[str]]]) -> List[str]:
+    """[flag, value, ...] for each (flag, probed name) whose tag carried_tag() passes on."""
+    out: List[str] = []
+    for flag, name in pairs:
+        value = carried_tag(_TAG_KIND.get(flag, flag.lstrip("-")), name)
+        if value:
+            out += [flag, value]
+    return out
+
+
 def rgb_to_bt709_filter(pix_fmt: str = "yuv444p") -> str:
     """An RGB picture converted to BT.709 limited-range YUV right here, in `pix_fmt`, so no later
     conversion (an auto-inserted one, with FFmpeg's BT.601 default) decides the matrix. 4:4:4 by
@@ -69,16 +99,71 @@ def is_rgb(meta: Optional[Dict[str, Any]]) -> bool:
     return bool(_RGB_PIX_FMT_RE.match(str(((meta or {}).get("video") or {}).get("pix_fmt") or "")))
 
 
-_MATRIX_FILTER_RE = re.compile(r"^(?:colorspace=ispace=(?:%s):iprimaries=bt709:itrc=bt709:space=bt709:primaries=bt709:trc=bt709|(?:format=rgb24,)?%s)$"
-                               % ("|".join(NON_BT709_MATRICES), re.escape(rgb_to_bt709_filter())))
-_INPUT_VIDEO_REF = re.compile(r"\[(\d+):v(?::0)?\]")
+# The matrices (ffprobe's names) swscale can be told to make YUV with, by its own name for each
+# (scale's out_color_matrix). A BT.2020/HDR line tags one of these on an RGB source (#544).
+_SWS_OUT_MATRIX = {"bt2020nc": "bt2020", "bt709": "bt709", "smpte170m": "bt601", "bt470bg": "bt601",
+                   "fcc": "fcc", "smpte240m": "smpte240m"}
+
+
+def hdr_line_matrix(v: Optional[Dict[str, Any]]) -> str:
+    """The matrix tag (ffprobe's name) a 10-bit line that keeps a BT.2020 / HDR source's colour
+    writes for the probed video `v`: a YUV source's own, or bt2020nc when it has none, as always.
+
+    An RGB source has no matrix: its tag is `gbr` (FFV1, PNG, qtrle, libx264rgb and most RGB
+    codecs write it) or nothing, and the YUV the line stores is made by a conversion. Through
+    3.10.0 the line passed the tag on (`-colorspace gbr`, which no encoder parses: every re-encode
+    of such a source failed inside ffmpeg) or wrote bt2020nc over FFmpeg's default conversion,
+    BT.601 (#544). For an RGB source the tag is the matrix hdr_rgb_matrix_filter() converts with:
+    the source's own when it names one swscale can make (a mislabelled RGB file, whose frames
+    FFmpeg 6.1 already converted by that tag), else bt2020nc."""
+    v = v or {}
+    cs = v.get("color_space")
+    if _RGB_PIX_FMT_RE.match(str(v.get("pix_fmt") or "")):
+        return cs if cs in _SWS_OUT_MATRIX else "bt2020nc"
+    return cs or "bt2020nc"
+
+
+def hdr_rgb_matrix_filter(meta: Optional[Dict[str, Any]], line_meta: Optional[Dict[str, Any]] = None, alpha: bool = False) -> Optional[str]:
+    """For an RGB source that probes BT.2020 or HDR, written on a line that keeps that colour
+    (video_args' Main10 / 10-bit lines; `line_meta`: the probe the line was chosen for when it is
+    another picture's, as in a join; `alpha`: an alpha line, which keeps the plane): the filter that makes its YUV with the matrix the line tags
+    (hdr_line_matrix), limited range, 4:4:4 at the line's 10 bits, so no later conversion (an
+    auto-inserted one, with FFmpeg's BT.601 default) decides the matrix. None for every other
+    source, and when the line's matrix is one swscale cannot be told to make (bt2020c, ICtCp).
+
+    Only the matrix is named. Primaries and transfer are the source's and stay as they are (the
+    line tags them), so the picture is the source's RGB read back by the output's own tags
+    (measured on FFmpeg 6.1.1: C03028 came back 196/52/35 before, 192/48/40 after)."""
+    v = (meta or {}).get("video") or {}
+    if not v.get("bt2020_or_hdr") or not is_rgb(meta):
+        return None
+    line_v = v if line_meta is None else (line_meta.get("video") or {})
+    if not line_v.get("bt2020_or_hdr"):
+        return None
+    matrix = _SWS_OUT_MATRIX.get(hdr_line_matrix(line_v))
+    if matrix is None:
+        return None
+    # a palette is turned into YUV with fixed BT.601 coefficients whatever out_color_matrix says
+    return ("format=rgb24," if v.get("pix_fmt") == "pal8" else "") + f"scale=out_color_matrix={matrix}:out_range=tv,format=yuv{'a' * alpha}444p10le"
+
+
+# An odd-sized BT.601 source is padded to even for the colorspace filter and cropped back to its
+# own size after it (bt709_matrix_filter): both wrap the conversion in the one -vf the merge finds.
+_EVEN_PAD = "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0,"
+_BT709_RELABEL = "setparams=color_primaries=bt709:color_trc=bt709"
+_MATRIX_FILTER_RE = re.compile(r"^(?:(?:(?:%s)?colorspace=ispace=(?:%s):iprimaries=bt709:itrc=bt709:space=bt709:primaries=bt709:trc=bt709(?:,crop=iw-[01]:ih-[01]:0:0:exact=1)?|(?:format=rgb24,)?%s"
+                               r"|(?:format=rgb24,)?scale=out_color_matrix=(?:%s):out_range=tv,format=yuva?444p10le)(?:,%s)?|%s)$"
+                               % (re.escape(_EVEN_PAD), "|".join(NON_BT709_MATRICES), re.escape(rgb_to_bt709_filter()),
+                                  "|".join(sorted(set(_SWS_OUT_MATRIX.values()))), re.escape(_BT709_RELABEL), re.escape(_BT709_RELABEL)))
+# [N:v], [N:v:0] and [N:V:0] (PROBED_VIDEO: the motion picture, not an attached cover)
+_INPUT_VIDEO_REF = re.compile(r"\[(\d+):[vV](?::0)?\]")
 
 
 def bt709_matrix_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
     """The filter that turns the probed source's pixels into BT.709 ones before an output is
-    tagged BT.709, or None when nothing needs converting: an SDR source tagged with a non-BT.709
-    matrix (NON_BT709_MATRICES) only. An untagged or BT.709 source, an HDR/BT.2020 one (it keeps
-    its own tags, or color.py --to-sdr converts it) and a missing probe get None, so their
+    tagged BT.709, or None when nothing needs converting: a source tagged with a non-BT.709 matrix
+    (NON_BT709_MATRICES) or an RGB one. An untagged or BT.709 source, an HDR/BT.2020 YUV one (it
+    keeps its own tags, or color.py --to-sdr converts it) and a missing probe get None, so their
     commands are what they were.
 
     The matrix is converted and nothing else: primaries and transfer are passed through
@@ -91,10 +176,12 @@ def bt709_matrix_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
     but gets one where the graph first needs YUV, and FFmpeg's default there is BT.601: through
     2.10.1 such a source came out labelled BT.709 over BT.601-encoded pixels (pure red decoded as
     (255,24,0), pure green as (0,216,0), on 5.1.1 to 8.1). It is converted to BT.709 YUV here
-    (rgb_to_bt709_filter). A JPEG (yuvj, tagged bt470bg) is a BT.601 source like any other."""
+    (rgb_to_bt709_filter), an HDR or BT.2020 RGB one too (#559): the tag names the matrix whatever
+    the primaries and transfer are (the HDR line's own conversion is hdr_rgb_matrix_filter). A JPEG
+    (yuvj, tagged bt470bg) is a BT.601 source like any other."""
     v = (meta or {}).get("video") or {}
     matrix = v.get("color_space")
-    if v.get("bt2020_or_hdr"):
+    if v.get("bt2020_or_hdr") and not is_rgb(meta):
         return None
     if is_rgb(meta):
         # a palette is turned into YUV with fixed BT.601 coefficients whatever out_color_matrix
@@ -102,7 +189,19 @@ def bt709_matrix_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
         return ("format=rgb24," if v.get("pix_fmt") == "pal8" else "") + rgb_to_bt709_filter()
     if matrix not in NON_BT709_MATRICES:
         return None
-    return f"colorspace=ispace={matrix}:iprimaries=bt709:itrc=bt709:space=bt709:primaries=bt709:trc=bt709"
+    # the colorspace filter refuses an odd width or height outright ("Invalid odd size"), and a
+    # 4:2:0 JPEG can have one (a phone screenshot, #437). The frame is padded by one row and/or
+    # column, converted, and cropped back to its own size: no source pixel is lost or resampled
+    # (a 4:2:0 frame's chroma planes are the same size either way), so a caller's own crop or
+    # scale sees the frame it measured. Nothing changes for an even-sized source. FFmpeg rotates
+    # a rotated source before the graph, so the odd axis is read after the same swap.
+    w, h = int(v.get("width") or 0), int(v.get("height") or 0)
+    if int(v.get("rotation") or 0) % 180 == 90:
+        w, h = h, w
+    conv = f"colorspace=ispace={matrix}:iprimaries=bt709:itrc=bt709:space=bt709:primaries=bt709:trc=bt709"
+    if w % 2 or h % 2:
+        return f"{_EVEN_PAD}{conv},crop=iw-{w % 2}:ih-{h % 2}:0:0:exact=1"
+    return conv
 
 
 def bt709_label_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -238,7 +337,23 @@ def bt709_matrix_args(meta: Optional[Dict[str, Any]]) -> List[str]:
     re-encodes through that line converts without building it into its own graph. That -vf is
     valid as it stands for a command with no other filter; run() folds it into the tool's own
     -vf or -filter_complex (fold_bt709_matrix()) before the command is recorded or run."""
+    f = bt709_line_filter(meta)
+    return ["-vf", f] if f else []
+
+
+# bt709_matrix_filter(), and on FFmpeg 9+ for an HDR source a relabel: FFmpeg 9 writes mp4/mov's colr box
+# from the frames, which keep its primaries and transfer under a bt709 VUI (#711). It converts nothing.
+def bt709_line_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
     f = bt709_matrix_filter(meta)
+    if ((meta or {}).get("video") or {}).get("bt2020_or_hdr") and ffmpeg_version() >= (9, 0):
+        f = ",".join(x for x in (f, _BT709_RELABEL) if x)
+    return f
+
+
+def hdr_rgb_matrix_args(meta: Optional[Dict[str, Any]], alpha: bool = False) -> List[str]:
+    """["-vf", hdr_rgb_matrix_filter(meta)] for an encoder line that keeps a BT.2020 / HDR source's
+    colour, or []: bt709_matrix_args()'s counterpart for that line, folded by run() the same way."""
+    f = hdr_rgb_matrix_filter(meta, alpha=alpha)
     return ["-vf", f] if f else []
 
 
@@ -248,7 +363,7 @@ def fold_bt709_matrix(cmd: Sequence[str]) -> List[str]:
 
     - no other filter: unchanged (the -vf is the graph);
     - a -vf: the conversion is prepended to that chain;
-    - a -filter_complex: every `[N:v]` / `[N:v:0]` reference to an input that reads the same file
+    - a -filter_complex: every `[N:v]` / `[N:v:0]` / `[N:V:0]` reference to an input that reads the same file
       as input 0 (the file the encoder line was built for; cut.py's segment join opens it once
       per segment) reads that input through the conversion instead. Other inputs are untouched.
 
@@ -283,7 +398,7 @@ def fold_bt709_matrix(cmd: Sequence[str]) -> List[str]:
         graph = _INPUT_VIDEO_REF.sub(through, str(out[graph_at + 1]))
         if not refs:
             die("internal: a BT.709 matrix conversion was requested for a -filter_complex that never reads "
-                "input 0's video as [0:v]", kind="ffmpeg")
+                "input 0's video as [0:v] or [0:V:0]", kind="ffmpeg")
         # one conversion per input, split when the graph reads that input more than once
         # (speedramp.py trims [0:v] once per segment)
         chains = [f"{ref}{conv}" + (f",split={len(labels)}" if len(labels) > 1 else "") + "".join(labels)
@@ -297,28 +412,129 @@ def fold_bt709_matrix(cmd: Sequence[str]) -> List[str]:
     return out[:at] + ["-vf", conv] + out[at:]
 
 
+_HEX6 = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+
 def color_hex(value: str) -> str:
-    """Normalise '#ffd200' / 'ffd200' / '0xFFD200' to 'FFD200'."""
+    """Normalise '#ffd200' / 'ffd200' / '0xFFD200' to 'FFD200'. Six hex digits only: the result is
+    written into libass styles and drawtext/color options, so a six-letter colour name ("yellow")
+    used to pass the length check and draw black, reported verified, and a quote or comma reached
+    the filter graph."""
     v = str(value).strip().lstrip("#")
     if v.lower().startswith("0x"):
         v = v[2:]
-    if len(v) != 6:
-        die(f"colour must be RRGGBB, got '{value}'")
+    if not _HEX6.match(v):
+        die(f"colour must be six hex digits RRGGBB (e.g. FFD200 or #ffd200), got '{value}'; colour names are not "
+            "accepted here")
     return v.upper()
 
 
-_COLOR_TOKEN_RE = re.compile(r"^(0[xX][0-9A-Fa-f]{6,8}|#[0-9A-Fa-f]{6,8}|[A-Za-z][A-Za-z0-9]*)(@(?:0(?:\.\d+)?|1(?:\.0+)?|\.\d+))?$")  # alpha is 0..1; "red@2" used to reach ffmpeg
+# Six or eight hex digits, with 0x, with # or bare (#535: bare ones starting with a digit, 0B1D2A,
+# were refused, and seven passed with a prefix and failed inside ffmpeg), or a word that starts
+# with a letter; alpha is 0..1 ("red@2" used to reach ffmpeg). Nothing else reaches the graph.
+_HEX_DIGITS = r"(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{6})"
+_COLOR_TOKEN_RE = re.compile(r"^((?:0[xX]|#)?%s|[A-Za-z][A-Za-z0-9]*)(@(?:0(?:\.\d+)?|1(?:\.0+)?|\.\d+))?$" % _HEX_DIGITS)
 
 
 def validate_color(value: str, flag: str = "--color") -> str:
-    """Refuse a colour argument that isn't a plain ffmpeg colour token (named colour, 0xRRGGBB[AA],
-    #RRGGBB[AA], optionally with an @alpha suffix). Every caller that string-formats a colour flag
+    """Refuse a colour argument that isn't a plain ffmpeg colour token (named colour, RRGGBB[AA],
+    0xRRGGBB[AA], #RRGGBB[AA], optionally with an @alpha suffix). Every caller that string-formats a colour flag
     straight into a filter graph (color=c=..., tpad=...:color=..., rotate=...:fillcolor=...) must
     validate it first -- ffmpeg filter options are comma/colon-delimited, so an unvalidated value
     containing those characters lets a caller splice in an entirely different filter (a real,
     demonstrated filter-graph injection: --color "black,drawtext=text=..." renders arbitrary burnt-in
     text), not just an odd colour. This is the same "no filter graph accepted from the caller"
     invariant every other typed flag in this codebase already holds to."""
-    if not _COLOR_TOKEN_RE.match(value):
-        die(f"{flag} must be a plain colour (a name, 0xRRGGBB[AA], or #RRGGBB[AA], optionally @alpha), got '{value}'")
+    m = _COLOR_TOKEN_RE.match(value)
+    if not m:
+        die(f"{flag} must be a plain colour (a name, or six or eight hex digits RRGGBB[AA], bare or after 0x or #, "
+            f"optionally @alpha), got '{value}'")
+    word = m.group(1)
+    if word[0].isalpha() and word.lower() not in FFMPEG_COLOR_NAMES and not _BARE_HEX.match(word):
+        # A189 (#465): any word passed, and an unknown name failed inside ffmpeg ("Cannot find
+        # color") as kind ffmpeg, after a dry run that had said completed. ffmpeg reads a word as
+        # one of its names, or else as bare hex digits.
+        die(f"{flag} {value!r}: {word!r} is not a colour name ffmpeg knows (`ffmpeg -colors` lists them) "
+            "nor six or eight hex digits; use a name such as white, or 0xRRGGBB")
     return value
+
+
+# The names av_parse_color() looks up, case-insensitively (`ffmpeg -colors`, the same list in 6.1
+# through 8), plus the two it treats as a random colour. A word that is none of them is read as
+# hex digits without a prefix, which works for six or eight of them.
+FFMPEG_COLOR_NAMES = frozenset((
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown "
+    "burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan "
+    "darkgoldenrod darkgray darkgreen darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred "
+    "darksalmon darkseagreen darkslateblue darkslategray darkturquoise darkviolet deeppink deepskyblue dimgray "
+    "dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green "
+    "greenyellow honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon "
+    "lightblue lightcoral lightcyan lightgoldenrodyellow lightgreen lightgrey lightpink lightsalmon "
+    "lightseagreen lightskyblue lightslategray lightsteelblue lightyellow lime limegreen linen magenta maroon "
+    "mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen "
+    "mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive "
+    "olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff "
+    "peru pink plum powderblue purple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell "
+    "sienna silver skyblue slateblue slategray snow springgreen steelblue tan teal thistle tomato turquoise "
+    "violet wheat white whitesmoke yellow yellowgreen random bikeshed").split())
+_BARE_HEX = re.compile(r"^(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+
+
+# The tonemap filter reads linear light in units of 100 nits (1.0 = SDR white; its default peak,
+# 10, is 1000 nits), so the linearising zscale uses npl=100. Through 3.6.0 it used npl=--peak:
+# a 1000-nit pixel came out as 1.0, which tonemap took as 100 nits, so nothing reached SDR white
+# (PQ 1000 nits and HLG 100 % -> Y 151 of 235, HLG reference white 91) and raising --peak to a
+# brighter master's darkened the picture further. zimg's HLG decode assumes a 1000-nit display,
+# so an HLG picture always peaks at 1000 nits there, whatever --peak says.
+TONEMAP_REFERENCE_NITS = 100.0
+HLG_PEAK_NITS = 1000.0
+
+
+def hdr_to_sdr_chain(meta: dict, tonemap: str, peak: float = 1000.0, desat: float = 0.0) -> str:
+    """PQ / HLG / Dolby Vision to BT.709 SDR: linearise at 100 nits per unit, tone-map the source
+    peak (`peak` nits for PQ, 1000 for HLG) to SDR white, re-encode as BT.709 limited range."""
+    v = meta["video"]
+    trc = v.get("color_transfer") or "smpte2084"
+    prim = v.get("color_primaries") or "bt2020"
+    space = v.get("color_space") or "bt2020nc"
+    source_peak = HLG_PEAK_NITS if trc == "arib-std-b67" else peak
+    # zscale needs explicit input tags when the file lacks them, and on 6.1 its `pin` does not
+    # reach a frame whose own primaries are unspecified ("no path between colorspaces", kind
+    # ffmpeg: --to-sdr --force on an untagged file failed through 3.8.8), so a frame missing a tag
+    # is labelled with what the chain reads it as first
+    missing = not (v.get("color_transfer") and v.get("color_primaries") and v.get("color_space"))
+    label = [f"setparams=color_primaries={prim}:color_trc={trc}:colorspace={space}"] if missing else []
+    chain: List[str] = label + [
+        f"zscale=tin={trc}:pin={prim}:min={space}:rin={v.get('color_range') or 'tv'}:t=linear"
+        f":npl={TONEMAP_REFERENCE_NITS:g}",
+        "format=gbrpf32le",
+        "zscale=p=bt709",
+        f"tonemap=tonemap={tonemap}:desat={desat:g}:peak={source_peak / TONEMAP_REFERENCE_NITS:g}",
+        "zscale=t=bt709:m=bt709:r=tv",
+        "format=yuv420p",
+    ]
+    return ",".join(chain)
+
+
+def bt2020_sdr_to_bt709_chain(meta: dict) -> str:
+    """Gamut conversion only, for BT.2020 primaries on an SDR transfer (probe: `bt2020_or_hdr`
+    true, `hdr_signal` false). Such a file is already display-referred SDR: linearising it with
+    its own transfer, mapping the primaries to BT.709 and re-applying the BT.709 transfer keeps
+    white at white and grey at grey. The tone map the HDR chain adds would treat 100 % SDR white
+    as a fraction of a 1000-nit peak and darken the picture (white Y 235 -> 151, grey 126 -> 90)."""
+    v = meta["video"]
+    trc = v.get("color_transfer") or "bt709"
+    space = v.get("color_space") or "bt2020nc"
+    return ",".join([
+        f"zscale=tin={trc}:pin=bt2020:min={space}:rin={v.get('color_range') or 'tv'}:t=linear",
+        "format=gbrpf32le",
+        "zscale=p=bt709",
+        "zscale=t=bt709:m=bt709:r=tv",
+        "format=yuv420p",
+    ])
+
+
+def is_bt2020_sdr(v: dict) -> bool:
+    """BT.2020 primaries on a non-HDR transfer and no Dolby Vision: gamut-only --to-sdr."""
+    return bool(v.get("bt2020_or_hdr")) and not v.get("hdr_signal") and not v.get("dolby_vision") \
+        and v.get("color_transfer") not in ("smpte2084", "arib-std-b67")

@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 metadata:
   source: mvanhorn/last30days-skill
-  upstream-version: 3.21.1
+  upstream-version: 4.6.0
   trove-category: research
   trove-category-label: Research
 ---
@@ -79,6 +79,11 @@ These sections of the vendored spec do **not** apply here. Everything else stand
    `./setup`, not `npx skills add`.
 2. The `/last30days` invocation name — use `/trove-research:trove-pulse`.
 3. Upstream install instructions — ignore them; the skill is already vendored.
+4. Brief-capture hooks and transcript reads — Trove does not run
+   `setup --install-hooks` and does not read agent transcripts. Leave
+   `LAST30DAYS_AUTO_CAPTURE` unset. The engine can otherwise install a per-turn
+   hook into your agent configuration and archive finished briefs from local
+   transcripts.
 
 ## Configuration
 
@@ -97,6 +102,9 @@ wrong file looks like a broken skill.
 
 Leave `LAST30DAYS_TRUST_PROJECT_CONFIG` unset. A cloned repo could otherwise
 carry config the user did not write.
+
+Reddit's logged-in session is opt-in through `setup --reddit-session` and
+`REDDIT_BROWSER_CONSENT`. Leave it unset for keyless runs.
 
 See `docs/user-config.md` for Trove's own config file, which does not store
 these secrets.

@@ -30,7 +30,7 @@ Presets:
 Examples:
   python3 export.py final.mp4 --preset youtube
   python3 export.py final.mp4 --preset reels --fit crop
-  python3 export.py final.mp4 --preset reels --normalize   # meet the platform's loudness in the same call
+  python3 export.py final.mp4 --preset reels --no-normalize   # report the loudness, deliver the sound as it is
   python3 export.py final.mp4 --preset prores -o master.mov
   python3 export.py final.mp4 --preset dnxhr-hq -o master.mov
   python3 export.py final.mp4 --preset copy -o delivered.mp4
@@ -43,18 +43,22 @@ import re
 import os
 import sys
 import tempfile
+from fractions import Fraction
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from _common.runner import child_exit_code, fail_if_classified, kept_clause, mark_delivered
-from _common import STATE, run_analysis, add_common, apply_common, bt709_label_filter, bt709_matrix_args, bt709_tag_args, child_args, emit, cfr_args, default_output, die, encoder_args, ffmpeg_base, info, probe, require_tool, run, run_tool, validate_color, pad_filters, add_pad_fill_args, fmt_secs
-from _common.decision import hw_preset_video, restate_last_swap
-from _common.emit import note, record_fallback, record_skip, warn
-from _common.probe import square_pixels, square_pixels_note
-from _common.runner import ffmpeg_encoders, guard_sidecar, remember_written, run_analysis as _run_analysis, subtitle_codec_for
-from _common.emit import file_identity
+from _common.runner import carried_stream_maps, child_exit_code, fail_if_classified, kept_clause, mark_delivered
+from _common.color import bt709_matrix_filter, hdr_rgb_matrix_args, hdr_rgb_matrix_filter
+from _common import STATE, run_analysis, add_common, apply_common, bt709_label_filter, bt709_matrix_args, bt709_tag_args, child_args, emit, cfr_args, cfr_filter, default_output, die, encoder_args, ffmpeg_base, info, probe, require_tool, run, run_tool, validate_color, pad_filters, add_pad_fill_args, fmt_secs
+from _common.decision import chain_with_rate, enlarge_args, hdr_tag_args, warn_mostly_cropped, hw_preset_video, restate_last_swap
+from _common.emit import note, record_fallback, record_skip, refuse, stream_inventory_step, warn
+from _common.probe import AUDIO_MEDIA_EXT, PROBED_AUDIO, PROBED_VIDEO, display_size, probed_maps, square_pixels, square_pixels_note
+from _common.runner import ffmpeg_encoders, guard_sidecar, remember_written, replace_checked, replace_checked_together, reserve_sibling, subtitle_codec_for
+from _common.emit import file_identity, input_length, own_length, refuse_still
 from check import SPECS as PLATFORMS, measure_loudness
-from _platforms import ALIASES as _ALIASES, PLATFORMS as PLATFORM_TABLE, TP_TOLERANCE_DB, resolve as resolve_platform
+from fit import measure_picture
+from _common.probe import SILENT_PEAK_DBFS, shorter_than_a_loudness_block
+from _platforms import ALIASES as _ALIASES, PLATFORMS as PLATFORM_TABLE, TP_TOLERANCE_DB, UPLOAD_LIMITS_AS_OF, resolve as resolve_platform
 # Frame and duration limit come from the one platform table (scripts/_platforms.py) rather than
 # from a literal restated here: before 1.14 they were typed twice and the facebook preset had
 # already drifted (no duration cap against the table's 14400 s).
@@ -70,6 +74,47 @@ def _loudness_step(ok: bool, platform: str, spec: dict, m: dict) -> dict:
             "expected": expected, "measured": measured, "delta": delta,
             "tolerance": {"lufs": spec["lufs_tol"], "tp": TP_TOLERANCE_DB}, "provenance": "specification"}
 
+def _verify_delivery(args, preset: dict, source: dict, output: str, streams: dict,
+                     encoder: Optional[str], extra: dict) -> None:
+    """Enforce requested delivery properties using the final file, including after normalization."""
+    if STATE.dry_run:
+        return
+    written = probe(output, role="output")
+    video = written.get("video") or {}
+    steps = extra.setdefault("verification", [])
+    codec = preset.get("codec") or (preset.get("expect") or {}).get("codec")
+    codec = codec or {"libx264": "h264", "h264_videotoolbox": "h264", "libx265": "hevc",
+                      "hevc_videotoolbox": "hevc"}.get(encoder)
+    if encoder == "copy":
+        codec = source["video"].get("codec")
+    if codec and not any(step["step"] == "codec" for step in steps):
+        measured = video.get("codec")
+        steps.append({"step": "codec", "property": "video_codec", "ok": measured == codec,
+                      "expected": codec, "measured": measured, "provenance": "specification"})
+    if preset["w"] and preset["h"] and not args.no_scale:
+        expected = [preset["w"], preset["h"]]
+        measured = [video.get("width"), video.get("height")]
+        steps.append({"step": "frame_size", "property": "frame_size", "ok": measured == expected,
+                      "expected": expected, "measured": measured, "provenance": "specification"})
+    if "-r" in preset["video"]:
+        expected = float(Fraction(preset["video"][preset["video"].index("-r") + 1]))
+        measured = video.get("fps")
+        tolerance = 0.005  # accommodate probe rounding while distinguishing 29.97 from 30
+        steps.append({"step": "frame_rate", "property": "fps",
+                      "ok": measured is not None and abs(measured - expected) <= tolerance,
+                      "expected": expected, "measured": measured, "tolerance": tolerance,
+                      "provenance": "specification"})
+    inventory = stream_inventory_step(written, streams)
+    hard = {"streams", "codec", "frame_size", "frame_rate", "duration", "file_size"}
+    failed = [step["step"] for step in [*steps, inventory] if step["step"] in hard and step.get("ok") is not True]
+    if failed:
+        checked = [{**step, "attribution": step.get("attribution") or "unresolved"} if step.get("ok") is False
+                   else step for step in [*steps, inventory]]
+        details = dict(extra, verification=checked, output=output, probe=written, verified=False,
+                       dry_run=False, output_identity=file_identity(output))
+        die(f"export verification failed ({', '.join(failed)}); kept {output}", kind="verification", **details)
+
+
 def _from_table(dest: str, **over) -> Dict:
     """A preset's w/h/max read from PLATFORMS[dest], with the encoder settings given here.
 
@@ -84,6 +129,20 @@ def _from_table(dest: str, **over) -> Dict:
            "max": float(max_duration) if max_duration is not None else None}
     out.update(over)
     return out
+
+
+def _center_crop_geometry(sw: int, sh: int, w: int, h: int) -> tuple:
+    """Source-pixel margins of the preset's scale-to-cover and centred 4:2:0 crop."""
+    # FFmpeg's scale rounds the non-binding side to nearest (halves up); crop floors the
+    # centred offsets to even pixels for chroma. Leave the existing encode filters unchanged.
+    scaled_w = max(w, (2 * h * sw + sh) // (2 * sh))
+    scaled_h = max(h, (2 * w * sh + sw) // (2 * sw))
+    mx, my = scaled_w - w, scaled_h - h
+    x, y = 2 * (mx // 4), 2 * (my // 4)
+    return scaled_w / sw, {
+        "left": round(x * sw / scaled_w), "right": round((mx - x) * sw / scaled_w),
+        "top": round(y * sh / scaled_h), "bottom": round((my - y) * sh / scaled_h),
+    }
 
 
 _H264_HIGH = ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-profile:v", "high", "-pix_fmt", "yuv420p"]
@@ -201,31 +260,45 @@ def _key_fill(args, p: Dict, meta: Dict, output: str, cmd: List[str], vf: List[s
         note(f"--hw: --preset {args.preset} stays on {p['video'][p['video'].index('-c:v') + 1]}: one ffmpeg run writes "
              "the fill and the key as a pair, and VideoToolbox's ProRes encoder is not used for it")
     fill_chain = ",".join(vf + (["premultiply=inplace=1"] if args.alpha_mode == "premultiplied" else []) + ["format=yuv422p10le"])
-    key_chain = ",".join(vf + ["alphaextract", "format=yuv422p10le"])
+    # Alpha uses full range even when the source picture is tagged limited range.
+    key_chain = ",".join(vf + ["alphaextract", "scale=in_range=pc:out_range=tv", "format=yuv422p10le"])
     tc = ((meta.get("timecode") or {}).get("value"))
     tc_args = ["-timecode", tc] if tc else []
-    cmd = cmd + ["-filter_complex", f"[0:v:0]split[f][k];[f]{fill_chain}[fill];[k]{key_chain}[key]"]
-    cmd += ["-map", "[fill]"] + (["-map", "0:a:0"] if has_audio else []) + p["video"] + tc_args + cfr_args(meta)
+    # a VFR source is conformed by the fps filter, once, ahead of the split: both files hold the same
+    # frames, and -fps_mode cfr alone let a frame run up to two frames late against the sound (#512)
+    conform = cfr_filter(meta)
+    cmd = cmd + ["-filter_complex", f"[0:{PROBED_VIDEO}]{conform + ',' if conform else ''}split[f][k];"
+                                    f"[f]{fill_chain}[fill];[k]{key_chain}[key]"]
+    cmd += ["-map", "[fill]"] + probed_maps(meta, video=False, audio=has_audio) + p["video"] + tc_args + cfr_args(meta)
     # the fill is always written to a hidden sibling and moved into place only after the encode
     # succeeds: run() stages and cleans up only ffmpeg's last output (the key), so a failed encode
     # left a partial new fill (the retry was refused as output_exists) or truncated an existing one
-    fill_tmp = None
+    # the key is staged the same way, and both are committed together: a fill refused at its
+    # replace never leaves a new key beside it (which a retry would then refuse as existing)
+    fill_tmp = key_tmp = None
     if not STATE.dry_run:
         d, base = os.path.split(output)
         stem, ext = os.path.splitext(base)
-        fill_tmp = os.path.join(d, f".{stem}.ffskill-fill-{os.getpid()}{ext}")
+        fill_tmp = reserve_sibling(d, stem, ext, "fill")  # created exclusively: never through a planted link
+        kd, kbase = os.path.split(key)
+        kstem, kext = os.path.splitext(kbase)
+        key_tmp = reserve_sibling(kd, kstem, kext, "key")
+        # this run's own placeholder: run()'s output check must not refuse it as someone's file
+        STATE.written.add(os.path.realpath(key_tmp))
     cmd += (p["audio"] if has_audio else ["-an"]) + [fill_tmp or output]
-    cmd += ["-map", "[key]"] + p["video"] + tc_args + cfr_args(meta) + ["-an", key]
+    cmd += ["-map", "[key]"] + p["video"] + tc_args + cfr_args(meta) + ["-an", key_tmp or key]
     try:
         run(cmd)
-        if fill_tmp:
-            os.replace(fill_tmp, output)
+        if fill_tmp and key_tmp:
+            # under both locks, and only while each is the file guard_sidecar() decided about
+            replace_checked_together([(fill_tmp, output), (key_tmp, key)])
     finally:
-        if fill_tmp:
-            # the command is recorded with the path the caller asked for, not the temp name
-            STATE.commands[:] = [c.replace(fill_tmp, output) for c in STATE.commands]
-            if os.path.exists(fill_tmp):
-                os.remove(fill_tmp)
+        for tmp, final in ((fill_tmp, output), (key_tmp, key)):
+            if tmp:
+                # the command is recorded with the path the caller asked for, not the temp name
+                STATE.commands[:] = [c.replace(tmp, final) for c in STATE.commands]
+                if os.path.exists(tmp):
+                    os.remove(tmp)
     remember_written(output, key)
     extra: Dict[str, object] = {"alpha_mode": args.alpha_mode or "straight", "key": {"output": key}}
     # a fill and a key for a switcher carry the picture and the sound; the source's subtitle and
@@ -244,10 +317,11 @@ def _key_fill(args, p: Dict, meta: Dict, output: str, cmd: List[str], vf: List[s
     pair = {k: [fv.get(k), kv.get(k)] for k in ("width", "height", "nb_frames", "r_frame_rate")}
     # the video streams' lengths: the fill's container also counts its sound, which may run longer
     # than the picture, and the key has none
-    pair["duration"] = [round(v.get("duration") or v.get("tagged_duration") or 0, 3) for v in (fv, kv)]
+    pair["duration"] = [round(own_length(v) or 0, 3) for v in (fv, kv)]
     same = all(a == b and a not in (None, 0) for a, b in pair.values())
-    steps = [{"step": "key_fill_pair", "property": "frames_size_rate_length", "ok": same, "measured": pair,
-              "provenance": "output_measurement"}]
+    # the two written files against each other: no expected value, so no provenance (#403: it said
+    # "output_measurement", which is not one of the contract's values)
+    steps = [{"step": "key_fill_pair", "property": "frames_size_rate_length", "ok": same, "measured": pair}]
     key_level = _luma_stats(key)
     level = _alpha_compare(key_level, source_alpha)
     steps.append({"step": "key_level", "property": "key_mean_vs_source_alpha", "ok": level["ok"], "comparison": level,
@@ -279,17 +353,22 @@ def _luma_stats(path: str) -> "Dict[str, float] | None":
     return _frame_means([require_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin"], path, "format=gray")
 
 
-def _loudness_unmeasured(extra: Dict[str, object], notes: List[str], platform: str, spec: Dict, normalized: bool = False) -> None:
-    """The written file's loudness could not be read (ffmpeg's loudnorm JSON did not parse): the
+def _loudness_unmeasured(extra: Dict[str, object], notes: List[str], platform: str, spec: Dict, normalized: bool = False,
+                         tp: Optional[float] = None) -> None:
+    """The written file's loudness could not be read (ffmpeg's loudnorm JSON did not parse, or,
+    with `tp`, the audio is shorter than one 400 ms gating block and has only a true peak): the
     platform's loudness was not verified, and the document says so -- a `loudness` block with null
     values and a reason, a failing `loudness` verification step, a warning -- rather than leaving
     the block out, which read as "nothing to check". check.py reports the same case as a WARN row."""
     reason = "not_measured"
-    extra["loudness"] = {"lufs": None, "tp": None, "target_lufs": spec["lufs"], "target_tp": spec["tp"], "ok": None,
-                         "measured": False, "reason": reason, **({"normalized": True} if normalized else {})}
+    extra["loudness"] = {"lufs": None, "tp": tp, "target_lufs": spec["lufs"], "target_tp": spec["tp"], "ok": None,
+                         "measured": False, "reason": reason, **({"too_short": True} if tp is not None else {}),
+                         "normalized": normalized}
     extra["verification"] = [{"step": "loudness", "ok": False, "platform": platform, "reason": reason}]
+    why = ("the audio is shorter than one 400 ms loudness block, so it has a true peak but no integrated loudness"
+           if tp is not None else "ffmpeg's loudnorm output did not parse")
     msg = (f"the written file's loudness could not be measured{' after --normalize' if normalized else ''} "
-           f"(ffmpeg's loudnorm output did not parse), so {platform}'s {spec['lufs']:g} LUFS / {spec['tp']:g} dBTP was not "
+           f"({why}), so {platform}'s {spec['lufs']:g} LUFS / {spec['tp']:g} dBTP was not "
            "verified; run check.py on the file")
     notes.append(msg)
     warn(msg, "loudness_not_measured", platform=platform, normalized=normalized)
@@ -305,15 +384,19 @@ _subtitle_codec = subtitle_codec_for
 
 def _data_streams(path: str) -> List[Dict[str, object]]:
     """The data streams of a file ({index, codec}), without its attachments (probe()'s
-    data_streams counts both, and -map 0:d maps only the data streams)."""
+    data_streams counts both, and -map 0:d maps only the data streams) and without an MP4/MOV
+    chapter track, which the muxer writes again from the chapters (carried_stream_maps, A173)."""
     proc = run([require_tool("ffprobe"), "-v", "error", "-select_streams", "d", "-show_entries",
-                "stream=codec_name,codec_tag_string", "-of", "json", path], quiet=True)
+                "stream=codec_name,codec_tag_string:chapter=id", "-of", "json", path], quiet=True)
     try:
-        streams = json.loads(proc.stdout or "{}").get("streams") or []
+        doc = json.loads(proc.stdout or "{}")
     except ValueError:
         # an unread list would map nothing and report nothing dropped
         die(f"ffprobe's data-stream list for {path} did not parse", kind="ffmpeg")
-    return [{"index": n, "codec": s.get("codec_name") or s.get("codec_tag_string")} for n, s in enumerate(streams)]
+    streams = doc.get("streams") or []
+    chapter_track = bool(doc.get("chapters"))
+    return [{"index": n, "codec": s.get("codec_name") or s.get("codec_tag_string")} for n, s in enumerate(streams)
+            if not (chapter_track and str(s.get("codec_tag_string") or "").lower() == "text")]
 
 
 def _run_keeping_non_av(cmd: List[str], output: str, sub_codecs: List[str], data: int) -> List[str]:
@@ -322,10 +405,13 @@ def _run_keeping_non_av(cmd: List[str], output: str, sub_codecs: List[str], data
     subtitles + data, subtitles alone, neither; each retry is a `non_av_streams_dropped` fallback
     with the attempt's error. `cmd` already maps the picture and the sound and has no output.
     Returns the stream types dropped ([] when everything mapped was written)."""
+    src = next((str(cmd[i + 1]) for i, a in enumerate(cmd[:-1]) if a == "-i"), None)
     sub_args: List[str] = ["-map", "0:s"] if sub_codecs else []
     for n, codec in enumerate(sub_codecs):
         sub_args += [f"-c:s:{n}", codec]
-    data_args = ["-map", "0:d", "-c:d", "copy"] if data else []
+    if sub_codecs:
+        sub_args += carried_stream_maps(src, output, chapters=False)  # the fonts the subtitles are drawn with (A256)
+    data_args = (["-map", "0:d"] + carried_stream_maps(src, output, attachments=False) + ["-c:d", "copy"]) if data else []
     rungs = [(sub_args + data_args, [])]
     if sub_codecs and data:
         rungs.append((sub_args, ["data"]))
@@ -373,7 +459,9 @@ def _non_av_report(subs: List[Dict], sub_codecs: List[str], data: List[Dict], dr
         written_data = _data_streams(output)
     for kind, streams, written in (("subtitle", subs, written_subs), ("data", data, written_data)):
         for n, s in enumerate(streams):
-            row = {"type": kind, "index": n, "codec": s.get("codec")}
+            # a data row keeps its n-th-of-type index in the source: the chapter text track is left
+            # out of the list, so a timecode track after it is data stream 1, not 0
+            row = {"type": kind, "index": s.get("index", n) if kind == "data" else n, "codec": s.get("codec")}
             if kind == "subtitle":
                 row["language"] = s.get("language")
             if STATE.dry_run and kind not in dropped:
@@ -401,7 +489,9 @@ def media_damage(path: str) -> Dict[str, int]:
     PTS) and every other error line, counted. What --repair is measured by, before and after."""
     # repeat+: every occurrence on its own line, not "Last message repeated N times", which hid
     # N timestamp warnings and was itself counted as a decode error
-    proc = run_analysis([require_tool("ffmpeg"), "-hide_banner", "-nostdin", "-v", "repeat+warning", "-i", path, "-f", "null", "-"],
+    # the streams a copy export writes (probed_maps), not the ones default selection would decode
+    proc = run_analysis([require_tool("ffmpeg"), "-hide_banner", "-nostdin", "-v", "repeat+warning", "-i", path,
+                         "-map", f"0:{PROBED_VIDEO}?", "-map", f"0:{PROBED_AUDIO}?", "-f", "null", "-"],
                         check=False, record=True)
     lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
     # "Packet corrupt (stream = 0, dts = ...)" names a dts but is damage, not a timestamp problem
@@ -415,6 +505,32 @@ SIZE_MIN_VIDEO_KBPS = 100   # below this the picture is not worth delivering; re
 SIZE_MAX_VIDEO_KBPS = 400_000  # 400 Mb/s: above any delivery line, and libx264 refuses far larger values
 
 
+def _platform_rate_args(preset: str, meta: Dict) -> List[str]:
+    """A platform preset that keeps the source's frame rate (the youtube family) conforms a source
+    faster than the platform's fps_max to the source rate divided by the smallest whole number that
+    brings it within the limit (120 -> 60, 119.88 -> 59.94, 100 -> 50), so every frame of the
+    output is one of the source's own. Through 3.8.8 a 120 fps source kept 120 fps and the
+    platform's own check FAILed the export (audit A115). [] when the preset has no limit or the
+    source is within it (cfr_args() then decides, as before)."""
+    platform = PLATFORM_OF.get(preset)
+    fps_max = (PLATFORMS.get(platform) or {}).get("fps_max") if platform else None
+    v = meta.get("video") or {}
+    src = v.get("fps")
+    if not fps_max or not src or src <= fps_max + 0.01:
+        return []
+    try:
+        exact = Fraction(v.get("avg_frame_rate") or "0")
+    except (ValueError, ZeroDivisionError):
+        exact = Fraction(0)
+    if not exact or abs(float(exact) - src) > 0.01:
+        exact = Fraction(src).limit_denominator(1001)
+    n = math.ceil(float(exact) / (fps_max + 0.01))
+    rate = exact / n
+    note(f"source is {src:g} fps, above {platform}'s limit of {fps_max:g}: exported at {float(rate):.6g} fps, "
+         f"one source frame in {n}")
+    return ["-fps_mode", "cfr", "-r", str(rate.numerator) if rate.denominator == 1 else f"{rate.numerator}/{rate.denominator}"]
+
+
 def size_video_args(args, video: List[str], p: Dict, meta: Dict, has_audio: bool) -> List[str]:
     """--max-mb: the preset's x264 line with its CRF replaced by the bitrate that fits the size,
     for a two-pass encode. Refused where that cannot be done honestly: another codec, --crf, --hw,
@@ -426,9 +542,10 @@ def size_video_args(args, video: List[str], p: Dict, meta: Dict, has_audio: bool
             + (" (--hw puts it on VideoToolbox, which has no two-pass mode)" if STATE.hw else ""))
     if not math.isfinite(args.max_mb) or args.max_mb <= 0:
         die(f"--max-mb must be a positive number of MiB, got {args.max_mb:g}")
-    dur = float(meta.get("duration") or 0.0)
+    dur = input_length(meta)  # the bitrate is the size over the length: no stated length is refused (#491)
     if p["max"] and not args.allow_long:
         dur = min(dur, float(p["max"]))
+    dur = min(dur, args.duration or dur)
     if dur <= 0:
         die("--max-mb needs the source's duration, which it does not report")
     audio_kbps = 0.0
@@ -455,7 +572,7 @@ def main() -> int:
     ap.add_argument("-o", "--output", help="output file (default: <name>_<preset>.<ext>)")
     ap.add_argument("--preset", choices=PRESET_CHOICES, help="delivery preset (aliases: " + ", ".join(a for a in _ALIASES if resolve_platform(a) in PRESETS) + ")")
     ap.add_argument("--fit", choices=["pad", "crop"], default="pad", help="how to reach the preset frame when aspect differs (default pad)")
-    ap.add_argument("--pad-color", default="black")
+    ap.add_argument("--pad-color", default="black", help="pad colour when the picture is padded to the preset's frame, e.g. black, white, 0x101010 (default black)")
     add_pad_fill_args(ap)
     ap.add_argument("--no-scale", action="store_true", help="keep source resolution even for platform presets")
     ap.add_argument("--allow-long", action="store_true", help="do not trim to the platform's max duration")
@@ -464,10 +581,16 @@ def main() -> int:
                     help="--preset copy only: remux a damaged file -- timestamps regenerated, corrupt packets dropped, "
                          "negative timestamps shifted to zero -- and count the decode errors and timestamp warnings "
                          "before and after; the input is never touched")
+    ap.add_argument("--duration", type=float, metavar="S", help="keep only the first S seconds (a preset's own maximum still applies)")
     ap.add_argument("--max-mb", type=float, metavar="MB",
-                    help="fit the file under MB megabytes (MiB): a two-pass x264 encode at the video bitrate the "
+                    help="the max size of the file: fit it under MB megabytes (MiB), a two-pass x264 encode at the video bitrate the "
                          "running time leaves after the audio, measured afterwards (H.264 presets; not with --crf or --hw)")
-    ap.add_argument("--normalize", action="store_true", help="youtube/youtube4k/reels/x: when the written file misses the platform's loudness spec, run loudness.py on it (audio re-encoded, video copied) so one export delivers")
+    # 4.0.0 (#579): a platform preset promises the platform's loudness, so it meets it by default
+    norm = ap.add_mutually_exclusive_group()
+    norm.add_argument("--normalize", action="store_true",
+                      help="platform presets: normalize audio when it misses the loudness spec (the default since 4.0.0). Video is copied.")
+    norm.add_argument("--no-normalize", action="store_true",
+                      help="platform presets: measure and report the loudness but deliver the sound as it is (3.x's default)")
     ap.add_argument("--alpha-mode", choices=["straight", "premultiplied"],
                     help="alpha presets (prores4444, prores4444xq, qtrle, vp9-alpha, hap-alpha): write the colour straight "
                          "(default, as decoded) or premultiplied by the alpha; written to the result as alpha_mode")
@@ -485,14 +608,19 @@ def main() -> int:
     if not args.input or not args.preset:
         die("input and --preset are required (or use --list)")
     validate_color(args.pad_color, "--pad-color")
-    if args.normalize and args.preset not in PLATFORM_OF:
-        die(f"--normalize applies to the platform presets ({', '.join(sorted(PLATFORM_OF))}); --preset {args.preset} has no loudness spec to meet",
-            hint="drop --normalize, or run loudness.py with your own target")
+    if (args.normalize or args.no_normalize) and args.preset not in PLATFORM_OF:
+        flag = "--normalize" if args.normalize else "--no-normalize"
+        die(f"{flag} applies to the platform presets ({', '.join(sorted(PLATFORM_OF))}); --preset {args.preset} has no loudness spec to meet",
+            hint=f"drop {flag}, or run loudness.py with your own target")
+    args.normalize = args.preset in PLATFORM_OF and not args.no_normalize
 
     p = PRESETS[args.preset]
     meta = probe(args.input)
     if not meta.get("video"):
         die("input has no video stream")
+    # the presets tried delivered one frame of a still (0.04 s, verified; gif failed in its muxer): a
+    # delivery has a length, and insert.py times a still (#531)
+    refuse_still(meta, args.input, "a delivery is a clip with a length, and a still has none")
     notes: List[str] = []
     if p.get("hdr_only") and not meta["video"].get("bt2020_or_hdr"):
         # The point of this preset is that the delivery stays HDR. Running it on an SDR source
@@ -539,20 +667,32 @@ def main() -> int:
     # metadata.py's does): default_output()'s .webm -> .mp4 is for the re-encoding presets
     output = args.output or default_output(args.input, args.preset, p["ext"] or Path(args.input).suffix.lstrip(".") or None)
     out_ext = Path(output).suffix.lstrip(".").lower()
+    # The runner's picture check looks for a video encoder. Copy and GIF do not name one.
+    if args.preset in ("copy", "gif") and "." + out_ext in AUDIO_MEDIA_EXT:
+        refuse("input", "output_extension_audio_only",
+               f"output {output!r}: .{out_ext} holds sound only, and --preset {args.preset} writes a picture",
+               hint="name a video file for this preset, or extract the sound with cut.py or audio.py",
+               output=output, extension="." + out_ext, encoders=["gif"] if args.preset == "gif" else [])
 
     vf: List[str] = []
+    picture_filters: List[str] = []
     # A GIF is RGB: an untagged SDR source is labelled BT.709 (tags only) for palettegen's conversion,
     # which read "unknown" as BT.601 (C03028 came out B31F28, #410); a tagged one is read by its tag
     gif_label = bt709_label_filter(meta) if args.preset == "gif" else None
     if p["w"] and not args.no_scale:
         if p["h"]:
             if args.fit == "crop":
-                vf += [f"scale={p['w']}:{p['h']}:force_original_aspect_ratio=increase", f"crop={p['w']}:{p['h']}"]
+                warn_mostly_cropped(meta.get("video"), p["w"], p["h"])
+                picture_filters = [f"scale={p['w']}:{p['h']}:force_original_aspect_ratio=increase", f"crop={p['w']}:{p['h']}"]
+                vf.extend(picture_filters)
             else:
                 # a --pad-color with chroma is drawn in the BT.709 the line is tagged with; a GIF is
                 # not tagged, and palettegen reads the pad back with the same BT.601 it was drawn in
                 vf.append(pad_filters(p["w"], p["h"], args.pad_fill, args.pad_color, args.pad_blur,
                                       meta=None if args.preset == "gif" else meta))
+                if not STATE.dry_run:
+                    picture_filters = [pad_filters(p["w"], p["h"], args.pad_fill, args.pad_color,
+                                                   args.pad_blur, meta=meta, blank=True)]
             vf.append("setsar=1")
         else:
             vf.append(f"scale={p['w']}:-2")
@@ -576,16 +716,19 @@ def main() -> int:
     # Subtitle and data streams (a soft-subtitle track muxed upstream, a camera's timecode) are
     # kept where the container can hold them: ffmpeg's default stream selection takes one video
     # and one audio stream only, and through 2.22.1 every preset dropped the rest without a word.
-    # Mapping them means mapping the picture and the sound too, the same streams probe() describes.
+    # The picture and the sound are mapped on every export, the same streams probe() describes:
+    # until A118 they were mapped only beside a subtitle or data stream, and without one ffmpeg's
+    # default selection took the larger picture and the track with the default disposition or the
+    # most channels, so which audio track an export kept depended on whether it had subtitles.
     subs = meta.get("subtitle_stream_details") or []
     data = _data_streams(args.input) if meta.get("data_streams") else []
     sub_codecs = [_subtitle_codec(s.get("codec") or "", out_ext) for s in subs]
-    if args.preset != "gif" and not p.get("keyfill") and (subs or data):
-        cmd += ["-map", "0:V:0"] + (["-map", "0:a:0"] if has_audio else [])
+    if args.preset != "gif" and not p.get("keyfill"):
+        cmd += probed_maps(meta, audio=has_audio)
 
     if args.preset == "gif":
         chain = ",".join(([gif_label] if gif_label else []) + ["fps=12"] + vf)
-        fc = f"[0:v]{chain},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+        fc = f"[0:{PROBED_VIDEO}]{chain},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
         cmd += ["-filter_complex", fc, "-loop", "0", output]
         run(cmd)
         info(f"wrote {output}")
@@ -634,19 +777,45 @@ def main() -> int:
         video = hw_preset_video(video, meta, bt709=tag_bt709)
     if args.max_mb is not None:
         video = size_video_args(args, video, p, meta, has_audio)
-    cmd += video
+    cmd += video + enlarge_args(meta, *((None, None) if args.no_scale else (p["w"], p["h"])))
     if args.preset != "copy":
         # a stream copy can't be frame-rate-conformed or retagged without decoding it — that would
         # no longer be a copy, and would silently mislabel colour the agent never actually looked at
+        rate_args: List[str] = []
         if "-r" not in video:
-            cmd += cfr_args(meta)
+            rate_args = _platform_rate_args(args.preset, meta) or cfr_args(meta)
+            cmd += rate_args
+        # the rate the line delivers (a preset's own -r, a platform's divided rate, or a VFR
+        # source's average) is reached by the fps filter, the nearest frame for each slot: the
+        # encoder line's -r alone let a frame run up to two frames late against the sound before
+        # it dropped one (#512)
+        rate_f = (f"fps={video[video.index('-r') + 1]}" if "-r" in video
+                  else f"fps={rate_args[rate_args.index('-r') + 1]}" if "-r" in rate_args else "")
+        # it is placed as with_cfr() places it: first in a -vf that is a graph (a blur pad's
+        # split/overlay, a drawn pad's maskedmerge), whose last frame an fps filter after it lost
+        # on FFmpeg 6.1 (reels --pad-fill blur: 119 frames of a 4 s 30 fps picture)
+        if rate_f and "-vf" in cmd:
+            cmd[cmd.index("-vf") + 1] = chain_with_rate(cmd[cmd.index("-vf") + 1], rate_f)
+        elif rate_f:
+            cmd += ["-vf", rate_f]
         if tag_bt709 and not video[video.index("-c:v") + 1].endswith("_videotoolbox"):
             cmd += bt709_tag_args(video[video.index("-c:v") + 1])
-        if not p.get("intermediate"):
+        hdr = bool(meta["video"].get("bt2020_or_hdr"))
+        if not p.get("intermediate") and not (p.get("codec") and hdr):
             # every line but an editing master's (prores, dnxhr) says BT.709 (the fixed presets' tags above, an
-            # SDR hevc/av1 line's own): a BT.601 source's pixels are converted to match, in front
-            # of the -vf above (run() folds the two); an untagged, BT.709 or HDR source adds nothing
+            # SDR hevc/av1 line's own): a BT.601 or RGB source's pixels are converted to match (an HDR RGB one
+            # too, #559), in front of the -vf above (run() folds the two); an untagged or BT.709 YUV source adds nothing
             cmd += bt709_matrix_args(meta)
+        yuva = "-pix_fmt" in video and video[video.index("-pix_fmt") + 1].startswith("yuva")
+        master = bool(p.get("intermediate") and hdr and (yuva or not p.get("alpha")))  # qtrle and hap keep their RGB
+        if master:
+            # an editing master of a BT.2020 / HDR source keeps its primaries and transfer and says the matrix
+            # it converted with, as --codec prores does and as a YUV source's frames already did (#559)
+            cmd += hdr_tag_args(meta)
+        if p.get("codec") or master:
+            # encoder_args()' line for a BT.2020 / HDR source tags that source's matrix: an RGB
+            # one is made YUV with it, not with FFmpeg's BT.601 default (#544)
+            cmd += hdr_rgb_matrix_args(meta, alpha=yuva)
     if out_ext == "mp4":
         cmd += ["-movflags", "+faststart"]
     if args.repair:
@@ -659,8 +828,11 @@ def main() -> int:
         # kept subtitle track is cut at the same point (a cue after it is not written)
         trimmed = {"from": round(float(meta["duration"]), 3), "to": round(float(p["max"]), 3)}
         note(f"trimmed from {trimmed['from']:.3f}s to the {args.preset} maximum of {p['max']:.0f}s "
-             "(use --allow-long to keep full length)")
+             f"(this tool's table as of {UPLOAD_LIMITS_AS_OF}, and platforms change it: "
+             "use --allow-long to keep full length)")
         cmd += ["-t", f"{p['max']:.3f}"]
+    if args.duration and not (trimmed and args.duration >= p["max"]):
+        cmd += ["-t", f"{args.duration:.3f}"]
     damage_before = media_damage(args.input) if args.repair and not STATE.dry_run else None
     with tempfile.TemporaryDirectory(prefix="ffskill_2pass_") as passdir:
         if args.max_mb is not None:
@@ -676,8 +848,9 @@ def main() -> int:
         # and says so (#415)
         mark_delivered(output)
     result = probe(output, role="output")
-    v = result["video"]
-    info(f"wrote {output} ({fmt_secs(result['duration'])}, {v['width']}x{v['height']}, {v['codec']})")
+    v = result.get("video") or {}
+    if v:
+        info(f"wrote {output} ({fmt_secs(result['duration'])}, {v['width']}x{v['height']}, {v['codec']})")
     extra: Dict[str, object] = {"trimmed": trimmed} if trimmed else {}
     encoder = video[video.index("-c:v") + 1] if "-c:v" in video else None
     if p.get("expect") and not STATE.dry_run and encoder == p["video"][p["video"].index("-c:v") + 1]:
@@ -708,11 +881,19 @@ def main() -> int:
         # written file here so the result names the gap and the caller plans one pass, not two.
         spec = PLATFORMS[platform]
         m = measure_loudness(output)
-        if not m:
+        written_audio = probe(output, role="output").get("audio") or {}
+        if (m and not math.isfinite(m["lufs"]) and math.isfinite(m["tp"]) and m["tp"] > SILENT_PEAK_DBFS
+                and shorter_than_a_loudness_block(own_length(written_audio))):
+            # A257: too short for a gating block is not silent (it has a measured peak); a longer
+            # track under the gate is not "too short" and takes the path it took before
+            _loudness_unmeasured(extra, notes, platform, spec, tp=m["tp"])
+            m = {}
+        elif not m:
             _loudness_unmeasured(extra, notes, platform, spec)
         if m:
             ok = abs(m["lufs"] - spec["lufs"]) <= spec["lufs_tol"] and m["tp"] <= spec["tp"] + TP_TOLERANCE_DB
-            extra["loudness"] = {"lufs": m["lufs"], "tp": m["tp"], "target_lufs": spec["lufs"], "target_tp": spec["tp"], "ok": ok}
+            extra["loudness"] = {"lufs": m["lufs"], "tp": m["tp"], "target_lufs": spec["lufs"],
+                                 "target_tp": spec["tp"], "ok": ok, "normalized": False}
             extra["verification"] = [_loudness_step(ok, platform, spec, m)]
             if not math.isfinite(m["lufs"]):
                 # a silent output measures -inf LUFS: no gain reaches the target, so recommending
@@ -729,7 +910,13 @@ def main() -> int:
                 # a private name: <stem>_loudnorm.<ext> is loudness.py's own default output, so a
                 # real file of that name next to the export was overwritten and renamed away (review 7)
                 tmp = str(Path(output).with_name(f".{Path(output).stem}.normalize-{os.getpid()}{Path(output).suffix}"))
-                proc = run_tool([str(HERE / "loudness.py"), output, "-I", f"{spec['lufs']:g}", "--tp", f"{spec['tp']:g}", "-o", tmp, "--json"] + child_args())
+                # under --max-mb the sound is re-encoded at the bitrate the size budget was built on
+                # (the preset's); loudness.py's own 192k, raised to 256k/320k on an overshoot, put
+                # the file over the limit it had been encoded to meet (through 3.8.8, audit A112)
+                pinned = (["--audio-bitrate", p["audio"][p["audio"].index("-b:a") + 1]]
+                          if args.max_mb is not None and "-b:a" in p["audio"] else [])
+                proc = run_tool([str(HERE / "loudness.py"), output, "-I", f"{spec['lufs']:g}", "--tp", f"{spec['tp']:g}", "-o", tmp, "--json"]
+                                + pinned + child_args())
                 try:
                     child = json.loads(proc.stdout)
                 except ValueError:
@@ -746,7 +933,8 @@ def main() -> int:
                     die(f"--normalize: loudness.py failed: {why} ({kept_clause()})",
                         code=child_exit_code(child, proc.returncode) if proc.returncode else 1,
                         kind=err.get("kind") or "ffmpeg", output=output, hint=err.get("hint"))
-                os.replace(tmp, output)
+                # the export this run wrote, unless another process replaced it during the pass
+                replace_checked(tmp, output)
                 m = measure_loudness(output)
                 if not m:
                     # the file changed: the measurement before --normalize no longer describes it
@@ -763,6 +951,10 @@ def main() -> int:
                 notes.append(f"loudness {m['lufs']:.1f} LUFS / {m['tp']:+.1f} dBTP is outside {platform}'s {spec['lufs']:g} LUFS / {spec['tp']:g} dBTP; "
                              f"run loudness.py -I {spec['lufs']:g} --tp {spec['tp']:g} on this file, or export with --normalize")
                 warn(notes[-1], "loudness_outside_spec", platform=platform, lufs=m["lufs"], tp=m["tp"], normalized=False)
+        if m:
+            correction = "after correction" if extra["loudness"]["normalized"] else "without export correction"
+            info(f"loudness measured {correction}: {m['lufs']:.1f} LUFS / {m['tp']:+.1f} dBTP "
+                 f"(target {spec['lufs']:g} LUFS / {spec['tp']:g} dBTP)")
     elif platform and not has_audio and not STATE.dry_run:
         record_skip(f"no loudness check against {platform}'s spec: the source has no audio, so the export has none",
                     "loudness_no_audio", platform=platform)
@@ -815,10 +1007,21 @@ def main() -> int:
                      f"({', '.join(sorted({d['type'] + ': ' + d['reason'] for d in non_av['dropped']}))}); non_av_streams lists them")
     extra["non_av_streams"] = non_av
     extra["dropped_non_av_streams"] = bool(non_av["dropped"])
+    if picture_filters and not STATE.dry_run:
+        sw, sh = display_size(meta["video"])
+        scale, cropped = (None, None)
+        if args.fit == "crop" and sw and sh:
+            scale, cropped = _center_crop_geometry(sw, sh, p["w"], p["h"])
+        written_video = probe(output, role="output").get("video") or {}
+        matrix = hdr_rgb_matrix_filter(meta) if p.get("codec") else None
+        extra["picture"] = measure_picture((picture_filters, scale, cropped), meta, sw, sh, written_video,
+                                           sized=True, matrix_filter=matrix or bt709_matrix_filter(meta))
     if notes:
         extra["notes"] = notes
     # the delivery keeps the source's picture and, except as a GIF, its sound
-    extra["expect_streams"] = {"video": int(bool(meta.get("video"))), "audio": int(bool(has_audio and args.preset != "gif"))}
+    streams = {"video": 1, "audio": int(has_audio)}
+    _verify_delivery(args, p, meta, output, streams, encoder, extra)
+    extra["expect_streams"] = streams
     extra["stream_reference"] = [meta]
     if trimmed:  # only the kept 0..max of the source can have handed its gap to the output
         extra["stream_windows"] = [(0.0, float(p["max"]))]

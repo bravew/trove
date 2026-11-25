@@ -121,10 +121,10 @@ describe("upstream manifest boundary", () => {
   test("records matching metadata.upstream-version for pulse artifacts", () => {
     const pulse = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/SKILL.md.tmpl"));
     const spec = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse/references/runtime-spec.md"));
-    // The wrapper records the release it was written against. The vendored
-    // spec moves with the upstream pin, so the two versions diverge by design.
-    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe("3.21.1");
-    expect(spec.version).toBe("3.33.0");
+    // The wrapper records the release it was written against. This sync
+    // changed the wrapper, so both now name upstream 4.6.0.
+    expect((pulse.metadata as Record<string, string>)["upstream-version"]).toBe("4.6.0");
+    expect(spec.version).toBe("4.6.0");
 
     const cn = parseFrontmatter(path.join(ROOT, "skills/research/trove-pulse-cn/SKILL.md.tmpl"));
     expect((cn.metadata as Record<string, string>)["upstream-version"]).toBe(cn.version);
@@ -420,7 +420,7 @@ def fake_run(argv, **kwargs):
 grok_x.binary_path = lambda: "/tmp/fake-grok"
 grok_x._check_cli_version = lambda binary, workdir, timeout: (None, "grok 1.0.99")
 grok_x._stage_child_home = lambda workdir: workdir
-grok_x.subprocess.run = fake_run
+grok_x.subproc.run_with_timeout = fake_run
 grok_audit.resolve_native = lambda binary, timeout: "/tmp/fake-grok"
 for status in (grok_audit.FAIL, grok_audit.INCONCLUSIVE, grok_audit.PASS):
     launched.clear()

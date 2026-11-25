@@ -1,6 +1,8 @@
 """Date utilities for last30days skill."""
 
 from datetime import date, datetime, timedelta, timezone
+import math
+import re
 from typing import Optional, Tuple
 
 
@@ -64,50 +66,130 @@ def get_date_range(days: int = 30, as_of_date: Optional[str] = None) -> Tuple[st
     return from_date.isoformat(), to_date.isoformat()
 
 
+def _local_now() -> datetime:
+    """The reader's clock, with its UTC offset."""
+    return datetime.now().astimezone()
+
+
+def reader_end_date(to_date: str, now: Optional[datetime] = None) -> date:
+    """A window's end date as the reader's calendar has it.
+
+    The window ends on the UTC date so queries and item filters lose no
+    post. West of UTC that date is tomorrow for part of every day (5pm in
+    Los Angeles on Nov 10 is already Nov 11 in UTC), and "to Nov 11" reads
+    as a window that runs into the future. A window that ends on today's UTC
+    date is shown ending on the reader's own date when that is earlier. A
+    window that ends on any other day (``--as-of``) is shown as it is.
+    ``now`` is an aware datetime; tests pass one.
+    """
+    end = date.fromisoformat(to_date)
+    now = now or _local_now()
+    try:
+        utc_date = now.astimezone(timezone.utc).date()
+    except OverflowError:
+        return end
+    if end == utc_date and now.date() < end:
+        return now.date()
+    return end
+
+
+def is_today(value: str, now: Optional[datetime] = None) -> bool:
+    """Whether a YYYY-MM-DD date is today in UTC or on the reader's calendar.
+
+    West of UTC the two calendars differ for part of every day, and a date
+    that is today on either one is a live window. ``now`` is an aware
+    datetime.
+    """
+    day = date.fromisoformat(value)
+    now = now or _local_now()
+    try:
+        utc_date = now.astimezone(timezone.utc).date()
+    except OverflowError:
+        return day == now.date()
+    return day in (utc_date, now.date())
+
+
+def format_window(from_date: str, to_date: str, now: Optional[datetime] = None) -> str:
+    """Render an ISO date window for readers, e.g. ``Oct 11 to Nov 10, 2026``.
+
+    The year is printed once when both dates share it and on both dates when
+    the window crosses a year boundary. The end is the reader's date
+    (``reader_end_date``), never tomorrow.
+    """
+    end = reader_end_date(to_date, now)
+    start = min(date.fromisoformat(from_date), end)
+    start_text = f"{start:%b} {start.day}"
+    if start.year != end.year:
+        start_text += f", {start.year}"
+    return f"{start_text} to {end:%b} {end.day}, {end.year}"
+
+
+# Epoch-second guard for ambiguous string parsing: 9-10 integer digits
+# (1973-03-03 to 2286-11-20), so compact YYYYMMDD dates (8 digits), bare
+# 4-digit years, "0", and huge numeric IDs are never misread as 1970 epochs.
+_UNIX_SECONDS_RE = re.compile(r"^\d{9,10}(?:\.\d+)?$")
+_MIN_UNIX_SECONDS = 100_000_000.0
+_MAX_UNIX_SECONDS = 10_000_000_000.0
+
+
 def parse_date(date_str: Optional[str]) -> Optional[datetime]:
     """Parse a date string in various formats.
 
-    Supports: YYYY-MM-DD, ISO 8601, Unix timestamp
+    Supports: YYYY-MM-DD, YYYYMMDD, ISO 8601 (with Z, offsets, fractional
+    seconds, or space separator), and plausible Unix epoch-second timestamps.
     """
-    if not date_str:
+    if date_str is None or isinstance(date_str, bool):
         return None
 
-    # Try Unix timestamp (from Reddit)
-    try:
-        ts = float(date_str)
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
-    except (ValueError, TypeError):
-        pass
-
-    # Try ISO formats
-    formats = [
-        "%Y-%m-%d",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%S.%f%z",
-    ]
-
-    for fmt in formats:
+    if isinstance(date_str, (int, float)):
         try:
-            dt = datetime.strptime(date_str, fmt)
-            if dt.tzinfo is not None:
-                return dt.astimezone(timezone.utc)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
+            ts = float(date_str)
+            if not math.isfinite(ts) or not (_MIN_UNIX_SECONDS <= ts < _MAX_UNIX_SECONDS):
+                return None
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
 
-    return None
+    if not isinstance(date_str, str):
+        return None
+
+    cleaned = date_str.strip()
+    if not cleaned:
+        return None
+
+    # Plausible Unix epoch seconds (e.g. Reddit created_utc as string)
+    if _UNIX_SECONDS_RE.match(cleaned):
+        try:
+            ts = float(cleaned)
+            if math.isfinite(ts) and _MIN_UNIX_SECONDS <= ts < _MAX_UNIX_SECONDS:
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
+
+    # ISO 8601 (Python 3.12 handles YYYY-MM-DD, YYYYMMDD, Z, ±HH:MM, ±HHMM,
+    # naive/aware fractional seconds, and space-separated date/time)
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
 def timestamp_to_date(ts: Optional[float]) -> Optional[str]:
     """Convert Unix timestamp to YYYY-MM-DD string."""
-    if ts is None:
+    if ts is None or isinstance(ts, bool):
+        return None
+    if not isinstance(ts, (int, float)):
         return None
     try:
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        ts_f = float(ts)
+        if not math.isfinite(ts_f):
+            return None
+        dt = datetime.fromtimestamp(ts_f, tz=timezone.utc)
         return dt.date().isoformat()
-    except (ValueError, TypeError, OSError):
+    except (ValueError, TypeError, OverflowError, OSError):
         return None
 
 

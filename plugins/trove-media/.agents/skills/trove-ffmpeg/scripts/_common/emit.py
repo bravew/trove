@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
+import stat
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from _common.runner import Context, ERROR_CODE, ERROR_RETRYABLE, STATE
+from _common.runner import Context, ERROR_CODE, ERROR_RETRYABLE, STATE, same_file, stream_copy_output
 
 
 # Characters that never belong in a message a calling agent reads (#400): C0 controls (a line
@@ -112,6 +114,9 @@ def die(msg: str, code: int = 1, kind: str = "input", *, ctx: "Optional[Context]
             if value is not None:
                 doc["error"][key] = value
         doc.update(extra)
+        for key in ("verified", "lossless"):
+            if key in doc:
+                doc[key] = False
         _merge_collector(doc, ctx)
         print_json(doc)
     sys.exit(code)
@@ -161,6 +166,95 @@ def _report_dropped_hdr10_metadata(meta: Dict[str, Any], ctx: "Context") -> None
     note_line = ctx.warnings[-1]["message"] if ctx.warnings else None
     if note_line and note_line not in ctx.notes:
         ctx.notes.append(note_line)
+
+
+# source_carry: the items compared, in report order. The first group is content a viewer or
+# listener notices missing and raises the warning; the second is tags, listed but never warned
+# about (every camera file has a creation_time, so a warning for it would fire on every run).
+CARRY_CONTENT = ("subtitles", "chapters", "cover_art", "audio_channels", "attachments", "video_streams")
+CARRY_TAGS = ("creation_time", "audio_language", "timecode")
+_CARRY_NAMES = {"subtitles": "subtitle track", "chapters": "chapters", "cover_art": "cover picture",
+                "audio_channels": "audio channels", "attachments": "attached files (a subtitle track's fonts)",
+                "video_streams": "video streams"}
+
+
+def source_carry(output: Optional[str], ctx: "Context", extra: Dict[str, Any]) -> "Optional[Dict[str, List[str]]]":
+    """What the first input carried besides its picture and sound, and whether the written file
+    still has it (#401): {"kept": [...], "dropped": [...]}, or None when the source had none of
+    it or the two files are not comparable. Measured on the written file, so the tool, encoder or
+    FFmpeg version that dropped it does not matter. A report, not a check: `verified` is not
+    touched. Not compared: two or more picture or sound sources (which one's items the output
+    should carry is the tool's choice), an output that is not a media file, and items bound to a
+    stream the output does not have at all (a sound-only extract has no subtitle track or
+    timecode to lose; a picture-only output has no audio channels). Audio channels are an item
+    only for a surround source (more than two)."""
+    from .probe import MEDIA_EXT, _STILL_EXT, carry_inventory
+    first = getattr(STATE, "first_input", None)
+    if not first or not output:
+        return None
+    # a tool that reads its own output back (cut.py measures the cut it wrote) probed it as an
+    # input too: that is not a second source
+    own = os.path.realpath(output)
+    if any(len(set(getattr(STATE, name, None) or ()) - {own}) > 1 for name in ("video_inputs", "audio_inputs")):
+        return None
+    ext = os.path.splitext(output)[1].lower()
+    if ext not in MEDIA_EXT or ext in _STILL_EXT:
+        return None  # a still, a contact sheet or an animated GIF holds none of these
+    src, out = carry_inventory(first[0]), carry_inventory(output)
+    if not src or not out or os.path.realpath(first[0]) == os.path.realpath(output):
+        return None
+    kept: List[str] = []
+    dropped: List[str] = []
+    for item in CARRY_CONTENT + CARRY_TAGS:
+        if not src.get(item):
+            continue
+        if item == "audio_channels" and src[item] <= 2:
+            continue  # mono and stereo are what every tool writes; only a surround layout can be folded down
+        if item == "video_streams" and src[item] <= 1:
+            continue  # one picture is what every tool writes; only a second one can be left out
+        if item in ("subtitles", "timecode", "attachments", "video_streams") and src["has_video"] and not out["has_video"]:
+            continue
+        if item in ("audio_channels", "audio_language") and not out["has_audio"]:
+            continue
+        if item == "timecode":
+            # the value, not only its presence: a cut from 1 s that wrote the source's 01:00:00:00
+            # on frame 30 kept a timecode that lies. A tool that moved the picture's start names
+            # the label it wrote (STATE.expected_timecode, "" for none); any other keeps the source's
+            want = getattr(STATE, "expected_timecode", None)
+            want = src.get("timecode_value") if want is None else want
+            (kept if want and out.get("timecode_value") == want else dropped).append(item)
+            continue
+        (kept if out.get(item, 0) >= src[item] else dropped).append(item)
+    if not kept and not dropped:
+        return None
+    # The class guard for time (docs/defect-guards.json): an output of another length whose
+    # chapters were carried by a tool that declared no time map (runner.with_mapped_chapters, or
+    # runner.declare_time_map where FFmpeg's own handling is right) kept them at the source's
+    # times. Seven ledger entries were one tool each moving time and leaving something behind
+    # (#470, #653, #696); this is said for every tool, including one written after this line.
+    if ("chapters" in kept and not getattr(STATE, "time_mapped", None)
+            and abs((out.get("duration") or 0.0) - (src.get("duration") or 0.0)) > 0.1):
+        warn(f"the output is {out.get('duration') or 0:.2f} s against the source's {src.get('duration') or 0:.2f} s, and its chapters "
+             f"were carried at the source's times: the tool moved the picture in time without moving them",
+             "chapters_not_retimed", source_chapters=src.get("chapter_times"), output_chapters=out.get("chapter_times"))
+    said = set()
+    if extra.get("dropped_non_av_streams") or any(w.get("code") == "non_av_streams_dropped" for w in ctx.fallbacks):
+        said.add("subtitles")  # the tool's own field already says the track went
+    loud = [i for i in dropped if i in CARRY_CONTENT and i not in said]
+    if loud:
+        parts = []
+        for i in loud:
+            if i in ("audio_channels", "video_streams"):
+                parts.append(f"{src[i] - out.get(i, 0)} of its {src[i]} {_CARRY_NAMES[i]}")
+            else:
+                parts.append("its " + _CARRY_NAMES[i])
+        warn("the source carried " + ", ".join(parts) + " that this output does not have "
+             "(source_carry lists everything kept and dropped)",
+             "source_items_dropped", ctx=ctx, dropped=loud)
+        note_line = ctx.warnings[-1]["message"] if ctx.warnings else None
+        if note_line and note_line not in ctx.notes:
+            ctx.notes.append(note_line)
+    return {"kept": kept, "dropped": dropped}
 
 
 def refuse(kind: str, reason: str, msg: str, *, hint: Optional[str] = None, code: int = 1,
@@ -251,7 +345,28 @@ def audit(event: str, details: Dict[str, Any], *, default_path: Optional[str] = 
         rec["plan_sha256"] = plan_sha256
     rec["details"] = details
     try:
-        with open(path, "a", encoding="utf-8") as f:
+        # a default path is a hidden name in someone's output directory: never appended to through a
+        # symlink planted there. A log the caller named (--audit-log) is opened as named.
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | (0 if ctx.audit_log else getattr(os, "O_NOFOLLOW", 0))
+        checked = not ctx.audit_log and not hasattr(os, "O_NOFOLLOW")
+        if checked and os.path.islink(path):
+            raise OSError(f"{path} is a symbolic link")
+        fd = os.open(path, flags, 0o666)
+        if checked:
+            # no O_NOFOLLOW (Windows): a link that appeared between the look above and the open is
+            # caught after it -- the descriptor must be the file now at that name, not a link's
+            # target -- and nothing is written through it
+            try:
+                st, at = os.fstat(fd), os.lstat(path)
+                # st_nlink: a link swapped for a hard link to its target before the lstat would
+                # otherwise pass the identity check; a log this tool created has one name
+                if (stat.S_ISLNK(at.st_mode) or (st.st_dev, st.st_ino) != (at.st_dev, at.st_ino)
+                        or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1):
+                    raise OSError(f"{path} was replaced by a link while it was opened")
+            except BaseException:
+                os.close(fd)
+                raise
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(json_safe(rec), ensure_ascii=False, sort_keys=True) + "\n")
     except OSError as exc:
         warn(f"could not append the {event} record to the audit log {path} ({exc}); the run is unaffected",
@@ -539,20 +654,89 @@ def stream_inventory_step(meta: Dict[str, Any], expect: Dict[str, Any]) -> Dict[
     return step
 
 
+def _finite(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+
+def own_length(s: Optional[Dict[str, Any]]) -> Optional[float]:
+    """The length of one probed stream (`meta["video"]`, `meta["audio"]`): its duration, else the
+    DURATION tag Matroska/WebM keep, which is where the stream ENDS on the file's clock (the
+    muxer's last timestamp plus its packet's duration), not how long it lasts: a sound from 1 s
+    to 6 s is tagged 6. The tag less the stream's start (from 0 when the start is a priming
+    frame before 0). A value that is not a finite number is no length (a NaN compares false and
+    would pass every check)."""
+    s = s or {}
+    duration = _finite(s.get("duration"))
+    if duration is not None and duration > 0:
+        return duration
+    tagged = _finite(s.get("tagged_duration"))
+    if tagged is None:
+        return None
+    length = tagged - max(_finite(s.get("start_time")) or 0.0, 0.0)
+    return length if length > 0 else None
+
+
+def own_end(s: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Where one probed stream ends on the file's own timestamps: its start plus its duration,
+    else the Matroska/WebM DURATION tag, which is already that end."""
+    s = s or {}
+    duration = _finite(s.get("duration"))
+    if duration is not None and duration > 0:
+        return (_finite(s.get("start_time")) or 0.0) + duration
+    if own_length(s) is None:
+        return None
+    return _finite(s.get("tagged_duration"))
+
+
 def stream_length(meta: Dict[str, Any], kind: str) -> Optional[float]:
-    """One stream's own length: its duration, else the DURATION tag Matroska/WebM keep. A value
-    that is not a finite number is no length (a NaN compares false and would pass every check)."""
-    s = meta.get(kind) or {}
-    for v in (s.get("duration"), s.get("tagged_duration")):
-        if isinstance(v, (int, float)) and math.isfinite(v) and v > 0:
-            return float(v)
-    return None
+    """One stream's own length (own_length())."""
+    return own_length(meta.get(kind))
+
+
+LENGTH_UNREAD_HINT = ("remux the file so its container states a length (export.py INPUT --preset copy -o remuxed.mkv), "
+                      "then run this on the remux")
+
+
+def input_length(meta: Optional[Dict[str, Any]], path: Optional[str] = None) -> float:
+    """An input's length in seconds, for a tool that computes with it (#491). A file that states
+    no length (Matroska written to a pipe: ffprobe prints N/A for the container and every stream)
+    probes as duration None, and `meta.get("duration") or 0.0` read that as a clip 0 s long: a
+    speed factor of 0.00x, "--at 1 is outside the clip (0..0.000)", a reverse of no frames. Unread
+    is not zero, so this refuses, as check.py's duration row says "could not measure". A dry run's
+    pending input (probe()'s stub, duration 0.0), a stated length of 0 and a still picture (one
+    image read by an image demuxer has no length to state) pass through as before."""
+    meta = meta or {}
+    length = meta.get("duration")
+    fmt = meta.get("format") or ""
+    still = fmt == "image2" or fmt.endswith("_pipe")  # probe._is_still()'s rule, on the probe document
+    if length is None and not meta.get("dry_run") and not still:
+        die(f"the length of {path or meta.get('file') or 'the input'} could not be read: neither its container nor "
+            "its streams state one, and this operation is computed from the input's length",
+            kind="input", hint=LENGTH_UNREAD_HINT)
+    return float(length or 0.0)
+
+
+STILL_AS_CLIP_HINT = ("make a clip of the still first (insert.py STILL --duration SECONDS), "
+                      "then run this on that clip")
+
+
+def refuse_still(meta: Optional[Dict[str, Any]], path: Optional[str], why: str) -> None:
+    """Refuse a still picture given where a clip with a length is needed (#531), kind input, naming
+    the input and insert.py. input_length() lets a still through as 0 s (grid.py and broll.py show
+    one for as long as the clip beside it), and a tool that then computed with that 0 refused with
+    a length of 0.000 or a speed of 0.00x, or wrote nothing and failed as kind output. `why` says
+    what the tool needed the length for. A dry run's pending input is not a still."""
+    meta = meta or {}
+    fmt = str(meta.get("format") or "")
+    if meta.get("dry_run") or not (fmt == "image2" or fmt.endswith("_pipe")):  # probe._is_still()'s rule
+        return
+    die(f"{path or meta.get('file') or 'the input'} is a still picture (one image, no length of its own): {why}",
+        kind="input", hint=STILL_AS_CLIP_HINT)
 
 
 def stream_end(meta: Dict[str, Any], kind: str) -> Optional[float]:
-    """Where one stream ends on the file's timeline: its start plus its own length."""
-    length = stream_length(meta, kind)
-    return None if length is None else ((meta.get(kind) or {}).get("start_time") or 0.0) + length
+    """Where one stream ends on the file's timeline (own_end())."""
+    return own_end(meta.get(kind))
 
 
 def file_origin(meta: Dict[str, Any]) -> float:
@@ -657,8 +841,10 @@ def decode_step(path: str, meta: Dict[str, Any], kinds: Sequence[str], window: f
             # (bounded, so a failing hour-long stream is not decoded whole)
             frames[kind]["tail"] = tail_frames(max(0.0, end - origin - window - DECODE_LONG_GOP_SECONDS))
     bad = [k for k in kinds if not all(frames[k].values())]
+    # no provenance: it says where an expected value came from, and this step has none (#403: it
+    # said "measurement", which is not one of the contract's values)
     step: Dict[str, Any] = {"step": "decode", "property": "decodable", "frames": frames, "window": window,
-                            "provenance": "measurement", "ok": not bad}
+                            "ok": not bad}
     if bad:
         step["undecodable"] = [k for k in bad if k not in unmeasured]
     if unmeasured:
@@ -698,11 +884,30 @@ def file_identity(path: str) -> "Optional[Dict[str, int]]":
     return {"size": st.st_size, "mtime_ns": st.st_mtime_ns} if os.path.isfile(path) else None
 
 
-def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any) -> None:
+_RESULT_FIELDS = frozenset({"status", "dry_run", "commands", "probe", "output_identity", "verified", "lossless"})
+_OUTPUT_MEASUREMENTS = frozenset({
+    "duration", "width", "height", "resolution", "fps", "size_bytes",
+    "output_duration", "output_width", "output_height", "output_resolution", "output_fps", "output_size_bytes",
+})
+
+
+def _verified_artifact(path: str) -> bool:
+    identity = file_identity(path)
+    if not identity or not identity["size"]:
+        return False
+    if os.path.splitext(path)[1].lower() not in MEDIA_EXT:
+        return True
+    meta = probe(path, role="output", required=False)
+    return bool(meta.get("video") or meta.get("audio"))
+
+
+def emit(output: Optional[str], *, ctx: "Optional[Context]" = None,
+         verification_paths: Sequence[str] = (), **extra: Any) -> None:
     """Final stdout line: the output path, or a JSON document with --json.
 
     `ctx` is the optional per-request Context added in 1.10 (2.0 makes it required, issue #189 B);
-    omitted, every read falls back to the process-global STATE as before."""
+    omitted, every read falls back to the process-global STATE as before. A tool with no
+    single output can name the files its verification steps concern in verification_paths."""
     ctx = ctx or STATE
     _set_current_ctx(ctx)  # so the atexit hook writes (or skips) this ctx's plan, not STATE's
     meta: Dict[str, Any] = {}
@@ -710,9 +915,25 @@ def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any
         meta = verify_output(output)  # dies (status: failed, kind: output) if the artifact is unusable
         _report_dropped_audio_tracks(meta, ctx)
         _report_dropped_hdr10_metadata(meta, ctx)
+        carry = source_carry(output, ctx, extra)
+        if carry and "source_carry" not in extra:
+            extra["source_carry"] = carry
     if ctx.json:
+        for key in _RESULT_FIELDS.intersection(extra):
+            del extra[key]
+        if output and ctx.dry_run:
+            for key in _OUTPUT_MEASUREMENTS.intersection(extra):
+                extra[key] = None
         doc: Dict[str, Any] = {"status": "completed", "output": output, "dry_run": ctx.dry_run, "commands": list(ctx.commands)}
-        if meta:
+        probed = bool(meta and not meta.get("dry_run"))
+        if probed and meta.get("duration") is not None:
+            # the first thing a caller reads: what the file is, and where its length misses what
+            # was asked (a 120 ms miss of a stream copy sat in duration_error_ms under verified: true)
+            v, got, want = meta.get("video") or {}, float(meta["duration"]), extra.get("expected_duration")
+            miss = f" (ASKED {want:.3f} s: {abs(got - want):.3f} s {'longer' if got > want else 'shorter'})" if isinstance(want, (int, float)) and abs(got - want) > 0.04 else ""
+            shape = f", {v.get('width')}x{v.get('height')}, {v.get('fps')} fps" if v else ""
+            doc = {"status": "completed", "wrote": f"{got:.3f} s{miss}{shape}, " + ("picture and sound" if v and meta.get("audio") else "picture only" if v else "sound only"), **doc}
+        if probed:
             doc["probe"] = meta
         identity = file_identity(output) if output and not ctx.dry_run else None
         if identity:
@@ -726,8 +947,10 @@ def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any
         expect_streams = extra.pop("expect_streams", None)
         stream_reference = extra.pop("stream_reference", None)
         stream_windows = extra.pop("stream_windows", None)
-        steps: List[Dict[str, Any]] = ([{"step": "probe", "ok": True}] if meta else []) + list(extra.pop("verification", None) or [])
-        if meta and expect_streams:
+        own_steps = extra.pop("verification", None) or []
+        steps: List[Dict[str, Any]] = ([{"step": "probe", "ok": True}] if probed else [])
+        steps.extend(s for s in own_steps if s.get("step") != "probe")
+        if probed and expect_streams:
             steps.append(stream_inventory_step(meta, expect_streams))
             kept = [k for k in ("video", "audio") if _expected_count(expect_streams.get(k, 0))]
             if stream_reference is not None and len(kept) == 2:
@@ -737,9 +960,17 @@ def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any
                 steps.append(decode_step(output, meta, present))
         # a tool that ran others (render.py) verified what its stages verified too (absorb_stage())
         steps += [s for s in ctx.stage_verification if s not in steps]
-        if output and not ctx.dry_run and os.path.splitext(output)[1].lower() not in MEDIA_EXT:
+        non_media = bool(output and not ctx.dry_run and os.path.splitext(output)[1].lower() not in MEDIA_EXT)
+        if non_media:
             steps.insert(0, {"step": "exists", "ok": True})
-        doc["verified"] = not ctx.dry_run and bool(steps) and all(s.get("ok") for s in steps)
+        if ctx.dry_run:
+            steps = []
+        passed = bool(steps) and all(s.get("ok") is True for s in steps)
+        evidence = probed or non_media
+        if passed and not evidence and verification_paths:
+            evidence = all(_verified_artifact(path) for path in dict.fromkeys(verification_paths))
+        doc["verified"] = bool(passed and evidence)
+        doc["lossless"] = bool(probed and output and stream_copy_output(ctx, output))
         # a failed check asserts that something in artifact, reference, instrument or the expected
         # value's provenance is wrong; until a tool knows which, it says it does not know
         steps = [dict(s, attribution=s.get("attribution") or "unresolved") if s.get("ok") is False else s for s in steps]
@@ -747,6 +978,8 @@ def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any
         tool = os.path.splitext(os.path.basename(sys.argv[0] or ""))[0]
         if output and not ctx.dry_run and tool in UNVERIFIED and "unverified" not in extra:
             doc["unverified"] = list(UNVERIFIED[tool])
+            if tool in ("export", "render") and (extra.get("picture") or extra.get("stage_pictures")):
+                doc["unverified"].append("subject_framing")
         doc.update(_encoder_report(ctx))
         doc.update(extra)
         hw_notes = [n for n in _hw_notes_for(ctx) if n not in (doc.get("notes") or [])]
@@ -755,7 +988,7 @@ def emit(output: Optional[str], *, ctx: "Optional[Context]" = None, **extra: Any
         _merge_collector(doc, ctx)
         if ctx.plan:
             doc["plan"] = write_plan(ctx.plan, output, extra, ctx=ctx)
-        print_json(_brief(doc, meta) if ctx.json_brief else doc)
+        print_json(_brief(doc, meta if probed else {}) if ctx.json_brief else doc)
     elif ctx.plan:
         print(write_plan(ctx.plan, output, extra, ctx=ctx))
     elif output:
@@ -820,7 +1053,56 @@ def _brief(doc: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
 PLAN_VERSION = 1
 
 
-_PLAN_STRIP = ("--plan", "--dry-run", "--json")
+_PLAN_STRIP = ("--plan", "--dry-run", "--json", "--json-brief")
+
+
+def is_output_shape_flag(token: str) -> bool:
+    """`--json-brief`, or an abbreviation argparse reads as it (`--json-b`): the flag that changes
+    the shape of the document a tool prints. A plan's argv and a plan's execution leave it out
+    (A181): render.py runs the planned tool with --json and reads its full document, whose
+    `commands` the brief form replaces with a count, and executing a plan recorded with it crashed
+    on that count."""
+    return token.startswith("--json-") and "--json-brief".startswith(token)
+
+
+def _command_complete(line: str) -> bool:
+    """Whether a `$ CMD` / `[dry-run] $ CMD` stderr line holds the whole command: run() prints it
+    shell-quoted, so a quote still open at the end of the line is an argument with a line break in
+    it (a `-metadata title=` with two lines), continued on the next stderr line."""
+    body = line[2:] if line.startswith("$ ") else line[len("[dry-run] $ "):]
+    try:
+        shlex.split(body)
+    except ValueError:
+        return False
+    return True
+
+
+def stderr_records(stderr: str) -> "List[Tuple[bool, str]]":
+    """A sibling tool's stderr as (is_command, text) records, in order, for a tool that ran it
+    (render.py's stages and plans): `$ CMD` is the command CMD, a `[dry-run]` line is kept whole as
+    a command record (what render.py has always listed for a dry run), anything else is a line to
+    pass on. A command whose quoted argument holds a line break spans several stderr lines; they
+    are one record again, joined with the break they had (A4: one ffmpeg command became two
+    records, the second passed on as prose). A quote that never closes leaves the lines as they
+    were."""
+    lines = stderr.splitlines(keepends=True)
+    out: "List[Tuple[bool, str]]" = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip("\r\n")
+        i += 1
+        if not (line.startswith("$ ") or line.startswith("[dry-run]")):
+            out.append((False, line))
+            continue
+        if line.startswith("$ ") or line.startswith("[dry-run] $ "):
+            text, j = line, i
+            while not _command_complete(text) and j < len(lines):
+                text = text + lines[j - 1][len(lines[j - 1].rstrip("\r\n")):] + lines[j].rstrip("\r\n")
+                j += 1
+            if _command_complete(text):
+                line, i = text, j
+        out.append((True, line[2:] if line.startswith("$ ") else line))
+    return out
 
 
 def _plan_at_exit() -> None:
@@ -834,13 +1116,14 @@ def _plan_at_exit() -> None:
 
 def _plan_inputs(commands: Sequence[str], argv: Sequence[str] = (), ctx: "Optional[Context]" = None) -> List[str]:
     """Every existing file the plan depends on: the `-i` inputs of the planned commands, any
-    existing file named in argv (a recipe, a project, an SRT, a LUT, a still), and the side
-    inputs tools register through escape_filter_path() (review 6: only `-i` files were bound)."""
+    existing file named in argv, and files registered by the input readers or by
+    escape_filter_path(). Registered paths come from parsed inputs and may start with a dash."""
     import shlex
-    seen: List[str] = []
-    for a in list(argv) + list((ctx or STATE).plan_inputs):
-        if a and not a.startswith("-") and os.path.isfile(a) and a not in seen:
-            seen.append(a)
+    seen: Dict[str, None] = {}
+    candidates = [a for a in argv if a and not a.startswith("-")] + (ctx or STATE).plan_inputs
+    for a in candidates:
+        if a and a not in seen and os.path.isfile(a):
+            seen[a] = None
     for line in commands:
         try:
             toks = shlex.split(line.split("] ", 1)[1] if line.startswith("[dry-run] ") else line)
@@ -848,8 +1131,8 @@ def _plan_inputs(commands: Sequence[str], argv: Sequence[str] = (), ctx: "Option
             continue
         for i, tok in enumerate(toks[:-1]):
             if tok == "-i" and os.path.isfile(toks[i + 1]) and toks[i + 1] not in seen:
-                seen.append(toks[i + 1])
-    return seen
+                seen[toks[i + 1]] = None
+    return list(seen)
 
 
 def _planned_outputs(commands: Sequence[str]) -> List[str]:
@@ -874,15 +1157,16 @@ def _plan_unbound_inputs(commands: Sequence[str], ctx: "Optional[Context]" = Non
     tool's own intermediates are bound by the command that makes them). render.py reports them on
     execution: nothing checks that their content is what the plan was made for."""
     import shlex
+    ctx = ctx or STATE
     produced: List[str] = []
     out: List[str] = []
 
     def consider(p: str) -> None:
-        if (not p or p == "-" or p.startswith("pipe:") or os.path.exists(p)
+        if (not p or p == "-" or p.startswith("pipe:") or p in ctx.plan_generated_inputs or os.path.exists(p)
                 or os.path.abspath(p) in produced or os.path.abspath(p) in out):
             return
         out.append(os.path.abspath(p))
-    for p in (ctx or STATE).plan_inputs:
+    for p in ctx.plan_inputs:
         consider(p)
     for line in commands:
         try:
@@ -917,7 +1201,7 @@ def write_plan(path: str, output: Optional[str], extra: Dict[str, Any], ctx: "Op
         if skip:
             skip = False
             continue
-        if a in _PLAN_STRIP:
+        if a in _PLAN_STRIP or is_output_shape_flag(a):
             skip = a == "--plan"
             continue
         if a.startswith("--plan="):
@@ -933,11 +1217,10 @@ def write_plan(path: str, output: Optional[str], extra: Dict[str, Any], ctx: "Op
     if platform and output and tool != "check":
         verify.append({"tool": "check", "platform": platform})
     plan_inputs = _plan_inputs(ctx.commands, cleaned, ctx)
-    real = os.path.realpath(path)
     # every file the plan names (#413 review): its inputs, side inputs included (an SRT, a still),
     # and the output it promises, a default name too, which apply_common could not know
     for named in plan_inputs + ([output] if output else []):
-        if os.path.realpath(named) == real:
+        if same_file(named, path):
             refuse("input", "output_is_input" if named != output else "output_path_taken",
                    f"--plan {path!r} is also {'the output' if named == output else 'an input'} of this run "
                    f"({named!r}); give the plan its own path", output=path, other=named)
@@ -945,16 +1228,26 @@ def write_plan(path: str, output: Optional[str], extra: Dict[str, Any], ctx: "Op
     # (loudness.py --versions, whose `output` is null; export.py's key file) names them only there,
     # and a plan written over one of them is refused as an existing output when it is executed
     for written in _planned_outputs(ctx.commands):
-        if os.path.realpath(written) == real:
+        if same_file(written, path):
             refuse("input", "output_path_taken", f"--plan {path!r} is also a file this run writes ({written!r}); "
                    "give the plan its own path", output=path, other=written)
+    try:
+        fingerprints = [fingerprint(p, complete=True)
+                        if "sha256_full" in ctx.measured_plan_inputs.get(os.path.abspath(p), {})
+                        else fingerprint(p) for p in plan_inputs]
+    except OSError as exc:
+        die(f"cannot fingerprint a plan input: {exc}", kind="input", ctx=ctx)
+    by_path = {entry["path"]: entry for entry in fingerprints}
+    for source, expected in ctx.measured_plan_inputs.items():
+        if by_path.get(source) != expected:
+            die(f"plan input {source!r} changed since measurement; make a new plan", kind="input", ctx=ctx)
     doc = {
         "plan_version": PLAN_VERSION,
         "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tool": tool,
         "argv": cleaned,
         "cwd": os.getcwd(),
-        "inputs": [fingerprint(p) for p in plan_inputs],
+        "inputs": fingerprints,
         # inputs that did not exist yet, so carry no fingerprint (render.py reports them on execution)
         "unbound_inputs": _plan_unbound_inputs(ctx.commands, ctx),
         "commands": list(ctx.commands),
@@ -962,6 +1255,10 @@ def write_plan(path: str, output: Optional[str], extra: Dict[str, Any], ctx: "Op
         "verify": verify,
         "notes": list(extra.get("notes") or []),
     }
+    if ctx.sequence_frames_sha256 is not None:
+        doc["sequence_frames_sha256"] = ctx.sequence_frames_sha256
+    if tool == "fit" and "timing" in extra:
+        doc["timing"] = extra["timing"]
     try:
         tmp = f"{path}.tmp{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -994,4 +1291,4 @@ def print_json(obj: Any) -> None:
 
 # Deferred for the same reason as runner's import of this module: probe needs die() from here, and
 # emit() needs verify_output() from there, but only ever at call time.
-from _common.probe import MEDIA_EXT, _to_float, fingerprint, verify_output  # noqa: E402
+from _common.probe import MEDIA_EXT, _to_float, fingerprint, probe, verify_output  # noqa: E402

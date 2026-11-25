@@ -34,6 +34,7 @@ from fractions import Fraction
 from typing import Any, Dict, List, Optional, Tuple
 
 from _common import STATE, aac_args, concat_list_line, ffmpeg_base, require_tool, run
+from _common.color import carried_tag_args
 from _common.runner import fail_if_classified
 
 # the stream parameters a re-encoded part must share with the source (ffprobe -show_streams)
@@ -109,6 +110,21 @@ def ineligible(params: Optional[Dict[str, Any]], meta: Dict[str, Any], ext: str)
     return None
 
 
+# Matroska stores every timestamp in milliseconds (its default TimestampScale), whatever the source's
+# time base: an .mkv output's stream reads 1/1000 however it is written
+MATROSKA_TIME_BASE = "1/1000"
+
+
+def expected_time_base(params: Dict[str, Any], ext: str) -> Optional[str]:
+    """The time base the joined output's video should read: the source's for MP4/MOV, whose time
+    scale execute() sets from it (-video_track_timescale), and Matroska's own for .mkv. Comparing a
+    .mkv against an MP4 source's 1/15360 failed every such cut, and only after the whole smart cut had
+    been built and checked (#462 A45)."""
+    if ext.lower() == ".mkv":
+        return MATROSKA_TIME_BASE
+    return params.get("time_base")
+
+
 def _rate(params: Dict[str, Any]) -> Optional[Fraction]:
     try:
         q = Fraction(str(params.get("r_frame_rate") or ""))
@@ -129,11 +145,12 @@ def x264_line(params: Dict[str, Any], crf: int, preset: str) -> List[str]:
             "-x264-params", f"{b}:open-gop=0"]
     if level:
         args += ["-level:v", f"{level // 10}.{level % 10}"]
-    for flag, field in (("-colorspace", "color_space"), ("-color_primaries", "color_primaries"),
-                        ("-color_trc", "color_transfer"), ("-color_range", "color_range")):
-        value = params.get(field)
-        if value and value != "unknown":
-            args += [flag, str(value)]
+    # spelled the way the output options take them (#454: ffprobe's bt470m/bt470bg transfer and
+    # gbr space are not their names)
+    args += carried_tag_args([("-colorspace", params.get("color_space")), ("-color_primaries", params.get("color_primaries")),
+                              ("-color_trc", params.get("color_transfer"))])
+    if params.get("color_range") and params.get("color_range") != "unknown":
+        args += ["-color_range", str(params["color_range"])]
     return args
 
 
@@ -163,8 +180,10 @@ def plan_segment(packets: List[Tuple[Any, Any, bool]], s: float, e: float, vend:
         raise SmartFallback(f"the keyframe at {packets[k1][0]:.3f}s opens its GOP (frames decoded after it are shown "
                             "before it), so a copy cannot start there", "open_gop")
     k1_pts = packets[k1][0]
-    # where the copy stops: the last keyframe presented at or before the end bound, decoded after K1
-    stops = [i for i in keyidx if packets[i][1] > packets[k1][1] + 1e-9
+    # where the copy stops: the last keyframe presented at or before the end bound, decoded after K1.
+    # A segment that runs to the end of the video has no end bound to stop before: its copy runs
+    # to the end, and the last GOP is whole, so it is copied, not re-encoded as a tail (#462 A44)
+    stops = [i for i in keyidx if not to_end and packets[i][1] > packets[k1][1] + 1e-9
              and (end_bound is None or packets[i][0] <= end_bound + 1e-6)]
     k2 = stops[-1] if stops else None
     if k2 is not None and gop_is_open(packets, k2):
@@ -420,9 +439,10 @@ def verify(src: str, dst: str, parts: List[Dict[str, Any]], params: Dict[str, An
         decoded += g
         offset += n
     out_params = stream_params(dst) or {}
-    if out_params.get("time_base") != params.get("time_base"):
-        raise SmartFallback(f"the output's time base is {out_params.get('time_base')}, the source's "
-                            f"{params.get('time_base')}", "time_base")
+    want_tb = expected_time_base(params, os.path.splitext(dst)[1])
+    if out_params.get("time_base") != want_tb:
+        raise SmartFallback(f"the output's time base is {out_params.get('time_base')}, where "
+                            f"{want_tb} was expected (the source's is {params.get('time_base')})", "time_base")
     diff = mismatches(params, out_params)
     if diff:
         raise SmartFallback("the output's stream does not match the source: " + ", ".join(diff), "params_mismatch")

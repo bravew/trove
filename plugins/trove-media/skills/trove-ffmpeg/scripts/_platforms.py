@@ -12,7 +12,9 @@ the description bar. This module is the single table the delivery tools read:
         "fps":     the frame rate a delivery is conformed to (None = leave alone),
         "spec":    check.py's compliance row values (max_duration, aspects,
                    min_height, fps_max, codecs, max_bytes, lufs, lufs_tol, tp,
-                   sdr_only) -- the keys check.py's SPECS has always had,
+                   sdr_only) -- the keys check.py's SPECS has always had;
+                   max_duration and max_bytes are upload limits, guidance as of
+                   UPLOAD_LIMITS_AS_OF rather than a requirement (#485),
         "safe":    the fraction of the frame each edge's UI covers
                    (top/bottom/left/right, 0..1) -- nothing readable goes there,
         "caption": the caption defaults a template uses (size as a fraction of the
@@ -61,6 +63,20 @@ _CAP_WIDE = {"size": 0.0694, "position": "bottom", "box": False, "outline": 2, "
 # sensitivity run). 0.1 dB is loudness.py's margin: two loudnorm passes on the same encode differ
 # by up to that much, so a tighter rule fails a file on measurement noise.
 TP_TOLERANCE_DB = 0.1
+
+# Upload limits are guidance (#485). A platform's maximum length and file size change often and
+# differ by account; whoever uploads reads the current ones. The `max_duration` and `max_bytes`
+# below are this table's as of the date here, the day the table as a whole was last decided --
+# not a date each number was read from the platform. check.py reports a file over one of them as
+# WARN with `basis: guidance`, never FAIL; the encoding values (codecs, aspects, fps, loudness,
+# true peak) are the format a delivery is held to and stay requirements.
+UPLOAD_LIMITS_AS_OF = "2026-10-30"
+
+
+def upload_limit_note(platform: str) -> str:
+    """Why a row measured against this table's length or size limit is guidance, in one clause."""
+    return (f"the limit is this tool's table for {platform} as of {UPLOAD_LIMITS_AS_OF}; platforms change "
+            "upload limits, so whoever uploads checks the current one")
 
 PLATFORMS: Dict[str, Dict[str, Any]] = {
     "tiktok": {
@@ -200,8 +216,6 @@ PLATFORMS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# The canonical destination names.
-PLATFORM_NAMES: List[str] = sorted(PLATFORMS)
 # The spellings people actually write for those destinations. resolve() maps them onto the
 # canonical name, and every tool's --platform/--safe/--preset accepts both, so
 # `--platform youtube-shorts` and `--platform shorts` are the same request everywhere.
@@ -214,23 +228,9 @@ ALIASES: Dict[str, str] = {"youtube-shorts": "shorts", "yt-shorts": "shorts", "y
 PLATFORM_CHOICES: List[str] = sorted({n for n in PLATFORMS if PLATFORMS[n]["check"] == n} | set(ALIASES))
 
 
-def has_frame(name: str) -> bool:
-    """True when this destination has a frame, and therefore a safe zone to place text inside."""
-    return bool(PLATFORMS.get(resolve(name) or "", {}).get("frame"))
-
-
 def spec_of(name: str) -> Dict[str, Any]:
     """check.py's compliance row values for a destination."""
     return dict(PLATFORMS[name]["spec"])
-
-
-def safe_of(name: str) -> Dict[str, float]:
-    return dict(PLATFORMS[name]["safe"])
-
-
-def loudness_of(name: str) -> Dict[str, float]:
-    s = PLATFORMS[name]["spec"]
-    return {"lufs": s["lufs"], "lufs_tol": s["lufs_tol"], "tp": s["tp"]}
 
 
 def safe_margins_px(name: str, width: int, height: int) -> Dict[str, int]:

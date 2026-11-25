@@ -45,14 +45,51 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import dates, http, log
+from . import dates, health, http, log
 
-SC_BASE = "https://api.scrapecreators.com/v1/facebook/adLibrary"
+_DEFAULT_SC_BASE = "https://api.scrapecreators.com/v1/facebook/adLibrary"
+SC_BASE = _DEFAULT_SC_BASE
 
-SEARCH_ADS_URL = f"{SC_BASE}/search/ads"
-SEARCH_COMPANIES_URL = f"{SC_BASE}/search/companies"
-COMPANY_ADS_URL = f"{SC_BASE}/company/ads"
-AD_TRANSCRIPT_URL = f"{SC_BASE}/ad/transcript"
+_DEFAULT_SEARCH_ADS_URL = f"{_DEFAULT_SC_BASE}/search/ads"
+_DEFAULT_SEARCH_COMPANIES_URL = f"{_DEFAULT_SC_BASE}/search/companies"
+_DEFAULT_COMPANY_ADS_URL = f"{_DEFAULT_SC_BASE}/company/ads"
+_DEFAULT_AD_TRANSCRIPT_URL = f"{_DEFAULT_SC_BASE}/ad/transcript"
+
+SEARCH_ADS_URL = _DEFAULT_SEARCH_ADS_URL
+SEARCH_COMPANIES_URL = _DEFAULT_SEARCH_COMPANIES_URL
+COMPANY_ADS_URL = _DEFAULT_COMPANY_ADS_URL
+AD_TRANSCRIPT_URL = _DEFAULT_AD_TRANSCRIPT_URL
+
+
+def _sc_base() -> str:
+    if SC_BASE != _DEFAULT_SC_BASE:
+        return SC_BASE
+    from . import env
+    return f"{env.get_scrapecreators_base_url()}/v1/facebook/adLibrary"
+
+
+def _search_ads_url() -> str:
+    if SEARCH_ADS_URL != _DEFAULT_SEARCH_ADS_URL:
+        return SEARCH_ADS_URL
+    return f"{_sc_base()}/search/ads"
+
+
+def _search_companies_url() -> str:
+    if SEARCH_COMPANIES_URL != _DEFAULT_SEARCH_COMPANIES_URL:
+        return SEARCH_COMPANIES_URL
+    return f"{_sc_base()}/search/companies"
+
+
+def _company_ads_url() -> str:
+    if COMPANY_ADS_URL != _DEFAULT_COMPANY_ADS_URL:
+        return COMPANY_ADS_URL
+    return f"{_sc_base()}/company/ads"
+
+
+def _ad_transcript_url() -> str:
+    if AD_TRANSCRIPT_URL != _DEFAULT_AD_TRANSCRIPT_URL:
+        return AD_TRANSCRIPT_URL
+    return f"{_sc_base()}/ad/transcript"
 
 DEFAULT_COUNTRY = "US"
 
@@ -608,6 +645,10 @@ class _StopFetching(Exception):
     and are reported as a partial result rather than thrown away.
     """
 
+    def __init__(self, message: str, outcome_state: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.outcome_state = outcome_state
+
 
 def _call(
     url: str,
@@ -623,7 +664,7 @@ def _call(
     limit and spends the lane budget sleeping between attempts.
     """
     if budget.exhausted():
-        raise _StopFetching("lane budget exhausted")
+        raise _StopFetching("lane budget timed out (exhausted)", outcome_state=health.TIMEOUT)
     try:
         response = http.get(
             url,
@@ -641,10 +682,16 @@ def _call(
             # Credential- or account-scoped: every later call fails the same
             # way, so the lane ends and keeps nothing.
             raise _Fatal(message, status) from exc
+        if (
+            exc.outcome_state == health.TIMEOUT
+            and "timed out" not in message.lower()
+            and "timeout" not in message.lower()
+        ):
+            message = f"timed out: {message}"
         # Anything else (a 5xx, a bad gateway partway through pagination) is
         # about this one request. Stop fetching, but keep the creatives
         # already retrieved rather than discarding paid-for work.
-        raise _StopFetching(message) from exc
+        raise _StopFetching(message, outcome_state=exc.outcome_state) from exc
     except Exception as exc:  # noqa: BLE001 - an unclassifiable transport failure
         raise _Fatal(f"{type(exc).__name__}: {exc}") from exc
     return response if isinstance(response, dict) else {}
@@ -661,7 +708,7 @@ def _discover(
     Returns ``(page, runner_ups, top_unmatched, state, strength)``.
     """
     response = _call(
-        SEARCH_ADS_URL,
+        _search_ads_url(),
         {
             "query": topic,
             "country": country,
@@ -681,7 +728,7 @@ def _discover(
         )
         return page, runner_ups, "", RESOLVED, strength
 
-    companies = _call(SEARCH_COMPANIES_URL, {"query": topic}, token, budget)
+    companies = _call(_search_companies_url(), {"query": topic}, token, budget)
     # Reshape company rows into the same shape resolve_page reads, so the
     # fallback gets the identical exact-before-partial tiering. Taking the
     # first name that merely matched would let this path resolve a lookalike
@@ -749,8 +796,10 @@ def _fetch_window(
         if cursor:
             params["cursor"] = cursor
         try:
-            response = _call(COMPANY_ADS_URL, params, token, budget)
+            response = _call(_company_ads_url(), params, token, budget)
         except (_Fatal, _StopFetching) as exc:
+            if not rows:
+                raise
             # Whatever the reason, the creatives already fetched were paid for
             # and are valid: a rate limit or expired credential says "stop
             # calling", not "the pages that already returned 200 were wrong".
@@ -830,7 +879,7 @@ def _add_transcripts(
     for item in candidates:
         try:
             response = _call(
-                AD_TRANSCRIPT_URL,
+                _ad_transcript_url(),
                 {"id": item["id"]},
                 token,
                 budget,
@@ -925,20 +974,26 @@ def search_meta_ads(
             page, country, from_date, to_date, cfg["pages"], token, budget
         )
         items, still_running = _classify(rows, page, from_date, to_date)
-        transcribed, transcript_interruption = _add_transcripts(
-            items, cfg["transcripts"], token, budget
-        )
+        if interruption:
+            transcribed, transcript_interruption = 0, ""
+        else:
+            transcribed, transcript_interruption = _add_transcripts(
+                items, cfg["transcripts"], token, budget
+            )
         interruption = interruption or transcript_interruption
     except (_Fatal, _StopFetching) as exc:
         # Nothing was salvageable: either a credential/account failure, or the
-        # clock ran out before the advertiser was even resolved.
+        # clock ran out before any creatives were fetched.
         _log(f"Lane stopped: {exc}")
-        return {
+        outcome: Dict[str, Any] = {
             "ads": [],
             "page": None,
             "tally": _empty_tally(UNRESOLVED),
             "error": str(exc),
         }
+        if getattr(exc, "outcome_state", None):
+            outcome["outcome_state"] = exc.outcome_state
+        return outcome
 
     placements: List[str] = []
     promo_codes: List[str] = []

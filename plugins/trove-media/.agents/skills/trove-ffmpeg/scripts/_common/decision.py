@@ -6,22 +6,33 @@ and encoder-selection rules testable on their own.
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 import re
-import argparse
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-from _common.color import (as_limited, bt709_label_filter, bt709_matrix_args, bt709_matrix_filter, bt709_tag_args, drawn_stream_format,
-                           is_neutral_color, limited_range_filter, rgb_island, rgb_to_bt709_filter, _sdr_bt709)
-from _common.emit import die, record_fallback, refuse, warn
+from _common.color import (as_limited, bt709_label_filter, bt709_line_filter, bt709_matrix_args, bt709_matrix_filter, bt709_tag_args, drawn_stream_format,
+                           hdr_line_matrix, hdr_rgb_matrix_args, hdr_rgb_matrix_filter, is_neutral_color, limited_range_filter, rgb_island, rgb_to_bt709_filter, _sdr_bt709)
+from _common.alpha import rgb_to_bt709_line
+from _common.emit import die, input_length, note, record_fallback, refuse, warn
+from _common.runner import absent_word, file_arg, read_json
+from _common.probe import AUDIO_MEDIA_EXT, display_size
 from _common.runner import CODECS, STATE, ffmpeg_encoders, ffmpeg_list_error, ffmpeg_version, hw_platform_reason
 
 
+def boxblur_chroma_radius(want: int) -> str:
+    """boxblur's chroma radius as an expression boxblur evaluates on the chroma planes' own size
+    (cw x ch, so a 4:1:1 or 4:1:0 frame's quarter-width planes are what is measured, not an assumed
+    4:2:0): `want`, or the largest radius that plane holds, floor((min(cw, ch) - 1) / 2), or 0 on a
+    plane too small for 1. On 4:2:0 that is redact.py's earlier (min(w, h) // 2 - 1) // 2. boxblur
+    refuses a radius above half the plane (6.1); 7.1 also refuses 1 on a 2 px plane, which this
+    bound leaves out (#527)."""
+    return f"max(0\\,min({int(want)}\\,floor((min(cw\\,ch)-1)/2)))"
+
+
 def pad_filters(out_w: int, out_h: int, fill: str, color: str, blur: int, darken: float = 0.0,
-                meta: Optional[Dict[str, Any]] = None) -> str:
+                meta: Optional[Dict[str, Any]] = None, blank: bool = False) -> str:
     """The letterbox/pillarbox step shared by fit.py and export.py, as one -vf segment.
 
     fill="color": scale to fit, then pad with a solid colour (the historical behaviour).
@@ -35,19 +46,38 @@ def pad_filters(out_w: int, out_h: int, fill: str, color: str, blur: int, darken
     what `fit.py --fit blur` uses (1.14).
     `meta`: the probe of the picture being padded, when the output is that picture's re-encode: a
     --pad-color with chroma is then drawn in the BT.709 the line tags (drawn_chain()). Without it
-    (a still made RGB, an export to GIF) the pad is what it always was."""
+    (a still made RGB, an export to GIF) the pad is what it always was.
+    `blank` (fit.py's picture measurement, #519): the blurred copy is drawn black instead, so it
+    does not change with the picture; the graph is otherwise the same."""
     if fill == "blur":
         # boxblur rejects a radius larger than half the smaller dimension ("radius 20, must be
         # <= 8" on a 16 px target); clamp instead of failing an otherwise valid request
         radius = max(1, min(int(blur), max(1, min(out_w, out_h) // 2 - 1)))
+        # left unset, the chroma radius was the luma one, and a 4:2:0 68x120 frame's 34x60 chroma
+        # planes failed at 20 ("must be <= 17", #527). On a larger frame it is still the luma one
+        chroma = boxblur_chroma_radius(radius)
         return (f"split[__fitfg][__fitbg];"
                 f"[__fitbg]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},"
-                f"boxblur={radius}:2" + (f",eq=brightness=-{darken:g}" if darken else "") + "[__fitbgb];"
+                + ("drawbox=c=black:t=fill" if blank else
+                   f"boxblur={radius}:2:{chroma}:2" + (f",eq=brightness=-{darken:g}" if darken else "")) + "[__fitbgb];"
                 f"[__fitfg]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[__fitfgs];"
                 f"[__fitbgb][__fitfgs]overlay=(W-w)/2:(H-h)/2:format=auto")
+    # a picture of another shape is mostly bars in this frame (a 9:16 clip in 16:9 fills 32%): the
+    # file is what the frame asks for, and the caller may not have asked for that frame's shape
+    if meta is not None and not blank and all(d := display_size(meta.get("video"))) and (part := min(out_w / d[0], out_h / d[1]) ** 2 * d[0] * d[1] / (out_w * out_h)) < 0.5:
+        warn(f"the picture fills {part:.0%} of the {out_w}x{out_h} frame and the rest is bars: the source is {d[0]}x{d[1]}, another shape. --fit crop fills the frame; a frame of the source's shape keeps all of it (export.py: reels, shorts and tiktok are 9:16, youtube and facebook 16:9)", "picture_small_in_frame", fraction=round(part, 3), source=f"{d[0]}x{d[1]}", frame=f"{out_w}x{out_h}")
     pad = f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:color="
     return (f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
             + (pad + color if meta is None else drawn_chain(pad + color, meta, [color], pad + "black", tag="pad")))
+
+
+def warn_mostly_cropped(video: Optional[Dict[str, Any]], out_w: int, out_h: int) -> None:
+    """A crop to another shape that keeps less than half of the picture says so (#688), as a pad
+    that leaves the picture small does (picture_small_in_frame): a 1920x1080 clip cropped to 9:16
+    keeps the centre 32% of it. A warning only: a vertical crop of landscape footage is the usual
+    way to make a Short, and the file is what was asked for."""
+    if all(d := display_size(video)) and out_w and out_h and (part := min(out_w * d[1] / (out_h * d[0]), out_h * d[0] / (out_w * d[1]))) < 0.5:
+        warn(f"the crop keeps {part:.0%} of the picture: the source is {d[0]}x{d[1]} and the frame {out_w}x{out_h}, another shape. --fit pad keeps all of it with bars, --fit blur over a blurred copy", "picture_mostly_cropped", fraction=round(part, 3), source=f"{d[0]}x{d[1]}", frame=f"{out_w}x{out_h}")
 
 
 def add_pad_fill_args(parser: "argparse.ArgumentParser") -> None:
@@ -69,14 +99,26 @@ def aspect_ratio(value: Any) -> Optional[Fraction]:
     if len(parts) != 2:
         return None
     try:
-        return Fraction(int(parts[0]), int(parts[1]))
+        w, h = int(parts[0]), int(parts[1])
+        ratio = Fraction(w, h)
     except (ValueError, ZeroDivisionError):
         return None
+    # a negative side (`-16:9`, `16:-9`) is no aspect anyone means: frame_size() made a negative
+    # frame of it, which fit.py's pad refused inside ffmpeg (kind ffmpeg) and the timeline wrote.
+    # Each side is looked at, not the ratio: `-16:-9` is a positive fraction
+    return None if w < 0 or h < 0 else ratio
 
 
 def _even(n: float) -> int:
     v = int(round(n))
     return v if v % 2 == 0 else v + 1
+
+
+# A frame larger than the picture is enlarged with Lanczos in place of swscale's default bicubic:
+# fewer soft edges where a 720p clip is delivered at 1080x1920. Nothing is added when the frame is
+# the picture's size or smaller, so those commands are the ones they were.
+def enlarge_args(meta: Optional[Dict[str, Any]], w: Optional[int], h: Optional[int]) -> List[str]:
+    return ["-sws_flags", "lanczos"] if w and h and all(d := display_size((meta or {}).get("video"))) and (w > d[0] or h > d[1]) else []
 
 
 def frame_size(ratio: Optional[Fraction], width: Optional[int], height: Optional[int],
@@ -129,7 +171,10 @@ def default_output(input_path: str, suffix: str, ext: Optional[str] = None) -> s
         new_ext = "mp4"
     else:
         new_ext = p.suffix.lstrip(".") or "mp4"
-    return str(p.with_name(f"{p.stem}_{suffix}.{new_ext}"))
+    out = str(p.with_name(f"{p.stem}_{suffix}.{new_ext}"))
+    # an input named -take.mp4 (given as ./-take.mp4 or after `--`) has a default output that
+    # starts with a dash too, which run() refuses as option-shaped: name it as a file (#558)
+    return file_arg(out)
 
 
 class MissingFpsError(ValueError):
@@ -148,7 +193,15 @@ def concat_list_line(path: str) -> str:
     """One `file '...'` line for the concat demuxer. The demuxer reads backslash as an escape
     inside the quoted form, so a Windows path (C:\\Users\\...\\part000.mp4) must be written
     with forward slashes -- ffmpeg opens either spelling on Windows -- and a single quote in the
-    name is closed, escaped and reopened. Shared by cut.py (multi-segment) and sequence.py."""
+    name is closed, escaped and reopened. Shared by cut.py (multi-segment) and sequence.py.
+
+    A line break has no escape in this format: the demuxer reads each line as its own directive,
+    so a name containing one would add `file` entries to the list and pull in files the caller
+    never named. Such a path is refused."""
+    if "\n" in str(path) or "\r" in str(path):
+        refuse("input", "media_path_has_line_break",
+               f"{str(path)!r} contains a line break, which ffmpeg's concat list cannot hold (each line is a "
+               "directive of its own); rename the file", path=str(path))
     # only on Windows: on POSIX the quoted form takes a backslash literally, and it is part of the name (#408)
     escaped = (str(path).replace("\\", "/") if _on_windows() else str(path)).replace("'", "'\\''")
     return f"file '{escaped}'"
@@ -160,6 +213,16 @@ def fmt_secs(value: Optional[float]) -> str:
     of what it wrote; formatting None with :.3f used to raise TypeError after a successful
     encode, in 25+ scripts."""
     return "?s" if value is None else f"{value:.3f}s"
+
+
+def ntsc_rate(fps: float) -> float:
+    """`fps` as the rate it is a rounding of: 23.976, 29.97, 47.952, 59.94 and 119.88 (what
+    probe() reports, and what a caller types after `@`) are N * 1000 / 1001. Any other rate is
+    returned as it is. timeline.exact_rate() reads the same five rates the same way."""
+    whole = round(fps * 1.001)
+    if whole in (24, 30, 48, 60, 120) and abs(fps - whole / 1.001) < 0.01 and abs(fps - whole) > 0.01:
+        return whole * 1000 / 1001
+    return fps
 
 
 def parse_time(value: str, fps: Optional[float] = None) -> float:
@@ -179,8 +242,8 @@ def parse_time(value: str, fps: Optional[float] = None) -> float:
             fps = float(rate)
         except ValueError:
             raise ValueError(f"bad @fps suffix in '{value}' (expected a number such as @29.97)")
-        if fps <= 0:
-            raise ValueError(f"bad @fps suffix in '{value}': the rate must be positive")
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError(f"bad @fps suffix in '{value}': the rate must be a positive, finite number")
         if len(v.split(":")) != 4:
             raise ValueError(f"'{value}': the @fps suffix belongs to an hh:mm:ss:ff timecode, not to seconds or mm:ss")
     parts = v.split(":")
@@ -198,7 +261,10 @@ def parse_time(value: str, fps: Optional[float] = None) -> float:
         # 3596.4 s of video). This is exactly what fmt_smpte_time() inverts; before, the two
         # disagreed by ~0.1 % on the fractional NTSC rates and drifted apart over long files.
         total_frames = (int(h) * 3600 + int(m) * 60 + int(s)) * whole_fps + frame
-        return total_frames / fps
+        # at the picture's exact rate: probe()'s `fps` is rounded to three decimals, and frame 37
+        # counted at 29.97 is 1.2345679 s, 1.2 microseconds past the frame at 37 * 1001 / 30000,
+        # so a start read from 00:00:01:07 was the frame after it (ntsc_rate)
+        return total_frames / ntsc_rate(fps)
     if len(parts) > 3:
         raise ValueError(f"bad time: {value}")
     total = 0.0
@@ -208,6 +274,10 @@ def parse_time(value: str, fps: Optional[float] = None) -> float:
         except ValueError:
             # not the interpreter's "could not convert string to float: 'zz'" (review 9)
             raise ValueError(f"'{value}': not a time")
+    # float() reads "nan", "inf" and "1e999": none of them is a time, and each got past the
+    # comparisons that bound a time (nan compares false with everything)
+    if not math.isfinite(total):
+        raise ValueError(f"'{value}': not a time (it is not finite)")
     return total
 
 
@@ -297,7 +367,9 @@ def fmt_smpte_time(seconds: float, fps: float) -> str:
     if seconds < 0:
         seconds = 0.0
     whole_fps = int(round(fps))
-    total_frames = int(round(seconds * fps))
+    # the frames are counted at the rate parse_time() reads the same text at (29.97 as
+    # 30000/1001): at 29.97 itself 06:00:00:00 came back as 05:59:59:29
+    total_frames = int(round(seconds * ntsc_rate(fps)))
     frame = total_frames % whole_fps
     secs_total = total_frames // whole_fps
     h, rem = divmod(secs_total, 3600)
@@ -332,6 +404,15 @@ def escape_filter_path(path: str, *, bind: bool = True) -> str:
         # on POSIX a backslash is a character of the name (#408): turning it into `/` opened a
         # different path, so it is escaped through both passes instead
         p = p.replace("\\", "\\\\\\\\")
+    # A filter that opens its file through libavformat (subtitles=, metadata=print:file=) reads a
+    # relative `a:b.srt` or `d:e/c.srt` as protocol `a` or `d` ("Protocol not found"), and Path()
+    # above has dropped the `./` a caller wrote to say it is a file (#558). A relative path whose
+    # first segment has a colon gets it back; a filter that opens with fopen (lut3d, drawtext,
+    # ssim's stats_file) reads `./name` as the same file. An absolute path and a Windows path
+    # with a drive (`C:/x`, `C:x`) are left as they are: the drive's colon is not a scheme.
+    pure = PureWindowsPath(p) if _on_windows() else PurePosixPath(p)
+    if ":" in p.split("/", 1)[0] and not pure.is_absolute() and not pure.drive:
+        p = "./" + p
     p = p.replace(":", "\\\\:")
     p = p.replace("'", "\\\\\\'")
     for ch in (",", ";", "[", "]"):
@@ -367,6 +448,43 @@ def stream_starts(meta: Optional[Dict[str, Any]]) -> Tuple[float, float]:
     return out[0], out[1]
 
 
+# Pads a sound that starts after the clock's 0 with silence from 0 (#409's rule for a re-encode),
+# then cuts the result into frames of 4096 samples (p=0: the last one is not padded, so the length
+# is the sound's). On FFmpeg 9 the pad handed the encoder the lead and the sound in one frame, and
+# the FLAC encoder, which takes frames as they come, refused it ("invalid block size: 111305",
+# #554's CI on 9.0.2; 6.1.1 splits the frames itself, so this was not seen locally)
+PAD_SOUND_FROM_ZERO = "aresample=async=1:first_pts=0,asetnsamples=n=4096:p=0"
+
+
+def late_sound_lead(meta: Optional[Dict[str, Any]]) -> float:
+    """How long after the file's origin the sound starts, when a sound-only output has to carry
+    that as silence: 0.0 for a lead of half a millisecond or less (sync.py's bound) and for a
+    source whose start is unknown. A WAV or FLAC has no start time, and an .m4a's is an edit a
+    decoder does not pad, so a sound-only output written without the lead plays that much early
+    against the picture it came from (audio.py, loudness.py; cut.py --accurate pads it too, A46)."""
+    lead = stream_starts(meta)[1]
+    return lead if lead > 0.0005 else 0.0
+
+
+# The size of the decoded clip above which a tool that holds every frame (reverse, a boomerang)
+# says `memory_heavy`.
+HELD_FRAMES_WARN_BYTES = 2 * 1024 ** 3
+
+
+def held_frames_bytes(v: Dict[str, Any], frames: float) -> int:
+    """About how many bytes `frames` decoded frames of the picture `v` (a probe()'s `video`) take:
+    the picture's size, its chroma planes (4:2:0 1.5x, 4:2:2 2x, 4:4:4 3x, an alpha plane one
+    more) and 2 bytes a sample above 8 bits. The one estimate reverse.py and loop.py --boomerang
+    warn from: reverse.py's was the clip's duration alone, so a 30 s 4K60 clip (tens of GB) got
+    no warning and a 61 s 320x180 one did (A174)."""
+    pix = str(v.get("pix_fmt") or "")
+    planes = 3.0 if "444" in pix or pix.startswith(("gbr", "rgb", "bgr")) else 2.0 if "422" in pix else 1.5
+    if pix.startswith(("yuva", "gbra", "rgba", "bgra", "argb", "abgr", "ya")):
+        planes += 1.0
+    depth = 2 if (v.get("bit_depth") or 8) > 8 else 1
+    return int((v.get("width") or 0) * (v.get("height") or 0) * planes * depth * max(0.0, frames))
+
+
 def frame_rate(meta: Optional[Dict[str, Any]]) -> float:
     """The video's frame rate as cut.py's grid takes it: r_frame_rate, else fps; 0.0 when unknown."""
     v = (meta or {}).get("video") or {}
@@ -396,11 +514,68 @@ def frame_durations(meta: Optional[Dict[str, Any]], rate: float) -> str:
     return f"fps={rate:.6f}"
 
 
+# a time written in milliseconds is the frame it reads back to (#653): the nearest frame when that
+# is within half a millisecond either way, never one before the first; any other time is itself.
+# For a position the caller names (a cut point, --at, a segment bound), not for a length
+def on_frame(t: float, v0: float, rate: float) -> float:
+    return g if rate and (n := round((t - v0) * rate)) >= 0 and abs((g := v0 + n / rate) - t) <= 0.0005 else t
+
+
 def grid_at_or_after(t: float, v0: float, rate: float) -> float:
     """The time of the first frame at or after `t` on a constant-rate grid starting at `v0`."""
     if not rate:
         return t
     return v0 + math.ceil((t - v0) * rate - 1e-6) / rate
+
+
+def frame_window(start: Optional[float], end: Optional[float], meta: Optional[Dict[str, Any]],
+                 half_open: bool = False) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """The two times a filter compares a frame's `t` with so that a window from `start` to `end`
+    seconds of `meta`'s picture holds the frames asked: half a frame before the first frame at or
+    after `start`, and half a frame after the last frame at or before `end` (`half_open`: half a
+    frame before the first frame at or after `end`, which is then outside). A bound written as
+    the time itself is compared with `t` on the frame it names: `{:.3f}` put frame 37 of a
+    30000/1001 picture (1.234567 s) after a start of "1.235", and `t` is a double (pts x time
+    base) that is not always the number the text reads as (the frame at 1.4 s of a 25 fps MP4 is
+    not `<= 1.400`; FFmpeg 6.1.1). The grid is the one grid_at_or_after() counts on. None when
+    there is no grid to count on (no rate: a dry run's pending input; a picture probe() suspects
+    of a variable rate): the caller keeps the text it had. A bound of None stays None."""
+    v = (meta or {}).get("video") or {}
+    rate = frame_rate(meta)
+    if not rate or v.get("variable_frame_rate_suspected"):
+        return None
+    v0, half = stream_starts(meta)[0], 0.5 / rate
+    lo = None if start is None else grid_at_or_after(start, v0, rate) - half
+    if end is None:
+        hi = None
+    elif half_open:
+        hi = grid_at_or_after(end, v0, rate) - half
+    else:
+        hi = v0 + math.floor((end - v0) * rate + 1e-6) / rate + half
+    return lo, hi
+
+
+def window_expr(start: Optional[float], end: Optional[float], meta: Optional[Dict[str, Any]],
+                half_open: bool = False) -> str:
+    """The expression that is true on the frames of frame_window(): `between(t,LO,HI)`, or
+    `gte(t,LO)` with no end. With no start the window opens at 0, as it always did. Without a
+    grid it is the millisecond text the tools wrote before."""
+    bounds = frame_window(start, end, meta, half_open)
+    if bounds is None:
+        lo = f"{start:.3f}" if start is not None else "0"
+        return f"gte(t,{lo})" if end is None else f"between(t,{lo},{end:.3f})"
+    lo = f"{bounds[0]:.6f}" if bounds[0] is not None else "0"
+    return f"gte(t,{lo})" if bounds[1] is None else f"between(t,{lo},{bounds[1]:.6f})"
+
+
+def windowed_overlay_x(x: Any, window: str) -> str:
+    """An `overlay` x that puts the layer at `x` on the frames `window` is true on and off the
+    picture on every other frame. overlay's `enable` is not the main picture's alone: FFmpeg
+    evaluates it on each frame either input hands over, the layer's next one included, so a still
+    looped at 25 fps over a 30000/1001 picture was drawn from the frame before the window's
+    first to the frame before its last (36-66 for 37-67; FFmpeg 6.1.1). The position is
+    evaluated once per output frame with the main picture's `t`."""
+    return f"'if({window},{x},-w)'"
 
 
 def av_trim(start: float, end: Optional[float], rate: float = 0.0, fill_gaps: bool = False) -> Tuple[str, str]:
@@ -419,6 +594,108 @@ def av_trim(start: float, end: Optional[float], rate: float = 0.0, fill_gaps: bo
             f"atrim=start={start:.6f}{aend},asetpts=PTS-{start:.6f}/TB,{pad}")
 
 
+def conform_filter(samples: int, rate: int) -> str:
+    """Pad with silence or trim to exactly `samples` at `rate` (#478): counted in samples, not in
+    seconds written to the millisecond, which left a result up to 24 samples (48 kHz) off. The
+    aformat pins the rate the count is in, so a resampler FFmpeg inserts sits ahead of the count."""
+    head = f"aformat=sample_rates={rate}," if rate else ""
+    return f"{head}apad=whole_len={samples},atrim=end_sample={samples}"
+
+
+def conform_to_length(length: float, rate: int) -> str:
+    """Pad with silence or trim a track to `length` seconds of a timeline that starts at 0, to the
+    sample (#478, #493). The count is of samples, and sound that starts after 0 keeps its start
+    (apad and atrim=end_sample do not move timestamps): N samples from 0.3 s end 0.3 s past
+    `length`. The trim on the timestamp ends it there; half a sample of slack keeps the Nth sample
+    of a track that starts at 0. audio.py, grid.py, broll.py and multicam.py end their sound with
+    this; `atrim=duration={length:.3f}` cut 59244 samples (48 kHz) to 59232."""
+    return conform_filter(round(length * rate), rate) + f",atrim=end={length + 0.5 / rate:.6f}"
+
+
+def conform_output_t(length: float, rate: int) -> str:
+    """The output `-t` beside conform_to_length(): `-t {length:.3f}` would cut the conformed sound
+    back to the millisecond, so the limit sits half a sample past the last one."""
+    return f"{length + 0.5 / rate:.6f}"
+
+
+def length_output_t(length: float, rate: Optional[int], runs_on: bool = False) -> str:
+    """The output `-t` of a tool that leaves the sound's end to it (overlay.py, waveform.py,
+    loop.py, sync.py --replace-audio): the millisecond text they always wrote unless it cuts
+    samples off the track at `rate` (`-t 1.234` wrote 59244 samples at 48 kHz as 59232), and then
+    the length to the microsecond, which FFmpeg rounds to the nearest sample. `runs_on` is for
+    sound that goes on past the length (an endless apad, a loop's next repeat): there the
+    millisecond text is also left when it rounds up (`-t 1.235` wrote 59261 as 59280). No half
+    sample of slack as in conform_output_t(): this `-t` ends the picture too, and with the slack a
+    layer's frame that starts exactly at the end came through on a 1/60000 or 1/90000 time base
+    (FFmpeg 6.1.1). A rate of 0 or None (no sound, a dry run's pending input) keeps the
+    millisecond text."""
+    text = f"{length:.3f}"
+    if rate:
+        def names(micro: int) -> int:
+            # the samples FFmpeg makes of a -t of `micro` microseconds: a rescale that rounds a
+            # half up, where Python's round() takes it to the even count (0.005 s at 44.1 kHz is
+            # 220.5 samples: 221 written, round() says 220)
+            return (micro * rate + 500_000) // 1_000_000
+        written, asked = names(round(float(text) * 1_000_000)), round(length * rate)
+        if written < asked or (runs_on and written != asked):
+            # the microsecond text is a rounding too (2.00001042 s is 96001 samples at 48 kHz and
+            # "2.000010" names 96000): the microsecond nearest the length, moved by whole
+            # microseconds until it names the count asked. A microsecond is a twentieth of a
+            # sample at 48 kHz, so this is a step or two, not conform_output_t()'s half sample
+            micro = round(length * 1_000_000)
+            while names(micro) < asked:
+                micro += 1
+            while names(micro) > asked:
+                micro -= 1
+            return f"{micro // 1_000_000}.{micro % 1_000_000:06d}"
+    return text
+
+
+def silence_filter(rate: Optional[int], lead: Optional[float] = None, tail: Optional[float] = None) -> str:
+    """Silence of `lead` seconds ahead of a track and/or `tail` seconds after it (pad.py,
+    freeze.py). An amount in whole milliseconds is written as it always was (`adelay=MS:all=1`,
+    `apad=pad_dur=S.mmm`), the millisecond rounded, not cut: int(1.001 * 1000) is 1000. One that
+    is not is counted in samples at `rate`, pinned by an aformat as in conform_filter():
+    `adelay=234` and `apad=pad_dur=0.234` for 0.23425 s left the sound 12 samples short at 48 kHz.
+    A rate of 0 or None (a dry run's pending input) keeps the millisecond form."""
+    amounts = [v for v in (lead, tail) if v is not None]
+    if rate and any(round(v * rate) != round(round(v, 3) * rate) for v in amounts):
+        parts = [f"aformat=sample_rates={rate}"]
+        if lead:
+            parts.append(f"adelay={round(lead * rate)}S:all=1")
+        if tail:
+            parts.append(f"apad=pad_len={round(tail * rate)}")
+        return ",".join(parts)
+    parts = []
+    if lead is not None:
+        parts.append(f"adelay={round(lead * 1000)}:all=1")
+    if tail is not None:
+        parts.append(f"apad=pad_dur={tail:.3f}")
+    return ",".join(parts)
+
+
+def tpad_length(seconds: float, meta: Optional[Dict[str, Any]]) -> float:
+    """How long the picture `tpad=start_duration={seconds:.3f}` puts ahead of `meta`'s clip is:
+    tpad adds whole frames, the nearest count to the text it is given (0.23425 s at 25 fps is
+    written "0.234" and becomes 6 frames, 0.240 s). A sound delayed by `seconds` itself would
+    start up to half a frame before or after the picture it belongs to; delayed by this length it
+    moves with it (both streams of a clip shift by one constant: #409). `seconds` as it is when
+    there is no rate to count frames at (a dry run's pending input) or probe() suspects a
+    variable one."""
+    v = (meta or {}).get("video") or {}
+    rate = frame_rate(meta)
+    if not rate or v.get("variable_frame_rate_suspected"):
+        return seconds
+    try:
+        exact = Fraction(str(v.get("r_frame_rate") or ""))
+    except (ValueError, ZeroDivisionError):
+        exact = None
+    if exact is None or abs(float(exact) - rate) > 1e-6:
+        exact = Fraction(rate).limit_denominator(1001)
+    frames = math.floor(Fraction(f"{seconds:.3f}") * exact + Fraction(1, 2))  # a half rounds up, as av_rescale does
+    return float(frames / exact)
+
+
 def av_clip_length(meta: Optional[Dict[str, Any]], fps: float) -> float:
     """The one length a clip holds once both streams start at its first frame (av_trim from the
     video's start): the video's, or where the sound ends when it runs more than a frame past the
@@ -428,7 +705,7 @@ def av_clip_length(meta: Optional[Dict[str, Any]], fps: float) -> float:
     v = (meta.get("video") or {}).get("duration")
     a = (meta.get("audio") or {}).get("duration")
     if not v:
-        return meta.get("duration") or 0.0
+        return input_length(meta)  # a file that states no length at all is refused, not 0 s long (#491)
     if a:
         v0, a0 = stream_starts(meta)
         a = a + a0 - v0  # where the sound ends, counted from the first frame
@@ -448,7 +725,162 @@ def cfr_args(meta: Optional[Dict[str, Any]], fps: Optional[float] = None) -> Lis
         return []
     rate = fps or v.get("fps") or 30.0
     rate = round(rate) if abs(rate - round(rate)) < 0.02 else rate
-    return ["-fps_mode", "cfr", "-r", f"{rate:g}"]
+    # a rate the caller asked for relabels the start timecode, counted at the new rate (#470:
+    # proxy/denoise/crop/redact/sphere/straighten --fps 50 kept 01:00:00:12, a 25 fps label)
+    from _common.timeline import output_timecode_args
+    relabel = output_timecode_args(meta, 0.0, rate) if fps and v.get("fps") and abs(float(fps) - float(v["fps"])) > 0.01 else []
+    return ["-fps_mode", "cfr", "-r", f"{rate:g}"] + relabel
+
+
+def cfr_filter(meta: Optional[Dict[str, Any]], fps: Optional[float] = None, seek: float = 0.0) -> str:
+    """The `fps` filter that puts the picture on the grid cfr_args() delivers, as the last filter of
+    the video chain; "" when cfr_args() forces no rate. The encoder line's `-fps_mode cfr -r` alone
+    let a frame fall up to about two frames behind its slot before it dropped one, so a VFR clip
+    conformed at its average rate showed its picture up to 56 ms after its sound (#512); the
+    filter puts each frame on the slot its time rounds to (within half a frame of it; a slot in a
+    gap keeps the frame before it). The encoder line keeps cfr_args(), which then
+    moves no frame.
+
+    `seek` is an output-side `-ss` that follows the conform (cut.py's and fit.py --method trim's
+    margin after an input seek): the grid is laid from it instead (#538). The filter lays its grid
+    from the first frame on the clock, its output's time base is one frame, and the output seek
+    then landed between two slots, which the encoder line's rate rounded again: on a 27 fps
+    average clip `cut.py --start 0.45` put its picture 24 ms after its sound, 33 ms at 0.2. The
+    picture is moved so the seek is its 0, conformed from there (`start_time=0`: a frame takes the
+    slot its time rounds to and stays until the next frame's slot, so the last frame before the
+    seek fills the slots up to the first frame after it), and moved back on a
+    microsecond time base, so the seek lands on a slot and the output's frames sit on the grid
+    from 0. The setpts after the conform leaves its frames no duration from FFmpeg 7.0; the
+    encoder line's `-fps_mode cfr`, which cfr_args() always gives with this filter, sets each to
+    one frame."""
+    args = cfr_args(meta, fps)
+    if not args:
+        return ""
+    rate = args[args.index("-r") + 1]
+    if seek > 0:
+        return (f"setpts=PTS-{seek:.6f}/TB,fps={rate}:start_time=0,"
+                f"settb=AVTB,setpts=PTS+{seek:.6f}/TB")
+    return f"fps={rate}"
+
+
+def with_cfr(chain: str, meta: Optional[Dict[str, Any]], fps: Optional[float] = None) -> str:
+    """`chain` (a -vf value or one filtergraph chain) with cfr_filter() appended when there is one.
+    A -vf value that is a graph of its own (drawn_chain()'s split/maskedmerge) gets it first
+    instead: maskedmerge, like overlay, ends its output at its last frame's start, and an fps
+    filter after it lost the last frame (graphics.py --template chapter: 3.963 s of 4)."""
+    return chain_with_rate(chain, cfr_filter(meta, fps))
+
+
+def chain_with_rate(chain: str, rate_filter: str) -> str:
+    """`chain` with an `fps` filter `rate_filter` placed as with_cfr() places cfr_filter(): last in
+    a plain chain, first in a -vf that is a graph of its own (fit/export's blur pad, a drawn pad
+    with chroma), whose overlay or maskedmerge ends its output at its last frame's start on FFmpeg
+    6.1 and lost the last frame to an fps filter after it. For a rate that is not cfr_args()'s
+    own (export.py's preset and platform rates)."""
+    if not rate_filter:
+        return chain
+    if ";" in chain:
+        return f"{rate_filter},{chain}"
+    return f"{chain},{rate_filter}" if chain else rate_filter
+
+
+def graph_with_cfr(graph: str, label: str, meta: Optional[Dict[str, Any]],
+                   fps: Optional[float] = None) -> Tuple[str, str]:
+    """A -filter_complex graph and the video output label to map, with cfr_filter() after that
+    label when there is one: (graph + ";[v]fps=R[vcfr]", "[vcfr]"), else both unchanged."""
+    f = cfr_filter(meta, fps)
+    if not f:
+        return graph, label
+    bare = label.strip("[]")
+    return f"{graph};[{bare}]{f}[{bare}cfr]", f"[{bare}cfr]"
+
+
+def cfr_at_input(graph: str, meta: Optional[Dict[str, Any]], fps: Optional[float] = None, src: str = "[0:v]",
+                 origin: Optional[float] = None) -> str:
+    """A -filter_complex graph with cfr_filter() on its main picture as it is decoded (`src`, which
+    the graph reads once), for a graph that composites onto that picture and moves no frame in
+    time. After an overlay the conform comes too late: FFmpeg 6.1's overlay ends its output at its
+    last frame's start, so an fps filter there lost the last frame (3.963 s of a 4 s picture).
+    With `origin` (where the picture starts on the graph's clock, stream_starts()) the picture is
+    moved to start at 0 ahead of the conform, so the grid is laid from its first frame, and the
+    conformed frames get a microsecond time base, for a graph that cuts the picture on that grid
+    (freeze.py, #523): the caller counts the picture's times from its own start. The fps
+    filter's grid starts at the clock's 0, so a picture that starts 50 ms in was cut a frame off
+    the times computed from its start, and its output's time base is one frame, to which `trim`
+    rescales its bound (a half-frame bound written to the microsecond, 3.907407 at 27 fps, became
+    the frame at 3.888889 and cut it). The picture is not moved back after the conform: from
+    FFmpeg 7.0 setpts leaves its output frames no duration and no rate, and a tpad after it (the
+    hold) cloned nothing: 109 frames for 135 on 7.1."""
+    f = cfr_filter(meta, fps)
+    if not f:
+        return graph
+    if graph.count(src) != 1:
+        # a graph that read the picture twice, or not at all, would go unconformed or not parse
+        raise ValueError(f"cfr_at_input: the graph reads {src} {graph.count(src)} times, not once")
+    if origin is not None:
+        f = f"setpts=PTS-{origin:.6f}/TB,{f},settb=AVTB" if origin else f"{f},settb=AVTB"
+    return f"{src}{f}[cfrin];" + graph.replace(src, "[cfrin]")
+
+
+def atempo_lead(sample_rate: Any) -> int:
+    """How many samples of its input `atempo` leaves out at the start: half its window, which is
+    the power of two at or above sample_rate / 24 (2048 at 44.1 and 48 kHz, so 1024 samples, 21 ms
+    at 48 kHz). Its output opens on the sample half a window in (measured at 8, 22.05, 32, 44.1,
+    48 and 96 kHz on FFmpeg 6.1.1), so every sound after it is that much early: speedramp.py's beeps
+    came 21 ms early at 1x and 40 ms at 0.5x, and fit.py --method speed's the same (#523). 0 when
+    the rate is not known (a dry run's pending input)."""
+    try:
+        rate = int(sample_rate or 0)
+    except (TypeError, ValueError):
+        return 0
+    window = rate // 24
+    if window < 1:
+        return 0
+    pot = 1 << (window.bit_length() - 1)
+    return (pot * 2 if pot < window else pot) // 2
+
+
+def atempo_chain_with_lead(stages: List[str], sample_rate: Any) -> str:
+    """`atempo` stages (each value as written) led by silence and trimmed after, so the output
+    keeps the input's timing from its first sample: a beep at 0.5 s of a 1x stage came out at
+    0.479 s (FFmpeg 6.1.1). Each stage leaves out atempo_lead() samples of its own input, which
+    are the earlier stages' tempo product times that many of the chain's input, so one lead of
+    their sum goes in front of the first stage: an `adelay` between two stages made FFmpeg 6.1.1
+    fail a graph that joins the result with `concat` ("Invalid data found when processing
+    input", speedramp.py with a 0.25x segment). That lead alone put the chain's first window,
+    which atempo fades in, over the input's first 21 ms: a 10 ms attack there came out 7 dB down
+    at 1x and was gone at 2x (#541 review). So one whole window more of silence goes in front
+    (as many of the chain's input samples as leave a window of it ahead of every stage), and
+    that much of the output, at the chain's tempo, is cut off again and its timestamps moved
+    back by it, so a track that starts after 0 keeps its start. The bare stages when the rate is
+    not known (a dry run's pending input)."""
+    lead = atempo_lead(sample_rate)
+    chain = ",".join(f"atempo={value}" for value in stages)
+    if not lead:
+        return chain
+    total, product, widest = 0.0, 1.0, 1.0
+    for value in stages:
+        total += lead * product
+        product *= float(value)
+        widest = max(widest, product)
+    extra = round(2 * lead * widest)  # a window of silence ahead of the stage that shrinks it most
+    cut = round(extra / product)
+    return (f"adelay={round(total) + extra}S:all=1,{chain},"
+            f"atrim=start_sample={cut},asetpts=PTS-{cut}/SR/TB")
+
+
+def delivered_rate(meta: Optional[Dict[str, Any]], fps: Optional[float] = None) -> Optional[float]:
+    """The constant rate cfr_args() forces on the output (its -r), or None when it forces none and
+    the output keeps the source's rate -- what a start timecode is counted at
+    (timeline.output_timecode_args)."""
+    args = cfr_args(meta, fps)
+    return float(args[-1]) if args else None
+
+
+# how far before a cut an input seek lands, so a start inside the B-frame reorder delay before a
+# keyframe still decodes from the keyframe BEFORE it; the margin is dropped on the output side
+# (cut.py, sync.py --trim-second)
+SEEK_MARGIN = 1.0
 
 
 # ------------------------------------------------------- VideoToolbox (--hw)
@@ -477,6 +909,16 @@ def _vt_bt709(codec: str) -> List[str]:
     return ["-bsf:v", f"{codec}_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1"]
 
 
+def source_transfer(v: Dict[str, Any]) -> str:
+    """The transfer a 10-bit re-encode of a BT.2020 / HDR source is tagged with: the source's own
+    tag, or, when it has none, what probe() read it as. BT.2020 primaries with no transfer tag are
+    `hdr_format` "BT.2020 SDR" (not an HDR signal), so they are tagged bt2020-10, the SDR curve
+    BT.2020 defines; through 3.8.8 every such re-encode came out tagged HLG (audit A153). An
+    HDR signal with no transfer tag (Dolby Vision whose base layer is untagged) keeps the HLG
+    default it always had."""
+    return v.get("color_transfer") or ("arib-std-b67" if v.get("hdr_signal") else "bt2020-10")
+
+
 def _vt_args(codec: str, crf: int, meta: Optional[Dict[str, Any]], keep_bt709: bool) -> Optional[List[str]]:
     """VideoToolbox encoder options for `codec`, or None (with a note in STATE.hw_notes) when the
     request stays on the CPU: no VideoToolbox encoder for the codec, this machine cannot, or the
@@ -497,8 +939,8 @@ def _vt_args(codec: str, crf: int, meta: Optional[Dict[str, Any]], keep_bt709: b
         return None
     v = (meta or {}).get("video") or {}
     hdr = bool(v.get("bt2020_or_hdr"))
-    hdr_tags = ["-colorspace", v.get("color_space") or "bt2020nc", "-color_primaries", v.get("color_primaries") or "bt2020",
-                "-color_trc", v.get("color_transfer") or "arib-std-b67"]
+    hdr_tags = ["-colorspace", hdr_line_matrix(v), "-color_primaries", v.get("color_primaries") or "bt2020",
+                "-color_trc", source_transfer(v)]
     if codec == "prores":
         return ["-c:v", name, "-profile:v", "hq", "-pix_fmt", "p210le"] + (hdr_tags if hdr else [])
     # The HDR curve was fitted on the Main10 HEVC line; an 8-bit H.264 line (an export preset on
@@ -612,6 +1054,13 @@ def restate_last_swap(before: List[str], after: List[str]) -> None:
         STATE.hw_swaps[-1] = (list(after), strip_movflags(STATE.hw_swaps[-1][1]))
 
 
+def hdr_tag_args(meta: Optional[Dict[str, Any]]) -> List[str]:
+    """The colour tags a 10-bit line that keeps a BT.2020 / HDR source writes as output options: the
+    matrix it converted with (hdr_line_matrix), and the source's primaries and transfer."""
+    v = (meta or {}).get("video") or {}
+    return ["-colorspace", hdr_line_matrix(v), "-color_primaries", v.get("color_primaries") or "bt2020", "-color_trc", source_transfer(v)]
+
+
 def encoder_args(codec: str, crf: int, preset: str, meta: Optional[Dict[str, Any]] = None, keep_bt709: bool = True) -> List[str]:
     """encoder options for `codec` (_cpu_encoder_args), on VideoToolbox when --hw asks and it can."""
     return _maybe_hw(codec, crf, meta, keep_bt709, _cpu_encoder_args(codec, crf, preset, meta, keep_bt709))
@@ -627,10 +1076,10 @@ def _cpu_encoder_args(codec: str, crf: int, preset: str, meta: Optional[Dict[str
     """
     v = (meta or {}).get("video") or {}
     hdr = bool(v.get("bt2020_or_hdr"))
-    cs = v.get("color_space") or "bt2020nc"
+    cs = hdr_line_matrix(v)
     prim = v.get("color_primaries") or "bt2020"
-    trc = v.get("color_transfer") or "arib-std-b67"
-    hdr_tags = ["-colorspace", cs, "-color_primaries", prim, "-color_trc", trc]
+    trc = source_transfer(v)
+    hdr_tags = hdr_tag_args(meta)
     if codec == "h264":
         if hdr:
             die(f"--codec h264 cannot carry HDR ({v.get('hdr_format') or 'BT.2020'}): 8-bit H.264 is SDR only",
@@ -785,21 +1234,41 @@ def video_args(meta: Optional[Dict[str, Any]], crf: int = 18, preset: str = "med
     """
     v = (meta or {}).get("video") or {}
     fix = bt709_matrix_args(meta if source is None else source) if convert_matrix and not keeps_source_tags() else []
+    if convert_matrix and source is None and STATE.alpha_line is None:
+        # the BT.2020 / HDR line of an RGB source (--codec prores included: that line tags it too)
+        fix = hdr_rgb_matrix_args(meta) or ([] if v.get("bt2020_or_hdr") else fix)
     if STATE.codec:
         return encoder_args(STATE.codec, crf, preset, meta) + fix
     if not v.get("bt2020_or_hdr"):
         return x264_args(crf, preset) + fix
-    return _maybe_hw("hevc", crf, meta, True, _x265_hdr_default(v, crf, preset))
+    return _maybe_hw("hevc", crf, meta, True, _x265_hdr_default(v, crf, preset)) + fix
+
+
+def line_matrix_filter(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The conversion video_args(meta)'s line ends with for this source, as a filter, or None: for
+    a tool that needs it inside a graph of its own before run() folds it in (stabilize.py's pass
+    1, fit.py's picture measurement). bt709_matrix_filter() on a line tagged BT.709,
+    hdr_rgb_matrix_filter() on a BT.2020 / HDR line; nothing on an alpha line, and nothing for an
+    SDR source on --codec prores."""
+    if STATE.alpha_line is not None:
+        return None
+    hdr = ((meta or {}).get("video") or {}).get("bt2020_or_hdr")
+    return hdr_rgb_matrix_filter(meta) or (None if keeps_source_tags() or hdr else bt709_matrix_filter(meta))
 
 
 def matrix_chain(meta: Optional[Dict[str, Any]], line_meta: Optional[Dict[str, Any]]) -> str:
     """For a tool that mixes several sources in one graph and encodes it through
     video_args(line_meta, convert_matrix=False): the conversion one source's own chain starts
     with ("<filter>," -- bt709_matrix_filter), or "" when that source needs none or the line does
-    not tag BT.709 (an HDR/BT.2020 line keeps its tags, --codec prores keeps the source's)."""
+    not tag BT.709 (an HDR/BT.2020 line keeps its tags, --codec prores keeps the source's). On a
+    BT.2020 / HDR line an RGB source that probes BT.2020 or HDR itself is made YUV with the matrix
+    that line tags (hdr_rgb_matrix_filter, #544)."""
+    if ((line_meta or {}).get("video") or {}).get("bt2020_or_hdr") and STATE.alpha_line is None:
+        f = hdr_rgb_matrix_filter(meta, line_meta)
+        return f + "," if f else ""
     if keeps_source_tags() or ((line_meta or {}).get("video") or {}).get("bt2020_or_hdr"):
         return ""
-    f = bt709_matrix_filter(meta)
+    f = bt709_line_filter(meta)
     return f + "," if f else ""
 
 
@@ -843,13 +1312,35 @@ def rgb_chain_to_bt709(line_meta: Optional[Dict[str, Any]], pix_fmt: str = "yuva
     with (rgb_to_bt709_filter), or "" when the line does not tag BT.709 (the lines matrix_chain()
     leaves alone). Without it the graph's own RGB-to-YUV step used FFmpeg's BT.601 default."""
     v = (line_meta or {}).get("video") or {}
-    if STATE.alpha_line is not None and v.get("color_space") == "bt709" and not v.get("bt2020_or_hdr"):
+    if (STATE.alpha_line is not None and (v.get("color_space") == "bt709" or rgb_to_bt709_line(line_meta))
+            and not v.get("bt2020_or_hdr")):
         # an alpha line keeps the source's tags: on a BT.709-tagged picture an RGB layer is made
-        # BT.709 too (FFmpeg 6.1's own conversion is BT.601), in 4:4:4 with its alpha plane
+        # BT.709 too (FFmpeg 6.1's own conversion is BT.601), in 4:4:4 with its alpha plane. An
+        # RGB source on a YUV line is a BT.709 picture as well (alpha.rgb_to_bt709_line, #496)
         return "," + rgb_to_bt709_filter("yuva444p")
     if keeps_source_tags() or v.get("bt2020_or_hdr"):
         return ""
     return "," + rgb_to_bt709_filter(pix_fmt)
+
+
+def overlay_format(meta: Optional[Dict[str, Any]]) -> str:
+    """":format=..." for an `overlay` whose main picture is the one `meta` probes, or "".
+
+    overlay's default format is `yuv420`, which is 8-bit, and `format=auto` picks an 8-bit one as
+    soon as the layer is 8-bit, so through 3.6.0 a cutaway, a redaction, a graphics layer or a PiP
+    over a 10-bit HDR or ProRes source took the whole picture to 8 bits (and `overlay --image`'s
+    RGBA logo took it through 8-bit RGB) before the 10-bit encoder. On a line that keeps more than
+    8 bits (HDR/BT.2020, --codec prores) and a main picture deeper than 8 bits the overlay runs at
+    10 bits in the main's own chroma subsampling, and an 8-bit layer is widened to meet it (bit
+    depth only, no matrix). An alpha line keeps the format its tool chose."""
+    v = (meta or {}).get("video") or {}
+    if STATE.alpha_line is not None or (v.get("bit_depth") or 8) <= 8:
+        return ""
+    if not (v.get("bt2020_or_hdr") or keeps_source_tags()):
+        return ""
+    pix = v.get("pix_fmt") or ""
+    sub = "444" if "444" in pix else "422" if "422" in pix else "420"
+    return f":format=yuv{sub}p10"
 
 
 def draws_chroma(colours: Sequence[Any], line_meta: Optional[Dict[str, Any]]) -> bool:
@@ -910,9 +1401,9 @@ def source_codec_video_args(meta: Optional[Dict[str, Any]], crf: int = 18, prese
 
 
 def _x265_hdr_default(v: Dict[str, Any], crf: int, preset: str) -> List[str]:
-    cs = v.get("color_space") or "bt2020nc"
+    cs = hdr_line_matrix(v)
     prim = v.get("color_primaries") or "bt2020"
-    trc = v.get("color_transfer") or "arib-std-b67"
+    trc = source_transfer(v)
     x265 = f"log-level=error:colorprim={prim}:transfer={trc}:colormatrix={cs}:range=limited:hdr10-opt=1{hdr10_x265_params(v)}" if trc == "smpte2084" else f"log-level=error:colorprim={prim}:transfer={trc}:colormatrix={cs}"
     return ["-c:v", "libx265", "-preset", preset, "-crf", str(min(51, crf + 2)), "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1",
             "-x265-params", x265, "-colorspace", cs, "-color_primaries", prim, "-color_trc", trc, "-movflags", "+faststart"]
@@ -930,20 +1421,48 @@ AUDIO_CODECS = {
     ".aac": ["-c:a", "aac", "-b:a", "256k"],
     ".ogg": ["-c:a", "libvorbis", "-q:a", "6"],
     ".opus": ["-c:a", "libopus", "-b:a", "128k"],
+    # 16-bit PCM as for .wav, big-endian: the AIFF and CAF muxers' own default codec (#517)
+    ".aif": ["-c:a", "pcm_s16be"],
+    ".aiff": ["-c:a", "pcm_s16be"],
+    ".caf": ["-c:a", "pcm_s16be"],
+    ".mka": ["-c:a", "flac"],
 }
 
 
-def audio_codec_for(output_path: str, default_bitrate: str = "192k") -> List[str]:
-    """Pick an audio codec that the output container can actually hold."""
+LOSSLESS_AUDIO_EXT = {".wav", ".flac", ".aif", ".aiff", ".caf", ".mka"}  # the AUDIO_CODECS whose codec takes no bitrate
+
+# Every audio-only extension this skill reads (AUDIO_MEDIA_EXT) that has no codec above: a run
+# that would encode into an output named so is refused before ffmpeg runs, and only a stream copy
+# of WMA sound is written (runner.refuse_unwritten_output(), #517). That is .wma: FFmpeg's ASF
+# muxer took the tools' H.264 and AAC and wrote them under the name, verified.
+UNWRITTEN_AUDIO_EXT = frozenset(AUDIO_MEDIA_EXT - set(AUDIO_CODECS))
+
+
+def audio_codec_for(output_path: str, bitrate: Optional[str] = None) -> List[str]:
+    """Pick an audio codec that the output container can actually hold.
+
+    `bitrate` is one the caller asked for: it replaces the rate or quality an audio extension
+    names (`-q:a 0` for .mp3, 256k for .m4a), which through 3.8.8 it never reached (A143), and is
+    the AAC rate of any other container (192k when it is None). A lossless extension takes none;
+    the caller refuses a bitrate for it."""
     ext = os.path.splitext(output_path)[1].lower()
-    return list(AUDIO_CODECS.get(ext, ["-c:a", "aac", "-b:a", default_bitrate]))
+    if ext not in AUDIO_CODECS:
+        return ["-c:a", "aac", "-b:a", bitrate or "192k"]
+    args = list(AUDIO_CODECS[ext])
+    if bitrate is None or ext in LOSSLESS_AUDIO_EXT:
+        return args
+    for flag in ("-b:a", "-q:a"):
+        if flag in args:
+            i = args.index(flag)
+            del args[i:i + 2]
+    return args + ["-b:a", bitrate]
 
 
 def is_audio_output(output_path: str) -> bool:
-    """True when the output extension is an audio-only container (.wav, .flac, .mp3, .m4a, .aac, .ogg, .opus).
+    """True when the output extension is an audio-only container this skill writes (AUDIO_CODECS:
+    .wav, .flac, .mp3, .m4a, .aac, .ogg, .opus, .aif, .aiff, .caf, .mka).
 
-    Such a file cannot hold a video stream and, for .wav, cannot hold compressed audio: scripts use
-    this to drop the picture (-vn) and to pick the codec from the extension instead of AAC.
+    Scripts use this to drop the picture (-vn) and to pick the output codec from the extension.
     """
     return os.path.splitext(output_path)[1].lower() in AUDIO_CODECS
 
@@ -971,6 +1490,70 @@ BRAND_DEFAULTS: Dict[str, Any] = {
 }
 
 
+# Every key a tool reads from a brand file, per block (#510). `styles.caption` is merged over the
+# top-level `caption` block (brand_caption_style()), so the two take the same keys. `colors.accent`
+# is a palette entry BRAND_DEFAULTS and examples/brand.json carry; `loudness` is read by no tool
+# (A107) and is kept out of the refusal, since the example shipped it until 3.8.8: it gets a note.
+BRAND_KEYS: Dict[str, frozenset] = {
+    "": frozenset({"font", "font_file", "colors", "logo", "logo_position", "logo_scale", "logo_opacity",
+                   "safe_margin", "caption", "styles", "lang", "emoji_assets", "loudness"}),
+    "colors": frozenset({"primary", "text", "outline", "background", "accent", "upcoming"}),
+    "caption": frozenset({"size", "position", "animate", "karaoke", "bold", "outline", "box", "color", "colour",
+                          "font", "emoji_assets"}),
+    "styles": frozenset({"caption"}),
+}
+BRAND_KEYS["styles.caption"] = BRAND_KEYS["caption"]
+
+
+def check_brand_keys(data: Dict[str, Any], path: str) -> None:
+    """Refuse a brand file key no tool reads, as render.py refuses a project's (check_keys()): a
+    misspelt `"safe_margn"` or `"colours"` was dropped without a word and the defaults drawn."""
+    import difflib
+    import json
+    blocks = [("", data)]
+    for name in ("colors", "caption", "styles"):
+        if isinstance(data.get(name), dict):
+            blocks.append((name, data[name]))
+    if isinstance(data.get("styles"), dict) and isinstance(data["styles"].get("caption"), dict):
+        blocks.append(("styles.caption", data["styles"]["caption"]))
+    for block, obj in blocks:
+        for key in obj:
+            if key in BRAND_KEYS[block]:
+                continue
+            where = f"{block}.{key}" if block else str(key)
+            near = difflib.get_close_matches(str(key), sorted(BRAND_KEYS[block]), n=1)
+            # quoted as JSON: the key is the caller's text, and a quote or a line break in it stays one line
+            die(f"brand file {path}: unknown key {json.dumps(where)}" + (f' (did you mean "{near[0]}"?)' if near else ""),
+                kind="input", hint=f"the keys read{' in ' + block if block else ''}: " + ", ".join(sorted(BRAND_KEYS[block])))
+    if "loudness" in data:
+        note(f'brand file {path}: "loudness" is read by no tool and was ignored (a target is loudness.py -I, '
+             'export.py\'s preset, or a render project\'s "loudness")')
+
+
+BRAND_FILE_KEYS = ("logo", "font_file")  # the brand keys that name a file a tool reads
+
+
+def brand_asset_files(path: str) -> List[Tuple[str, str]]:
+    """(key, path) of each file a brand file names (logo, font_file), resolved as load_brand()
+    resolves them: against the brand file's own directory. What a cache key must hash beside the
+    brand file's own bytes, since a logo or a font replaced under its name changes the output
+    (render.py --cache; batch.py's side inputs, #510 review). A brand file that cannot be read
+    names nothing here; the tool refuses it when it runs."""
+    try:
+        data = read_json(path)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    base = Path(path).resolve().parent
+    out: List[Tuple[str, str]] = []
+    for key in BRAND_FILE_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            out.append((key, value if os.path.isabs(value) else str(base / value)))
+    return out
+
+
 def load_brand(path: Optional[str]) -> Dict[str, Any]:
     """Load brand.json (fonts, colours, logo, safe margins, caption defaults); missing keys fall back to defaults."""
     import copy
@@ -979,13 +1562,30 @@ def load_brand(path: Optional[str]) -> Dict[str, Any]:
     if not path:
         return brand
     if not os.path.exists(path):
-        die(f"brand file not found: {path}")
+        die(f"brand file {absent_word(path)}: {path}", kind="input")
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except ValueError as exc:
-        die(f"brand file is not valid JSON: {exc}")
+        data = read_json(path)
+    except OSError as exc:
+        die(f"brand file {path} cannot be read: {exc.strerror or exc}", kind="input")
+    except ValueError as exc:  # malformed, not UTF-8, or nested too deep (read_json)
+        die(f"brand file is not valid JSON: {exc}", kind="input")
+    if not isinstance(data, dict):
+        die(f"brand file {path} must be a JSON object {{...}}, got {type(data).__name__}", kind="input")
+    # the shapes the readers below and brand_caption_style() walk: a block that is not an object,
+    # and a path that is not a string, were a traceback there
+    for key, value in (*data.items(), ("styles.caption", (data.get("styles") or {}).get("caption")
+                                       if isinstance(data.get("styles"), dict) else None)):
+        if value is None:
+            continue
+        if (isinstance(BRAND_DEFAULTS.get(key), dict) or key == "styles.caption") and not isinstance(value, dict):
+            die(f'brand file {path}: "{key}" must be an object {{...}}, got {type(value).__name__}', kind="input")
+        if key in ("logo", "font_file", "font") and not isinstance(value, str):
+            die(f'brand file {path}: "{key}" must be a string, got {type(value).__name__}', kind="input")
+    check_brand_keys(data, path)
     base = Path(path).resolve().parent
     for k, v in data.items():
+        if v is None and isinstance(brand.get(k), dict):
+            continue  # a null block keeps its defaults: readers walk it as an object (#483 review)
         if isinstance(v, dict) and isinstance(brand.get(k), dict):
             brand[k].update(v)
         else:
@@ -993,11 +1593,61 @@ def load_brand(path: Optional[str]) -> Dict[str, Any]:
     for key in ("logo", "font_file"):
         if brand.get(key) and not os.path.isabs(brand[key]):
             brand[key] = str(base / brand[key])
+        # a file the run reads: a --plan binds it and is never written over it (review of #534's
+        # sweep: caption.py hands libass the font's folder, so its plan named neither)
+        if brand.get(key) and os.path.isfile(brand[key]) and brand[key] not in STATE.plan_inputs:
+            STATE.plan_inputs.append(brand[key])
     brand["_path"] = str(path)
     # What the FILE said, separate from BRAND_DEFAULTS' filler: a brand.json that never mentions
     # a font must not read as "the caller chose a font" (which would switch font-by-script off).
     brand["_stated"] = data
     return brand
+
+
+# Every key of a render.py project that names a file. render.py reads each one relative to the
+# project file (its rel()); a copy of the project written anywhere else -- batch.py's per-item
+# project in its work directory, multicam.py --write-project -- has to carry them absolute, or
+# render looks for "bed.wav" beside the copy. A path is (section, key): section None is the
+# project's top level, "x[]" each entry of the list x. tests/test_contract.py checks that every
+# rel() in render.py reads one of these.
+PROJECT_PATH_KEYS = (
+    (None, "output"), (None, "brand"), (None, "chapters"),
+    ("clips[]", "src"), ("clips[].snap", "source"), ("snap", "source"),
+    ("audio", "music"), ("audio", "replace"), ("audio", "effects"),
+    ("captions", "text"), ("captions", "srt"), ("captions", "ass"),
+    ("overlays[]", "image"), ("overlays[]", "video"), ("overlays[]", "font_file"),
+    ("audiogram", "image"),
+)
+
+
+def rebase_project_paths(proj: Dict[str, Any], base: "os.PathLike[str] | str") -> Dict[str, Any]:
+    """A copy of a render.py project whose relative file paths (PROJECT_PATH_KEYS) are joined onto
+    `base`, the directory they were written relative to; absolute paths, URLs, non-strings, inline
+    chapter lists and keys the project does not have are left as they are."""
+    import copy
+    out = copy.deepcopy(proj)
+    base = Path(base)
+
+    def fix(obj: Any, key: str) -> None:
+        value = obj.get(key) if isinstance(obj, dict) else None
+        # a URL is left for the tool to refuse by what it is (waveform.py: no network access)
+        if isinstance(value, str) and value and not os.path.isabs(value) and "://" not in value:
+            obj[key] = str(base / value)
+
+    def nodes(section: "Optional[str]") -> List[Any]:
+        found: List[Any] = [out]
+        for part in (section.split(".") if section else []):
+            name, many = (part[:-2], True) if part.endswith("[]") else (part, False)
+            nxt: List[Any] = []
+            for node in found:
+                value = node.get(name) if isinstance(node, dict) else None
+                nxt.extend(value if many and isinstance(value, list) else [] if many else [value])
+            found = nxt
+        return found
+    for section, key in PROJECT_PATH_KEYS:
+        for node in nodes(section):
+            fix(node, key)
+    return out
 
 
 def brand_states_font(brand: Dict[str, Any]) -> bool:
@@ -1288,7 +1938,7 @@ def _refine_grid(onset_times: "Sequence[float]", strengths: "Sequence[float]", i
     it), and onset_time = phase + k * interval is solved for both unknowns with each pair weighted
     by its onset strength squared; the pairing is then redone against the refitted grid, until it
     stops moving (three passes at most). This only sharpens the grid the autocorrelation chose --
-    the tempo cannot leave `bpm_range`, an octave cannot flip (a refit that moves the interval by
+    the tempo cannot leave `bpm_range` (a fit beyond a bound is held on it), an octave cannot flip (a refit that moves the interval by
     more than interval/BEAT_ALIGN_DIVISOR is discarded), and fewer than four paired grid points
     keep the original: the fit needs evidence, and an onset-free stretch gives it none.
     Returns phase in [0, interval).
@@ -1311,8 +1961,13 @@ def _refine_grid(onset_times: "Sequence[float]", strengths: "Sequence[float]", i
         if sxx <= 0:
             break
         new_iv = sum(w * (k - mk) * (t - mt) for k, t, w in pairs) / sxx
-        if not (60.0 / hi_bpm <= new_iv <= 60.0 / lo_bpm) or abs(new_iv - interval) > interval / BEAT_ALIGN_DIVISOR:
+        if abs(new_iv - interval) > interval / BEAT_ALIGN_DIVISOR:
             break
+        # A146: a fit just outside `bpm_range` is held on its bound, not discarded. A tempo that
+        # sits on the bound (90 BPM under --beat-range 60-90) fits a hair beyond it as often as
+        # inside, and discarding the fit kept the step-rounded interval (89.76 BPM), whose grid
+        # was 80 ms off a 30 s click track by its end
+        new_iv = min(max(new_iv, 60.0 / hi_bpm), 60.0 / lo_bpm)
         new_ph = mt - new_iv * mk
         moved = abs(new_iv - iv) < 1e-9 and abs(new_ph - ph) < 1e-7
         iv, ph = new_iv, new_ph

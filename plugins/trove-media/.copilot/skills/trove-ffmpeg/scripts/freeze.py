@@ -18,9 +18,12 @@ Examples:
 """
 import argparse
 import sys
+from fractions import Fraction
 
-from _common.decision import av_trim, frame_durations, frame_rate, grid_at_or_after, stream_starts
-from _common import add_common, apply_common, aac_args, cfr_args, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, MissingFpsError, time_arg, fmt_secs, run
+from _common.decision import av_trim, cfr_at_input, cfr_filter, delivered_rate, frame_durations, frame_rate, grid_at_or_after, on_frame, silence_filter, stream_starts, tpad_length
+from _common.runner import with_mapped_chapters
+from _common import add_common, apply_common, aac_args, cfr_args, with_cfr, default_output, die, emit, ffmpeg_base, info, probe, run_keeping_subtitles, video_args, X264_PRESETS, time_arg, fmt_secs, run
+from _common.emit import input_length, refuse_still
 
 
 def main() -> int:
@@ -28,7 +31,7 @@ def main() -> int:
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_freeze.<ext>)")
     ap.add_argument("--at", help="timestamp to freeze: seconds, mm:ss, hh:mm:ss.ms or SMPTE hh:mm:ss:ff (default: the last frame)")
-    ap.add_argument("--hold", type=float, required=True, help="how long the freeze lasts, in seconds")
+    ap.add_argument("--duration", "--hold", dest="hold", type=float, required=True, help="the duration of the freeze: how long it lasts, in seconds")
     ap.add_argument("--mode", choices=["insert", "extend"], default="insert",
                      help="insert (default): hold pushes the rest of the clip later; extend: only valid at/after the clip's end, makes the last frame last longer with nothing pushed")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
@@ -43,13 +46,14 @@ def main() -> int:
     meta = probe(args.input)
     if not meta.get("video"):
         die("input has no video stream")
-    dur = meta.get("duration") or 0.0
+    dur = input_length(meta)
     fps = meta["video"].get("fps") or 30.0
     if args.at is not None:
         at = time_arg(args.at, "--at", (meta.get("video") or {}).get("fps"))
     else:
         at = dur
     if at < 0 or at > dur:
+        refuse_still(meta, args.input, f"--at {at:g} is past its one frame, which --at 0 holds")  # not "0..0.000" (#531)
         die(f"--at {at:g} is outside the clip (0..{dur:.3f})")
     if args.mode == "extend" and at < dur - 0.01:
         die(f"--mode extend needs --at at or after the clip's end ({dur:.3f}), got {at:g}")
@@ -62,40 +66,65 @@ def main() -> int:
     # starts 0.1 s late 0.1 s early (147 frames for 150).
     v0 = stream_starts(meta)[0]
     rate = frame_rate(meta) or fps
-    cut_at = grid_at_or_after(at, v0, rate)
+    if cfr_filter(meta):
+        # A VFR source is put on the delivered grid as it is decoded (the graph's cfr_at_input
+        # below), and every frame time is on that grid (#523): on the source's own frames the
+        # head ended at its last frame's nominal duration, so with --at inside a gap the hold, and
+        # everything after it, started the rest of the gap early against the sound, which is cut
+        # at --at (56 ms at --at 0.15, 93 ms at --at 2.2 on a 27 fps average clip with gaps from
+        # 0.1 and 2.1 s). A hold is then counted in frames of that rate, the rate its frames are
+        # cloned at.
+        rate = delivered_rate(meta) or rate
+    cut_at = grid_at_or_after(on_frame(at, v0, rate), v0, rate)  # --at 1.902 is the frame at 1.9019 (#653)
     # no frame at or after --at (no --at holds at the clip's end): the insert tail would be empty
     # and the hold lost, so hold the last frame as --mode extend does (#416 review)
     vend = v0 + (meta["video"].get("duration") or dur - v0)
-    if args.mode == "extend" or cut_at >= vend - 0.5 / rate:
+    holds_end = args.mode == "extend" or cut_at >= vend - 0.5 / rate
+    if holds_end:
         # tpad's stop_duration clones the last frame for the given duration; no PTS surgery
         # needed since it only ever appends past the real end.
-        vf = f"tpad=stop_mode=clone:stop_duration={args.hold:.3f}"
+        vf = with_cfr(f"tpad=stop_mode=clone:stop_duration={args.hold:.3f}", meta)
         cmd = ffmpeg_base() + ["-i", args.input, "-vf", vf, "-map", "0:v:0"]
         if has_audio:
-            cmd += ["-map", "0:a:0?", "-af", f"apad=pad_dur={args.hold:.3f}"]
+            cmd += ["-map", "0:a:0?", "-af", silence_filter(meta["audio"].get("sample_rate"), tail=args.hold)]
     elif at == 0 or cut_at <= v0 + 1e-6:
         # A freeze at the very start has no preceding "head" segment to hold on to (the
         # split/trim/concat approach below needs a non-empty head, which trim=end=0 can't give
         # it -- ffmpeg fails filtering an empty stream). Symmetric to --mode extend at the other
         # end: tpad's start_duration clones the *first* frame backwards instead.
         vf = f"tpad=start_mode=clone:start_duration={args.hold:.3f}"
+        lead = tpad_length(args.hold, meta)
+        if cfr_filter(meta):
+            # A VFR picture is conformed before the hold, which then clones whole frames of the
+            # delivered rate, and the sound waits as long as they last, as a hold inside the clip
+            # does (#538). The fps filter after tpad's start pad ended a slot early: tpad passes
+            # its input's end on without the pad, and the filter then ends the picture at its last
+            # frame's start (134 frames of 135 for --hold 1 on a 27 fps average clip; a 30 fps clip
+            # through fps=30 the same, 149 of 150)
+            n = max(1, round(args.hold * rate))
+            vf, lead = f"{cfr_filter(meta)},tpad=start_mode=clone:start={n}", n / rate
         cmd = ffmpeg_base() + ["-i", args.input, "-vf", vf, "-map", "0:v:0"]
         if has_audio:
-            cmd += ["-map", "0:a:0?", "-af", f"adelay={int(args.hold * 1000)}:all=1"]
+            # the sound waits as long as the picture is held: whole frames (tpad_length), as the
+            # hold in the middle of a clip pads by the held frames' length
+            cmd += ["-map", "0:a:0?", "-af", silence_filter(meta["audio"].get("sample_rate"), lead=lead)]
     else:
         # freeze N frames at `at` by holding on that one source frame for --hold seconds, then
         # resuming the rest of the clip: split the timeline at `at` and hold the remainder's
         # FIRST frame -- the frame shown at `at` -- for --hold seconds (a segment of its own, below).
         # Through 3.1.3 the head's last frame was held, the frame before `at`: at a cut, the last
         # frame of the previous shot (#411).
-        n = max(1, round(args.hold * fps))
+        n = max(1, round(args.hold * rate))
         # The video hold length is rounded to a whole number of frames (n / fps), but the audio
         # side used to pad by the raw --hold value -- up to half a frame duration off from what
         # the video actually holds for, a permanent A/V drift from this point on. Pad audio by
         # the same, frame-rounded duration the video actually gets.
-        actual_hold = n / fps
-        head_v, head_a = av_trim(v0, cut_at, rate)
-        tail_v, tail_a = av_trim(cut_at, None, rate)
+        actual_hold = n / rate
+        # a conformed VFR picture starts at 0 on the graph's clock (cfr_at_input's origin), so its
+        # trims are counted from its own start; the sound's stay on the input's clock
+        vo = v0 if cfr_filter(meta) else 0.0
+        head_v, head_a = av_trim(v0 - vo, cut_at - vo, rate)[0], av_trim(v0, cut_at, rate)[1]
+        tail_v, tail_a = av_trim(cut_at - vo, None, rate)[0], av_trim(cut_at, None, rate)[1]
         # The hold is its own segment: the frame at cut_at, cut on the input's clock and cloned to
         # n frames there (tpad's stop clone), then shifted like the tail. From FFmpeg 7.0 setpts
         # leaves its output's frame rate unknown and its frames' durations 0, so the earlier tpad
@@ -108,11 +137,29 @@ def main() -> int:
         # and 0.100, --at 0.06), and the hold was lost (#416 review). A second trim keeps that one
         # frame; on a constant rate it is the frame at cut_at, as before.
         half = 0.5 / rate
-        hold_v = (f"trim=start={cut_at - half:.6f},trim=end_frame=1,"
+        # the graph closes on the rate the encoder line delivers (a VFR source is conformed to its
+        # average): closed on r_frame_rate, -r then resampled it and the picture ran late (#512)
+        hold_v = (f"trim=start={cut_at - vo - half:.6f},trim=end_frame=1,"
                   f"tpad=stop_mode=clone:stop={n - 1},setpts=PTS-STARTPTS")
+        # Every segment is a whole count of frames on one grid, so the joined picture's timestamps
+        # are rebuilt from its running frame count before the closing fps: FFmpeg 6.1.1's video
+        # concat gives a one-frame segment no length (it ends a segment at its last frame's
+        # timestamp), so a hold of one frame (--hold 0.04 at 30 fps) was dropped and the rest of
+        # the picture ran a frame before its sound, as speedramp.py's one-frame segments did
+        grid = frame_durations(meta, delivered_rate(meta) or rate)
+        q = Fraction(grid[len("fps="):]) if "/" in grid else Fraction(delivered_rate(meta) or rate).limit_denominator(1001)
         vf = (f"[0:v]split=3[a][b][c];[a]{head_v}[head];"
               f"[b]{hold_v}[hold];[c]{tail_v}[tail];"
-              f"[head][hold][tail]concat=n=3:v=1:a=0,{frame_durations(meta, rate)}[outv]")
+              f"[head][hold][tail]concat=n=3:v=1:a=0,setpts=N*{q.denominator}/({q.numerator}*TB),{grid}[outv]")
+        # the grid is laid from the picture's start (the picture moved to 0 ahead of the fps
+        # filter, and the trims above counted from there), on a microsecond time base: laid from
+        # the clock's 0, a picture that starts 50 ms in came out a frame early after the hold, and
+        # on the fps filter's base of one frame the trim's half-frame bound 3.907407 (--at 3.9)
+        # became frame 105 itself, which was cut from the head and held in place of frame 106.
+        # It is not moved back after the conform: from FFmpeg 7.0 a setpts leaves its frames no
+        # duration and no rate, and the hold's tpad after it cloned nothing (109 frames for 135
+        # on 7.1)
+        vf = cfr_at_input(vf, meta, origin=v0)
         cmd = ffmpeg_base() + ["-i", args.input, "-filter_complex", vf, "-map", "[outv]"]
         if has_audio:
             af = (f"[0:a]asplit[aa][ab];[aa]{head_a}[ahead];"
@@ -126,10 +173,14 @@ def main() -> int:
         cmd += aac_args()
     else:
         cmd += ["-an"]
-    if args.mode == "insert":
+    if not holds_end:
+        moved = lead if at == 0 or cut_at <= v0 + 1e-6 else actual_hold
+        cmd = with_mapped_chapters(cmd, meta, lambda t: t + moved if t >= cut_at - 1e-6 else t, None)  # (#470)
         # the picture gains `hold` seconds at `at`; a stream-copied subtitle track would keep its
         # old timestamps and every cue after the freeze would fire early (same reasoning as
-        # fit.py --method speed). Drop it rather than ship captions that lie.
+        # fit.py --method speed). Drop it rather than ship captions that lie. A hold of the last
+        # frame (the default with no --at, or an --at at the end) moves nothing, so the track is
+        # kept as --mode extend keeps it (A180)
         run(cmd + [output])
         dropped_streams = bool(meta.get("subtitle_streams") or meta.get("data_streams"))
     else:

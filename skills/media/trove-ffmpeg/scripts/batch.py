@@ -23,6 +23,7 @@ Examples:
   python3 batch.py ~/Footage --recipe batch.json --watch 30     # poll the folder every 30 s
 """
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -33,8 +34,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from _common import STATE, add_common, apply_common, child_args, die, emit, info, run_tool, MEDIA_EXT as _MEDIA_EXT
-from _common.runner import HW_FORCED_ENV, _OutputLock, add_hw_orchestrator_args, env_hw, stop_children
-from _common.emit import absorb_stage_hw, audit, note, shown, steps_encoder_report, warn
+from _common.runner import (with_flags, HW_FORCED_ENV, OWNED_ENV, _OutputLock, add_hw_orchestrator_args, copy_to_sibling, env_hw, read_json,
+                            owned_identity, stop_children)
+from _common.emit import absorb_stage_hw, audit, note, record_skip, shown, steps_encoder_report, warn
+from _common.decision import NO_DEFAULT_ENCODE_EXT, brand_asset_files, rebase_project_paths
+from _common.runner import parse_json
 
 HERE = Path(__file__).resolve().parent
 MEDIA_EXT = {e for e in _MEDIA_EXT if e not in (".png", ".jpg", ".jpeg", ".webp")}  # one list (_common); a batch walks media, not stills
@@ -48,15 +52,56 @@ ALLOWED_STEP_SCRIPTS = {p.name for p in HERE.glob("*.py") if not p.name.startswi
 
 
 def file_key(path: Path) -> str:
+    """A cheap change detector: the name, the size, the modification time in nanoseconds and the
+    first and last MiB. A rewrite of the middle of a file keeps its size and its ends, so the
+    modification time is what tells it apart: in whole seconds (up to 3.8.4) two writes within
+    one second shared a key, and the old output was served as cached. A file whose mtime is reset
+    to the earlier value (``touch -r``, a copy that preserves it) or a filesystem that keeps
+    whole seconds (FAT keeps two) still shares one; hashing every byte would cost a read of the
+    whole file per item per run (docs/design-decisions.md, "After 3.8.4")."""
     st = path.stat()
     h = hashlib.sha1(usedforsecurity=False)  # a change detector, not a secret
-    h.update(f"{path.name}|{st.st_size}|{int(st.st_mtime)}".encode())
+    h.update(f"{path.name}|{st.st_size}|{st.st_mtime_ns}".encode())
     with open(path, "rb") as fh:  # first and last MB: cheap and good enough to detect changes
         h.update(fh.read(1 << 20))
         if st.st_size > 2 << 20:
             fh.seek(-(1 << 20), os.SEEK_END)
             h.update(fh.read(1 << 20))
     return h.hexdigest()
+
+
+def side_input_file(value: str) -> Path:
+    """The file a side-input argument reads: the argument itself, or, when that is no file and it
+    ends in `:SUFFIX`, the part before the last colon when that is one (caption.py's
+    `--srt FILE:LANG`, which split_srt_lang() reads the same way). Keying the whole token hashed a
+    path that does not exist, so an edited subtitle file kept its key (#510 review)."""
+    path = Path(value)
+    try:
+        if path.is_file() or ":" not in value:
+            return path
+        head = Path(value.rpartition(":")[0])
+        return head if value.rpartition(":")[0] and head.is_file() else path
+    except OSError:
+        return path
+
+
+def is_brand_value(step: List[Any], j: int) -> bool:
+    """Whether step[j] is the value of --brand (`--brand X` or `--brand=X`)."""
+    arg = str(step[j])
+    return arg.startswith("--brand=") or (j > 0 and str(step[j - 1]) == "--brand")
+
+
+def key_brand_assets(h: Any, path: Path) -> None:
+    """Hash the logo and font file a brand file names into `h`: the brand file's own bytes do not
+    change when one of them is replaced under its name (#510 review; render.py's stage key and a
+    project recipe's key already cover them)."""
+    for key, asset in brand_asset_files(str(path)):
+        a = Path(asset)
+        try:
+            ident = file_key(a) if a.is_file() else "-"
+        except OSError:
+            ident = "-"
+        h.update(f"brand:{key}\0{asset}\0{ident}\0".encode())
 
 
 def side_inputs_key(recipe: Dict[str, Any]) -> str:
@@ -66,21 +111,81 @@ def side_inputs_key(recipe: Dict[str, Any]) -> str:
     Read on every pass, so a --watch loop sees the edit too."""
     h = hashlib.sha1(usedforsecurity=False)
     for step in recipe.get("steps") or []:
-        for arg in step[1:] if isinstance(step, list) else []:
-            if not isinstance(arg, str) or "{" in arg:
+        for j, arg in enumerate(step) if isinstance(step, list) else []:
+            if j == 0 or not isinstance(arg, str) or "{" in arg:
                 continue
             value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
             if value.startswith("-") or not value:
                 continue
-            path = Path(value)
+            path = side_input_file(value)
             try:
                 if path.is_file():
                     h.update(f"{value}\0{file_key(path)}\0".encode())
+                    if is_brand_value(step, j):
+                        key_brand_assets(h, path)
                     continue
             except OSError:
                 pass
             h.update(f"{value}\0-\0".encode())  # absent now: different from when it existed
     return h.hexdigest()[:8]
+
+
+def item_side_inputs_key(recipe: Dict[str, Any], src: Path) -> "tuple[str, Optional[Dict[str, Any]]]":
+    """The side inputs a step names through a placeholder, for one item (#510): `--image {in}.png`
+    in the first step is a file beside this item's source, and editing it is a change the cache
+    must see as side_inputs_key() sees a literal path's. Returns (key part, None), "" when the
+    recipe names none, or ("", why) when one cannot be resolved before the item runs: a later
+    step's {in} is an intermediate that does not exist yet, so its file cannot be keyed, and the
+    item is not served from the cache at all."""
+    h = hashlib.sha1(usedforsecurity=False)
+    named = False
+    for i, step in enumerate(recipe.get("steps") or []):
+        for j, arg in enumerate(step) if isinstance(step, list) else []:
+            if j == 0 or not isinstance(arg, str) or "{in}" not in arg or "{out}" in arg:
+                continue  # literal paths are side_inputs_key()'s; {out} names an output, not an input
+            value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+            if value == "{in}" or "{in}" not in value:
+                continue  # the step's own input
+            if i > 0:
+                return "", {"reason": "side_input_unresolved", "step": i, "argument": arg,
+                            "message": f"step {i} names {arg!r}, a file derived from an intermediate that does not "
+                                       "exist before the item runs, so the cache cannot key it; the item always runs"}
+            path = side_input_file(value.replace("{in}", str(src)))
+            named = True
+            try:
+                if path.is_file():
+                    h.update(f"{path}\0{file_key(path)}\0".encode())
+                    if is_brand_value(step, j):
+                        key_brand_assets(h, path)
+                    continue
+            except OSError:
+                pass
+            h.update(f"{path}\0-\0".encode())
+    return (h.hexdigest()[:8] if named else ""), None
+
+
+def caseless_glob(pattern: str) -> str:
+    """`pattern` with every letter outside a [...] class matched in either case: "*.mp4" finds
+    GOPR0001.MP4, as it already did on macOS's and Windows' default filesystems, so a recipe means
+    the same files on every platform (A82: on Linux a camera folder was an empty batch). pathlib's
+    case_sensitive= needs Python 3.12; 3.10 is the floor."""
+    out: List[str] = []
+    in_class = False
+    first = -1  # index of the class's first member: a "]" there is a member, not the end ("[]a]", "[!]a]")
+    for i, ch in enumerate(pattern):
+        if in_class:
+            out.append(ch)
+            if ch == "]" and i > first:
+                in_class = False
+        elif ch == "[":
+            first = i + 2 if pattern[i + 1:i + 2] == "!" else i + 1
+            in_class = "]" in pattern[first + 1:]  # an unclosed [ ("[!]x") is a literal character to fnmatch
+            out.append(ch if in_class else "[[]")
+        elif ch.isalpha() and ch.lower() != ch.upper():
+            out.append(f"[{ch.lower()}{ch.upper()}]")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def recipe_key(recipe: Dict[str, Any]) -> str:
@@ -90,16 +195,55 @@ def recipe_key(recipe: Dict[str, Any]) -> str:
     # itself) left the key, and so every cache hit, unchanged: a preset swapped from "copy" to
     # "x" (a real re-encode) still served the old cached output. Fold the referenced file's own
     # content into the key so a content change invalidates the cache like any other edit would.
+    # main() calls this on every pass, so a --watch loop sees an edit made while it runs (A81).
     project_content = ""
     if recipe.get("project"):
         try:
             project_content = Path(recipe["project"]).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             # keyed on the recipe alone: an unreadable project cannot invalidate the cache by its
-            # content, so say so (each item that needs it then fails on reading it)
-            warn(f"recipe.project {recipe['project']} could not be read ({exc}); the cache key covers the recipe only",
-                 "recipe_project_unreadable", path=str(recipe["project"]), error=str(exc))
+            # content, so say so (each item that needs it then fails on reading it); once per run
+            entry = {"code": "recipe_project_unreadable", "path": str(recipe["project"])}
+            if not any(all(w.get(k) == v for k, v in entry.items()) for w in STATE.warnings if isinstance(w, dict)):
+                warn(f"recipe.project {recipe['project']} could not be read ({exc}); the cache key covers the recipe only",
+                     "recipe_project_unreadable", path=str(recipe["project"]), error=str(exc))
+        else:
+            project_content += "\0" + project_files_key(recipe, project_content)
     return hashlib.sha1((json.dumps(recipe, sort_keys=True) + "\0" + project_content).encode(), usedforsecurity=False).hexdigest()[:12]
+
+
+def project_files_key(recipe: Dict[str, Any], text: str) -> str:
+    """The files a project recipe's project names (music, cues, the brand and its logo and font,
+    overlay images and videos, the chapters file, every clip but the one each item replaces),
+    each keyed by its own content as file_key() keys a source (A80): an edited cue file or music
+    bed changes the output, so it has to change the key. The list is render.py's own
+    project_input_files(), read against the project file's directory as render reads it. A
+    project that does not parse adds nothing: each item then fails reading it."""
+    try:
+        proj = parse_json(text)
+    except ValueError:
+        return ""
+    if not isinstance(proj, dict):
+        return ""
+    from render import project_input_files  # here, not at the top: render.py imports this module
+    base = Path(str(recipe["project"])).resolve().parent
+    clips = proj.get("clips")
+    idx = int(recipe.get("clip_key") or 0)  # check_recipe_types() has refused anything else
+    if isinstance(clips, list) and idx < len(clips) and isinstance(clips[idx], dict):
+        # the clip every item replaces with itself: its placeholder is no input of any item
+        proj = dict(proj, clips=[dict(c, src=None) if i == idx else c for i, c in enumerate(clips)])
+
+    def rel(p: Any) -> str:
+        return str(p) if os.path.isabs(str(p)) else str(base / str(p))
+    h = hashlib.sha1(usedforsecurity=False)
+    for name in sorted(set(project_input_files(proj, rel))):
+        path = Path(name)
+        try:
+            ident = file_key(path) if path.is_file() else "-"
+        except OSError:
+            ident = "-"
+        h.update(f"{name}\0{ident}\0".encode())
+    return h.hexdigest()
 
 
 def gpu_key() -> str:
@@ -117,6 +261,18 @@ def gpu_key() -> str:
 JOBS_CAP = 8   # beyond this, concurrent encodes contend for the same cores and memory
 
 _LOG = threading.local()
+# source -> {real path -> owned_identity()} of every file this process delivered for that item (a
+# --watch loop's earlier passes): its final output and every side file its steps were allowed to
+# write (an .srt beside the video). An existing path that is still exactly that file is the item's
+# own, not someone else's, so a later pass of the SAME item replaces it (design-decisions: "A path
+# this same run wrote ... is never someone else's file"); the permission is per item and per path,
+# and is checked again where the write happens -- by deliver() under the output lock, by a step at
+# its own output check (runner.OWNED_ENV). A file edited or replaced since, one an earlier run
+# left, or one another item delivered (two items naming one side file) is still refused.
+_OWN_OUTPUTS: Dict[str, Dict[str, Dict[str, int]]] = {}
+_OWN_LOCK = threading.Lock()
+# source -> (final path, its owned_identity() before the last step started), while that step runs
+_WATCHED: Dict[str, Any] = {}
 # set by batch.py's signal handler: a --jobs worker between two steps must not start the next one
 _STOP = threading.Event()
 
@@ -155,13 +311,15 @@ def step_error(index: Optional[int], tool: Optional[str], doc: Any) -> Dict[str,
     return out
 
 
-def run_step(argv: List[str], per_call: "Optional[float]" = None) -> "tuple[bool, Optional[dict]]":
+def run_step(argv: List[str], per_call: "Optional[float]" = None,
+             owned: "Optional[Path]" = None) -> "tuple[bool, Optional[dict]]":
     """Returns (ok, doc): doc is the step's own --json result document; a failed step that
     printed none that parses gets one in the failure shape (error.reason step_output_unparsed,
     the last stderr line as the message), so its row still says why. {in}/{out} are already resolved by the caller before argv reaches here, so forcing
     --json on every step (harmless: no step reads another step's stdout, only its output path)
     costs nothing and lets a caller like process() read back tool-specific fields, e.g. cut.py's
-    `reencoded`, without adding a bespoke flag per field it might someday want."""
+    `reencoded`, without adding a bespoke flag per field it might someday want. `owned`: the
+    owned_config() file the step reads under runner.OWNED_ENV."""
     script = argv[0]
     if script not in ALLOWED_STEP_SCRIPTS:
         # main() refuses such a recipe before any item runs; this stays as the last line of defence
@@ -171,9 +329,11 @@ def run_step(argv: List[str], per_call: "Optional[float]" = None) -> "tuple[bool
     if _STOP.is_set():
         return False, {"status": "failed", "exit_code": 130,
                        "error": {"kind": "interrupted", "message": f"interrupted before {script} started"}}
-    cmd = [str(HERE / script)] + argv[1:] + child_args() + (["--json"] if "--json" not in argv[1:] else [])
+    # before a bare `--` in the step, where argparse still reads them as options (#510 review)
+    cmd = [str(HERE / script)] + with_flags(argv[1:], child_args() + (["--json"] if "--json" not in argv[1:] else []))
     log("  → " + " ".join(os.path.basename(c) if i < 1 else c for i, c in enumerate(cmd)))
-    proc = run_tool(cmd, per_call=per_call)
+    env = dict(os.environ, **{OWNED_ENV: str(owned)}) if owned else None
+    proc = run_tool(cmd, per_call=per_call, env=env)
     try:
         doc = json.loads(proc.stdout)
     except ValueError:
@@ -206,6 +366,11 @@ def final_path(src: Path, recipe: Dict[str, Any], outdir: Path) -> Path:
     # detection of its own; see one_pass()'s pre-flight check, which uses this same computation
     # to catch that before any file is actually processed (and the earlier one silently clobbered).
     final_ext = recipe.get("ext") or src.suffix.lstrip(".") or "mp4"
+    if not recipe.get("ext") and src.suffix.lower() in NO_DEFAULT_ENCODE_EXT:
+        # the #415 default-name rule (default_output()): the steps re-encode to x264/AAC, which a
+        # WebM cannot hold, so every .webm item was refused output_container_codecs (A83). A
+        # recipe that keeps WebM (a stream copy, export.py --preset vp9-alpha) sets "ext".
+        final_ext = "mp4"
     steps = recipe.get("steps") or []
     if not recipe.get("ext") and not recipe.get("project") and steps and not step_writes(steps[-1]) and not writes_nothing(recipe):
         # the last step writes nothing, so what is delivered is an intermediate: its name says its
@@ -218,6 +383,83 @@ def intermediate_ext(src: Path) -> str:
     """The extension of an item's intermediate step files: the source's own for an audio file,
     else mp4 (the tools' encoders write x264/AAC, which .webm and friends do not take)."""
     return src.suffix.lstrip(".") if src.suffix.lower() in (".wav", ".mp3", ".m4a", ".flac") else "mp4"
+
+
+# the recipe keys the run reads as a string: a path, a glob, a file-name part
+RECIPE_STRINGS = ("glob", "project", "output_dir", "suffix", "ext")
+# every key a recipe may carry; anything else is refused, as render.py refuses a project's
+RECIPE_KEYS = RECIPE_STRINGS + ("clip_key", "steps")
+
+
+def check_recipe_types(recipe: Dict[str, Any]) -> None:
+    """Refuse a recipe value of the wrong JSON type before anything runs (A18): a number where a
+    path or glob goes, an absolute glob (pathlib refuses it), a step that is not a list. Each was
+    a traceback, or a failure of every item naming the step's first character."""
+    for key in recipe:
+        # A104: a misspelled key ("ouput_dir", "sufix", "globs") was not read, so the batch ran
+        # with that key's default: other files, another folder, another name
+        if key not in RECIPE_KEYS:
+            near = difflib.get_close_matches(str(key), RECIPE_KEYS, n=1, cutoff=0.6)
+            die(f"recipe: unknown key {key!r}" + (f" (did you mean {near[0]!r}?)" if near
+                else f" (valid keys: {', '.join(sorted(RECIPE_KEYS))})"), kind="input")
+    for key in RECIPE_STRINGS:
+        value = recipe.get(key)
+        if value is not None and not isinstance(value, str):
+            die(f'recipe "{key}" must be a string, got {type(value).__name__} {value!r:.60}', kind="input")
+    glob = recipe.get("glob")
+    if glob and (os.path.isabs(glob) or glob.startswith(("/", "\\"))):
+        die(f'recipe "glob" {glob!r} is an absolute path: it matches names inside the batch folder, e.g. "*.mp4" '
+            'or "sub/*.mov"', kind="input")
+    key = recipe.get("clip_key")
+    try:
+        index = int(key) if key is not None and not isinstance(key, (bool, float)) else (0 if key is None else -1)
+    except (TypeError, ValueError):
+        index = -1
+    if index < 0:
+        die(f'recipe "clip_key" must be a clip index (0, 1, ...), got {key!r:.60}', kind="input")
+    steps = recipe.get("steps")
+    if steps is not None and not isinstance(steps, list):
+        die(f'recipe "steps" must be a list of steps, each ["script.py", args...], got {type(steps).__name__}',
+            kind="input")
+    for i, st in enumerate(steps or []):
+        if not isinstance(st, list) or not st:
+            die(f'recipe step {i} must be a list ["script.py", args...], got {type(st).__name__} {st!r:.60}',
+                kind="input")
+
+
+STEP_WRITES_WITHOUT_OUT = "step_writes_without_out"
+
+
+def names_output(step: Any) -> bool:
+    """Whether a step names where it writes itself (-o/--output with a path that is not {out}): a
+    side product the caller placed on purpose (look.py {in} -o {in}.png), not an implicit output."""
+    for tok in (step[1:] if isinstance(step, list) else []):
+        tok = str(tok)
+        if tok in ("-o", "--output") or tok.startswith("--output=") or (tok.startswith("-o") and not tok.startswith("--") and len(tok) > 2):
+            return True
+    return False
+
+
+def work_files(work: Path) -> "set":
+    """The names of the files directly in an item's work directory, batch's own excepted (the
+    owned*.json snapshots, the owned-report directory, hidden temporaries)."""
+    try:
+        return {p.name for p in work.iterdir()
+                if p.is_file() and not p.name.startswith(".") and not (p.name.startswith("owned") and p.suffix == ".json")}
+    except OSError:
+        return set()
+
+
+def wrote_without_out(i: int, tool: str, path: str, src: Path) -> Dict[str, Any]:
+    """The error of a step that reports an output file while naming no {out}: the batch stops."""
+    written = not STATE.dry_run and os.path.isfile(path)
+    where = (f"this run wrote {path} for {src.name} before stopping and left it there; no later item ran"
+             if written else "nothing was written" + (" (dry run)" if STATE.dry_run else ""))
+    return {"step": i, "tool": tool, "kind": "input", "reason": STEP_WRITES_WITHOUT_OUT,
+            "message": (f"step {i} ({tool}) names no {{out}} but writes {path}, its own default output: the next "
+                        f"step does not read it and the batch does not deliver it; {where}"),
+            "hint": f"give step {i} \"-o\", \"{{out}}\" so its file is the one the next step reads and the batch delivers",
+            "details": {"step": i, "tool": tool, "file": path, "written": written}}
 
 
 def step_writes(step: Any) -> bool:
@@ -240,9 +482,69 @@ def row_output(src: Path, recipe: Dict[str, Any], outdir: Path) -> Dict[str, Any
     return fields
 
 
-def deliver(src: str, final: Path) -> None:
+def own_expected(src: Path, path: "Path | str") -> "Optional[Dict[str, int]]":
+    """The identity this process left `path` with, if it delivered a file there for `src`."""
+    with _OWN_LOCK:
+        return _OWN_OUTPUTS.get(str(src), {}).get(os.path.realpath(str(path)))
+
+
+def is_own_output(src: Path, final: Path) -> bool:
+    """Whether `final` is still the file this process delivered there for `src` (_OWN_OUTPUTS)."""
+    expected = own_expected(src, final)
+    return expected is not None and owned_identity(str(final)) == expected
+
+
+def record_own(src: Path, committed: "Dict[str, Dict[str, int]]", work: Path) -> None:
+    """Remember the files this item delivered, each with the identity it had when it was written
+    (a step's report_committed(), deliver() for the final path), never as it is now: a sidecar
+    edited while a later step ran no longer matches, so the item's next pass refuses it. Paths in
+    the item's work directory go with it and are skipped. Replaces what an earlier pass of the item
+    recorded."""
+    base = os.path.realpath(str(work))
+    mine: Dict[str, Dict[str, int]] = {}
+    for p, ident in committed.items():
+        real = os.path.realpath(p)
+        if real == base or real.startswith(base + os.sep) or not isinstance(ident, dict):
+            continue
+        mine[real] = ident
+    with _OWN_LOCK:
+        _OWN_OUTPUTS[str(src)] = mine
+
+
+def owned_config(src: Path, work: Path, i: int) -> Path:
+    """The file a step reads under runner.OWNED_ENV: a snapshot of what this process delivered for
+    `src`, taken right before the step starts (one file per step, since a step reads it once), and
+    the directory where each of its processes reports the paths it passed the output check for."""
+    report = work / "owned-report"
+    report.mkdir(exist_ok=True)
+    with _OWN_LOCK:
+        replaceable = dict(_OWN_OUTPUTS.get(str(src), {}))
+    cfg = work / f"owned{i}.json"
+    cfg.write_text(json.dumps({"replaceable": replaceable, "report": str(report)}), encoding="utf-8")
+    return cfg
+
+
+def owned_reports(work: Path) -> "Dict[str, Dict[str, int]]":
+    """{path: identity when written} for every file the item's steps reported committing
+    (owned_config's report directory). A path a step was allowed to write but never reported
+    writing is not in it."""
+    found: Dict[str, Dict[str, int]] = {}
+    for f in sorted((work / "owned-report").glob("*.json")) if (work / "owned-report").is_dir() else []:
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        committed = doc.get("committed") if isinstance(doc, dict) else None
+        if isinstance(committed, dict):
+            found.update({p: i for p, i in committed.items() if isinstance(p, str) and isinstance(i, dict)})
+    return found
+
+
+def deliver(src: str, final: Path, expected: "Optional[Dict[str, int]]" = None) -> "Optional[Dict[str, int]]":
     """Move an item's last written intermediate to its final path, under the output guard every
-    tool applies: an existing file is replaced only with --overwrite. A dry run writes nothing."""
+    tool applies: an existing file is replaced only with --overwrite, or when it is still exactly
+    `expected` -- the file this process delivered there on an earlier pass -- checked under the
+    output lock, so a file another process put there since is refused. A dry run writes nothing."""
     if STATE.dry_run:
         # the refusal the real run would meet, as a step writing {out} plans it (#428 review)
         if final.exists() and not STATE.overwrite:
@@ -257,7 +559,7 @@ def deliver(src: str, final: Path) -> None:
     # under the output lock every tool's write holds, so the existence check and the move are one
     # step for another run delivering or writing the same path
     with _OutputLock(str(final), on_locked=locked):
-        if final.exists() and not STATE.overwrite:
+        if final.exists() and not STATE.overwrite and not (expected is not None and owned_identity(str(final)) == expected):
             raise ItemError({"step": None, "tool": None, "kind": "input", "reason": "output_exists",
                              "message": f"refusing to overwrite existing output {str(final)!r}: pass --overwrite to replace it"})
         try:
@@ -265,25 +567,39 @@ def deliver(src: str, final: Path) -> None:
         except OSError:
             # another filesystem: copy beside the final path and rename, so a copy that fails part
             # way never leaves a truncated file where the caller's was
-            import shutil
-            tmp = final.with_name(f".{final.stem}.ffskill-{os.getpid()}-{threading.get_ident()}{final.suffix}")
+            # created exclusively and written through the descriptor that created it: never through
+            # an entry planted at the name, and two threads delivering side by side get two names
+            tmp = None
             try:
-                shutil.copyfile(src, tmp)
+                tmp = copy_to_sibling(str(src), str(final))
                 os.replace(tmp, final)
             except OSError as exc:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+                if tmp:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
                 raise ItemError({"step": None, "tool": None, "kind": "output",
                                  "message": f"could not deliver {src} to {final}: {exc}"})
+        # the delivered file as it was put there, taken under the lock: what a later pass may replace
+        ident = owned_identity(str(final))
     log(f"  delivered the last written file to {final}")
+    return ident
 
 
 def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
             deadline: "Optional[float]" = None) -> Dict[str, Any]:
     final = final_path(src, recipe, outdir)
     t0 = time.time()
+    # replacing this run's own earlier output is decided per path and at the write, never here:
+    # each step gets a snapshot of what this process delivered (runner.OWNED_ENV) and checks every
+    # existing file it would write against it; deliver() checks the final path under its lock
+    track = not STATE.dry_run and not STATE.overwrite
+
+    delivered: Dict[str, Dict[str, int]] = {}
+
+    def owned(i: int) -> "Optional[Path]":
+        return owned_config(src, work, i) if track else None
 
     def budget() -> "Optional[float]":
         """What is left of the BATCH's time limit -- not a fresh one per item. A --timeout is a
@@ -293,26 +609,40 @@ def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
         return max(1.0, deadline - time.monotonic())
     if recipe.get("project"):
         try:
-            proj = json.loads(Path(str(recipe["project"])).read_text(encoding="utf-8"))
+            proj = read_json(str(recipe["project"]))  # too deep is a ValueError too (A20)
         except (OSError, ValueError) as e:
             raise ItemError({"step": None, "tool": "render.py", "kind": "input", "reason": "recipe_project_unreadable",
                              "message": f"recipe.project: {recipe['project']} could not be read as JSON: {e}"})
         if not isinstance(proj, dict):
             raise ItemError({"step": None, "tool": "render.py", "kind": "input", "reason": "recipe_project_unreadable",
                              "message": f"recipe.project: {recipe['project']} is not a JSON object"})
-        idx = int(recipe.get("clip_key", 0))
+        idx = int(recipe.get("clip_key") or 0)  # null is clip 0, as check_recipe_types() reads it
         proj.setdefault("clips", [{}])
         while len(proj["clips"]) <= idx:
             proj["clips"].append({})
+        # the copy is written in the item's work directory, and render.py reads a project's
+        # relative paths against the project file's own directory: they are made absolute
+        # against the recipe's project, or "bed.wav" beside it was looked for in .work/<n>-xxx/
+        proj = rebase_project_paths(proj, Path(str(recipe["project"])).resolve().parent)
         proj["clips"][idx]["src"] = str(src.resolve())
         proj["output"] = str(final.resolve())
         pj = work / "project.json"
         pj.write_text(json.dumps(proj, indent=2), encoding="utf-8")
-        ok, _doc = run_step(["render.py", str(pj)], budget())
+        owned_cfg = owned(0)
+        if not STATE.dry_run:
+            # the render writes the final path itself: a stop while it runs reports a file it left
+            # there as kept, as for a steps recipe's last step (#510 review)
+            with _OWN_LOCK:
+                _WATCHED[str(src)] = (str(final), owned_identity(str(final)))
+        ok, _doc = run_step(["render.py", str(pj)], budget(), owned=owned_cfg)
+        if ok:
+            with _OWN_LOCK:
+                _WATCHED.pop(str(src), None)
         step_docs = [("render", _doc)]
         failure = None if ok else step_error(0, "render.py", _doc)
         cut_reencoded: List[bool] = []
         cut_reasons: List[str] = []
+        cut_possible: List[List[str]] = []
     else:
         steps = recipe.get("steps") or []
         if not steps:
@@ -324,6 +654,7 @@ def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
         cut_reencoded = []
         step_docs = []
         cut_reasons = []
+        cut_possible = []
         for i, step in enumerate(steps):
             last = i == len(steps) - 1
             # the item's directory is its own, so the name needs no stem (a long one overflowed it)
@@ -332,7 +663,19 @@ def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
             # what this one read, and when it is the last, the last file written is delivered (#415)
             writes = step_writes(step)
             argv = [str(a).replace("{in}", cur).replace("{out}", out) for a in step]
-            step_ok, doc = run_step(argv, budget())
+            if last and writes and track and is_own_output(src, final):
+                log(f"  {final.name} is this run's own earlier output, unchanged since: it may be replaced")
+            owned_cfg = owned(i)
+            before = set() if last else work_files(work)
+            if last and writes and not STATE.dry_run:
+                # what is at the final path before the step that writes it: a stop while it runs
+                # reports a file the step left there as kept, not as nothing (#510)
+                with _OWN_LOCK:
+                    _WATCHED[str(src)] = (str(final), owned_identity(str(final)))
+            step_ok, doc = run_step(argv, budget(), owned=owned_cfg)
+            if step_ok:
+                with _OWN_LOCK:
+                    _WATCHED.pop(str(src), None)  # a stopped step's stays for interrupted_row()
             step_docs.append((Path(str(argv[0])).stem if argv else "step", doc))
             # only cut.py's own doc carries `reencoded` -- true if ANY range this call cut (or its
             # --segments join) re-encoded, for the reasons in its `reencode_reason` (distinct per
@@ -341,19 +684,41 @@ def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
             if step_ok and argv and argv[0] == "cut.py" and isinstance(doc, dict) and "reencoded" in doc:
                 cut_reencoded.append(bool(doc["reencoded"]))
                 cut_reasons.extend(r for r in (doc.get("reencode_reason") or []) if isinstance(r, str))
+                # a dry run's planned copy may still re-encode: what each call's plan says (#510 review)
+                cut_possible.append([r for r in (doc.get("possible_reencode_reason") or []) if isinstance(r, str)])
             if not step_ok:
                 ok = False
                 failure = step_error(i, str(argv[0]) if argv else None, doc)
                 break
+            reported = doc.get("output") if isinstance(doc, dict) else None
+            if not writes and isinstance(reported, str) and reported and not names_output(step):
+                # #510: the step wrote (or under --dry-run would write) its own default output, which
+                # the next step does not read and the batch does not deliver: refused, and the batch stops
+                raise ItemError(wrote_without_out(i, str(argv[0]), os.path.abspath(reported), src))
+            if writes and not last:
+                lost = sorted(set(work_files(work)) - before - {os.path.basename(out)})
+                if lost:
+                    # a side file the step wrote beside its intermediate (caption.py's .srt, an .ass):
+                    # the item's work directory goes when the item ends, and it with it (#510)
+                    record_skip(f"{src.name}: step {i} ({argv[0]}) also wrote {', '.join(lost)} beside its intermediate; "
+                                "it is removed with the item's work directory, not delivered (only the last step's "
+                                "side files land beside the output)",
+                                "batch_side_file_not_delivered", file=str(src), step=i, tool=str(argv[0]), files=lost)
             if writes:
                 cur = out
         if ok and cur != str(final) and not writes_nothing(recipe):
             # the last step wrote nothing: the item's deliverable is the last file a step wrote,
             # which is in this item's work directory and would be removed with it (#415)
             try:
-                deliver(cur, final)
+                ident = deliver(cur, final, expected=own_expected(src, final))
+                if ident:
+                    delivered[str(final)] = ident
             except ItemError as exc:
                 ok, failure = False, exc.error
+    if ok and track:
+        # what this item delivered, each file as it was when written: the paths its steps reported
+        # committing (side files included) and the final path deliver() moved into place
+        record_own(src, {**owned_reports(work), **delivered}, work)
     result: Dict[str, Any] = {"file": str(src), **row_output(src, recipe, outdir), "ok": ok, "seconds": round(time.time() - t0, 1)}
     if failure:
         result["error"] = failure
@@ -378,6 +743,8 @@ def process(src: Path, recipe: Dict[str, Any], outdir: Path, work: Path,
     if cut_reencoded:
         result["cut_reencoded"] = cut_reencoded
         result["cut_reencode_reasons"] = cut_reasons
+        if STATE.dry_run:
+            result["cut_possible_reencode_reason"] = cut_possible
     # the encoder each item really ran and its GPU facts (--hw / FFMPEG_SKILL_HW: on VideoToolbox,
     # fell back and why): this process encodes nothing itself, so its top-level hw.used is null
     result.update(steps_encoder_report(step_docs))
@@ -393,11 +760,17 @@ def output_identity(path: str) -> "Optional[Dict[str, int]]":
     return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
 
 
-def cached_output_changed(hit: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
+def cached_output_changed(hit: Dict[str, Any], recipe: "Optional[Dict[str, Any]]" = None) -> "Optional[Dict[str, Any]]":
     """None when the entry's output is still the file this batch wrote; else why it is not served:
-    output_missing, output_changed (size or mtime differ: something replaced or edited it) or
+    output_missing, output_changed (size or mtime differ: something replaced or edited it),
     entry_unverifiable (an entry written by 2.10.11 or earlier recorded no identity, so nothing can say
-    the file is the one it describes)."""
+    the file is the one it describes), or entry_predates_output_check: the recipe has a step that
+    names no {out}, and the entry was stored before such a step's own output was checked (#510), so
+    a step that writes its default output (metadata.py {in}) was cached as one that writes nothing."""
+    steps = (recipe or {}).get("steps") or []
+    if not (recipe or {}).get("project") and any(not step_writes(st) for st in steps) and not hit.get("output_checked"):
+        return {"reason": "entry_predates_output_check", "output": hit.get("output"),
+                "message": "the entry was stored before batch checked what a step naming no {out} writes"}
     if hit.get("written") is False or ("output" in hit and hit["output"] is None):
         return None  # a recipe that writes nothing (check.py over a folder): no file to have changed
     out = str(hit.get("output") or "")
@@ -432,15 +805,19 @@ def main() -> int:
     apply_common(args)
 
     started = time.time()
+    with _OWN_LOCK:
+        _OWN_OUTPUTS.clear()
+        _WATCHED.clear()
     folder = Path(args.folder).resolve()  # relative 'bdir' used to become bdir/bdir/out once joined with the default outdir
     if not folder.is_dir():
         die(f"not a folder: {folder}")
     try:
-        recipe = json.loads(Path(args.recipe).read_text(encoding="utf-8"))
+        recipe = read_json(args.recipe)  # too deep is a ValueError too (A20)
     except (OSError, ValueError) as exc:
-        die(f"cannot read recipe: {exc}")
+        die(f"cannot read recipe: {exc}", kind="input")
     if not isinstance(recipe, dict):
-        die("cannot read recipe: not a JSON object")
+        die("cannot read recipe: not a JSON object", kind="input")
+    check_recipe_types(recipe)
     if recipe.get("project") and not os.path.isabs(recipe["project"]):
         recipe["project"] = str((Path(args.recipe).resolve().parent / recipe["project"]))
     # a recipe error is the same for every item: refuse it once, before any item runs, rather than
@@ -476,10 +853,15 @@ def main() -> int:
     created = [d for d in (outdir, work) if not d.exists()]
     outdir.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
-    if STATE.dry_run and created:
+    # a real run that is refused before any item starts (--jobs, an output collision, a final path
+    # that is an input) leaves nothing behind either (A187, #465: it left out/ and out/.work)
+    item_started = {"item": False}
+    if created:
         import atexit
 
         def _remove_empty_dirs() -> None:
+            if not STATE.dry_run and item_started["item"]:
+                return
             for d in sorted(created, key=lambda p: len(str(p)), reverse=True):
                 try:
                     if not any(d.iterdir()):
@@ -502,7 +884,6 @@ def main() -> int:
             audit("batch_cache_reset", {"path": str(cache_path), "size": size, "error": str(exc)},
                   default_path=str(outdir / ".ffskill-audit.jsonl"))
             cache = {}
-    rkey = recipe_key(recipe) + gpu_key()
     glob = recipe.get("glob") or "*"
 
     # --jobs: every item is itself an ffmpeg that already threads across cores, so beyond a few
@@ -532,6 +913,7 @@ def main() -> int:
     cache_lock = threading.Lock()
     timed_out = {"hit": False}
     interrupted: Dict[str, Any] = {"hit": False, "signal": None}
+    refused: Dict[str, Any] = {"hit": False}  # a step wrote without naming {out}: no later item runs (#510)
     _STOP.clear()
     # Ctrl-C (and SIGTERM where it is delivered) stops the running steps and reports the table:
     # the shared handler would exit with "nothing was written" and no rows, and inside an item it
@@ -539,6 +921,11 @@ def main() -> int:
     import signal as _signal
 
     def _interrupt(signum: int, frame: Any) -> None:
+        if interrupted["signal"] is not None:
+            # a second signal while the first one's stop runs (Ctrl-C reaches the whole group, and a
+            # parent then sends SIGTERM): raising again broke into the stop or the table, and the
+            # exit code became the second signal's (#510 review; runner._on_signal() does the same)
+            return
         interrupted["signal"] = signum
         _STOP.set()
         stop_children()
@@ -551,8 +938,43 @@ def main() -> int:
                 except (ValueError, OSError):
                     pass
 
+    # --watch: each source's (size, mtime_ns) at the previous poll. A folder files are copied,
+    # downloaded or recorded into is read while they grow: a file processed mid-copy delivered a
+    # fraction of itself as ok (verified, for an MKV or TS), and once it settled every later pass
+    # met that output as someone else's and refused it. A source is processed once it is
+    # unchanged across one poll interval -- the same size and mtime as at the previous poll, or,
+    # first seen, last modified at least one interval ago; until then its row is
+    # skipped: "settling", not cached, and the next pass looks again.
+    last_seen: Dict[str, "tuple[int, int]"] = {}
+    shown_empty = {"done": False}
+
+    def settle_poll(files: List[Path]) -> "set":
+        if not args.watch:
+            return set()
+        unsettled = set()
+        now = time.time()
+        current: Dict[str, "tuple[int, int]"] = {}
+        for src in files:
+            try:
+                st = src.stat()
+            except OSError:
+                continue  # gone since the scan: file_key() reports it as before
+            sig = (st.st_size, st.st_mtime_ns)
+            current[str(src)] = sig
+            before = last_seen.get(str(src))
+            if (before != sig) if before is not None else (now - st.st_mtime < args.watch):
+                unsettled.add(str(src))
+        last_seen.clear()
+        last_seen.update(current)
+        return unsettled
+
     def one_pass() -> List[Dict[str, Any]]:
-        files = sorted(p for p in folder.glob(glob) if p.is_file() and p.suffix.lower() in MEDIA_EXT and outdir not in p.parents)
+        files = sorted(p for p in folder.glob(caseless_glob(glob)) if p.is_file() and p.suffix.lower() in MEDIA_EXT and outdir not in p.parents)
+        if not files and not shown_empty["done"]:
+            # a batch of nothing completed with total 0 and not a word (A82): say what matched nothing
+            shown_empty["done"] = True
+            note(f"no media file in {folder} matches the recipe's glob {glob!r} (matched without regard to case); "
+                 "nothing was processed")
         # Two different sources can compute the same final path (most often a fixed recipe "ext"
         # collapsing e.g. clip.mp4 and clip.mov to the same clip_out.mp4) -- catch that before
         # processing anything, rather than letting the later one silently overwrite the earlier
@@ -593,14 +1015,26 @@ def main() -> int:
         def run_item(i: int, src: Path) -> Dict[str, Any]:
             """process() in the item's own work directory, which goes when it ends, however it ends."""
             import shutil
+            item_started["item"] = True
             iw = item_work(i, src)
             try:
                 return process(src, recipe, outdir, iw, deadline)
             finally:
                 shutil.rmtree(iw, ignore_errors=True)
 
-        def store(key: str, r: Dict[str, Any]) -> None:
-            if not (r["ok"] and not STATE.dry_run):
+        def store(key: "Optional[str]", r: Dict[str, Any]) -> None:
+            if not key or not (r["ok"] and not STATE.dry_run):
+                return
+            # the key was made before the item ran: a source or side input edited while it waited
+            # or ran made an output the key does not describe, and a later restore of the old file
+            # would have served it (#510 review). Made again here; not stored when it changed
+            try:
+                now = item_key(Path(r["file"]))
+            except OSError:
+                now = None
+            if now != key:
+                record_skip(f"{Path(r['file']).name}: its source or a side input changed while it was processed, so its "
+                            "output is not cached (the next run makes it again)", "batch_cache_inputs_changed", file=r["file"])
                 return
             # The read-modify-write of the in-memory dict needs the lock even though the file
             # write is already atomic: two finishers could otherwise serialise from two different
@@ -611,7 +1045,8 @@ def main() -> int:
                 for stale in [k for k, v in cache.items() if r["output"] and r.get("written", True) and k != key and isinstance(v, dict) and v.get("output") == r["output"]]:
                     del cache[stale]
                 # the output as this run left it: a later hit is served only while it is unchanged
-                cache[key] = dict(r, output_identity=output_identity(r["output"]) if r["output"] and r.get("written", True) else None)
+                cache[key] = dict(r, output_identity=output_identity(r["output"]) if r["output"] and r.get("written", True) else None,
+                                  output_checked=True)  # every step's own output was checked (#510): see cached_output_changed()
                 # write_text isn't atomic -- a process killed mid-write (or a --watch loop racing
                 # a concurrent manual run) could leave a truncated file that json.loads() above
                 # then silently treats as "no cache" (a ValueError -> {}), discarding every prior
@@ -629,15 +1064,42 @@ def main() -> int:
         slots: "List[Optional[Dict[str, Any]]]" = [None] * len(files)
         pending: List[tuple] = []
         cache_miss: Dict[int, Dict[str, Any]] = {}
-        pass_key = rkey + side_inputs_key(recipe)
+        # read on every pass: a --watch loop serves nothing from an edited project.json, cue file or
+        # music bed (computed once before the loop, it did: A81)
+        pass_key = recipe_key(recipe) + gpu_key() + side_inputs_key(recipe)
+
+        def item_key(src: Path) -> "Optional[str]":
+            """The cache key of one item as its files are now: file_key(src), the recipe, the GPU
+            setting and the side inputs (literal and per item); None when one cannot be keyed.
+            Recomputed by store(), so the side inputs are read again then (pass_key's included)."""
+            per, why = item_side_inputs_key(recipe, src)
+            if why:
+                return None
+            base = recipe_key(recipe) + gpu_key() + side_inputs_key(recipe)
+            return f"{file_key(src)}:{base}" + (":" + per if per else "")
+        polled = settle_poll(files)
         for i, src in enumerate(files):
+            if str(src) in polled:
+                info(f"skip (still being written) {src.name}: it changed since the last poll")
+                slots[i] = {"file": str(src), **row_output(src, recipe, outdir), "ok": False, "verified": False,
+                            "seconds": 0.0, "skipped": "settling"}
+                continue
             key = f"{file_key(src)}:{pass_key}"
+            per_item, unkeyed = item_side_inputs_key(recipe, src)
+            if unkeyed:
+                # nothing can say the cached output still matches its side input: run it, unstored
+                cache_miss[i] = unkeyed
+                info(f"{src.name}: {unkeyed['message']}")
+                pending.append((i, src, None))
+                continue
+            if per_item:
+                key += ":" + per_item
             hit = cache.get(key)
             if isinstance(hit, dict) and not args.force:
-                why = cached_output_changed(hit)
+                why = cached_output_changed(hit, recipe)
                 if why is None:
                     info(f"skip (cached) {src.name}")
-                    slots[i] = {**{k: v for k, v in hit.items() if k != "output_identity"}, "cached": True}
+                    slots[i] = {**{k: v for k, v in hit.items() if k not in ("output_identity", "output_checked")}, "cached": True}
                     continue
                 cache_miss[i] = why
                 facts = {k: v for k, v in why.items() if k not in ("reason", "message")}
@@ -679,11 +1141,25 @@ def main() -> int:
             row.update(ok=False, verified=False)
             if started:
                 row["interrupted"] = True
+                with _OWN_LOCK:
+                    watched = _WATCHED.pop(str(src), None)
+                if watched and owned_identity(watched[0]) not in (None, watched[1]):
+                    # the stopped step had written the final file (export.py's --normalize pass keeps
+                    # its encode): it is there, unverified, without the step that was stopped (#510)
+                    row["kept"] = watched[0]
                 row.setdefault("error", {"step": None, "tool": None, "kind": "interrupted",
                                          "message": "interrupted while this item was running; its running step was stopped"})
             else:
                 row["skipped"] = "interrupted"
             return row
+
+        def refused_row(src: Path) -> "Dict[str, Any]":
+            """An item not started because an earlier one's step wrote a file without naming {out}."""
+            return {"file": str(src), **row_output(src, recipe, outdir), "ok": False, "verified": False,
+                    "seconds": 0.0, "skipped": "recipe_refused"}
+
+        def is_refusal(r: "Optional[Dict[str, Any]]") -> bool:
+            return bool(r) and ((r or {}).get("error") or {}).get("reason") == STEP_WRITES_WITHOUT_OUT
 
         def with_miss(i: int, r: Dict[str, Any]) -> Dict[str, Any]:
             if i in cache_miss:
@@ -709,6 +1185,11 @@ def main() -> int:
                     if isinstance(exc, SystemExit) and not exc.code:
                         raise
                     slots[i] = with_miss(i, failed_row(src, exc))
+                    if is_refusal(slots[i]):
+                        refused["hit"] = True
+                        for j, later, _k in pending[n + 1:]:
+                            slots[j] = refused_row(later)
+                        break
                     continue
                 slots[i] = with_miss(i, r)
                 store(key, r)
@@ -740,7 +1221,7 @@ def main() -> int:
                 # list up front would put every item past the deadline check before the first one
                 # had finished, and the shared budget could then never stop anything.
                 while queue or in_flight:
-                    while queue and len(in_flight) < jobs:
+                    while queue and len(in_flight) < jobs and not refused["hit"]:
                         if deadline is not None and time.monotonic() >= deadline:
                             break
                         i, src, key = queue.pop(0)
@@ -759,8 +1240,10 @@ def main() -> int:
                         except BaseException as exc:    # noqa: BLE001 - reported, never swallowed
                             slots[i] = failed_row(src, exc)
                             lines[i] = [f"=== {src.name}", f"    failed: {exc}"]
+                        if is_refusal(slots[i]):
+                            refused["hit"] = True  # the items in flight finish; none is started after
                 for i, src, key in queue:
-                    slots[i] = timed_out_row(src)
+                    slots[i] = refused_row(src) if refused["hit"] else timed_out_row(src)
             except KeyboardInterrupt:
                 # Spec 4.1: cancel what has not started, stop the running steps (the handler
                 # already did), and REPORT every item -- exit 130 with the table, never a
@@ -791,7 +1274,7 @@ def main() -> int:
         return [r for r in slots if r is not None]
 
     results = one_pass()
-    if args.watch:
+    if args.watch and not refused["hit"]:
         info(f"watching {folder} every {args.watch:g}s (Ctrl-C to stop)")
         # the shared SIGINT handler (install_signal_handlers) exits 130 with "nothing was written",
         # which is wrong for a watch that already processed files: while idle between passes,
@@ -805,7 +1288,7 @@ def main() -> int:
                 finally:
                     signal.signal(signal.SIGINT, previous)
                 results = one_pass()
-                if interrupted["hit"]:
+                if interrupted["hit"] or refused["hit"]:
                     break  # the pass reported its rows; a watch interrupted mid-pass stops here
         except KeyboardInterrupt:
             info("watch stopped")
@@ -824,11 +1307,27 @@ def main() -> int:
         # finished, interrupted while running, or not started.
         stopped = sum(1 for r in results if r.get("interrupted"))
         not_started = sum(1 for r in results if r.get("skipped") == "interrupted")
+        kept = [r["kept"] for r in results if r.get("kept")]
         die(f"interrupted after {done} of {len(results)} item(s): {stopped} stopped while running and "
-            f"{not_started} not started; the finished outputs are kept",
+            f"{not_started} not started; the finished outputs are kept"
+            + ((f", and {', '.join(kept)} " + ("was written by a step that was stopped and is" if len(kept) == 1 else
+                                              "were written by steps that were stopped and are") + " kept, unverified")
+               if kept else ""),
             code=128 + int(interrupted["signal"] or 2), kind="interrupted", output=None, dry_run=STATE.dry_run, results=results,
             processed=done, total=len(results), jobs=jobs, jobs_requested=requested,
             timed_out=timed_out["hit"])
+    if refused["hit"]:
+        rows = [r for r in results if ((r.get("error") or {}).get("reason")) == STEP_WRITES_WITHOUT_OUT]
+        first = rows[0]["error"]
+        files = [r["error"]["details"]["file"] for r in rows]
+        written = [f for r, f in zip(rows, files) if r["error"]["details"].get("written")]
+        not_run = sum(1 for r in results if r.get("skipped") == "recipe_refused")
+        die(first["message"] + (f" ({len(rows)} items in flight wrote one each: {', '.join(written)})" if len(written) > 1 else "")
+            + (f"; {not_run} item(s) not started" if not_run else ""),
+            kind="input", hint=first.get("hint"), output=None, dry_run=STATE.dry_run, results=results,
+            processed=done, total=len(results),
+            error_extra={"reason": STEP_WRITES_WITHOUT_OUT,
+                         "details": dict(first["details"], files=files, written_files=written, not_started=not_run)})
     if timed_out["hit"]:
         skipped = [r["file"] for r in results if r.get("skipped") == "timeout"]
         die(f"the batch's {STATE.timeout:g} s budget ran out with {len(skipped)} item(s) not "
@@ -840,7 +1339,9 @@ def main() -> int:
             timed_out=True)
     if done != len(results):
         failed_files = [r["file"] for r in results if not r["ok"]]
-        die(f"{len(results) - done} of {len(results)} items failed: {', '.join(failed_files[:5])}" + (" ..." if len(failed_files) > 5 else ""),
+        settling = sum(1 for r in results if r.get("skipped") == "settling")
+        die(f"{len(results) - done} of {len(results)} items failed: {', '.join(failed_files[:5])}" + (" ..." if len(failed_files) > 5 else "")
+            + (f" ({settling} of them still being written when the watch stopped, skipped: settling, not processed)" if settling else ""),
             kind="verification", output=None, dry_run=STATE.dry_run, results=results, processed=done, total=len(results))
     # cut.py's own `reencoded`, rolled up across every cut.py step this batch ran: how much of the
     # folder landed on the fast lossless path (mode "copy") vs re-encoded on at least one range.
@@ -867,14 +1368,36 @@ def main() -> int:
             for r in res.get("cut_reencode_reasons") or []:
                 reasons[r] = reasons.get(r, 0) + 1
         why = (" (reencode_reason: " + ", ".join(f"{k} x{v}" for k, v in reasons.items()) + ")") if reasons else ""
-        info(f"cut.py: {copied}/{len(all_cuts)} call(s) stayed fully lossless stream-copy "
-             f"({cut_summary['stream_copy_rate']:.0%}), {len(all_cuts) - copied} re-encoded a range or its --segments join{why}")
+        if STATE.dry_run:
+            # a dry run's counts are cut.py's plans: a planned copy may still re-encode in a real run,
+            # which measures where it lands (cut.py's possible_reencode_reason, #510). A row a real
+            # run serves from the cache is served here too (cached: true, as that run reports it),
+            # and its calls are what the run that stored it measured, not plans: said apart (#540)
+            planned = [r for res in results if not res.get("cached") for r in (res.get("cut_reencoded") or [])]
+            stored = [r for res in results if res.get("cached") for r in (res.get("cut_reencoded") or [])]
+            parts = []
+            if planned:
+                p_copied = sum(1 for r in planned if not r)
+                parts.append(f"{p_copied}/{len(planned)} call(s) planned as a lossless stream copy "
+                             f"({p_copied / len(planned):.0%}), which a real run may still re-encode (each planned row's "
+                             f"cut_possible_reencode_reason); {len(planned) - p_copied} planned to re-encode a range or its --segments join")
+            if stored:
+                s_copied = sum(1 for r in stored if not r)
+                parts.append(f"{len(stored)} call(s) in rows a real run serves from the cache (cached: true), as the run that "
+                             f"stored them measured: {s_copied} stayed lossless stream-copy, {len(stored) - s_copied} re-encoded")
+            info("cut.py: " + "; ".join(parts) + why)
+        else:
+            info(f"cut.py: {copied}/{len(all_cuts)} call(s) stayed fully lossless stream-copy "
+                 f"({cut_summary['stream_copy_rate']:.0%}), {len(all_cuts) - copied} re-encoded a range or its --segments join{why}")
     unverified = [shown(os.path.basename(r["file"])) for r in results if r.get("ok") and not r.get("verified")]
     if unverified and not STATE.dry_run:
         note(f"{len(unverified)} item(s) completed but did not verify everything they wrote (see each row's unverified): "
              + ", ".join(unverified[:5]) + (" ..." if len(unverified) > 5 else ""))
+    # A successful watch summary is printed after Ctrl-C between passes. Keep the completed
+    # item results without starting another round of probes after the user asked to stop.
     emit(None, verification=[{"step": "item", "file": r["file"], "ok": bool(r.get("verified"))} for r in results]
          if not STATE.dry_run else [],
+         verification_paths=[] if args.watch else [r["file"] if r.get("written") is False else r["output"] for r in results],
          results=results, processed=done, total=len(results),
          jobs=jobs, jobs_requested=requested, wall_seconds=round(time.time() - started, 1),
          item_seconds_total=round(sum(float(r.get("seconds") or 0) for r in results), 1),

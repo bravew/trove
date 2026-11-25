@@ -34,26 +34,33 @@ import sys
 from typing import List, Optional, Tuple
 
 from _platforms import PLATFORMS, PLATFORM_CHOICES, safe_margins_px, resolve as resolve_platform
-from _common import (guard_sidecar, require_filter, aac_args, add_common, brand_caption_style, script_font_for_text, apply_common, cfr_args,
+from _common.emoji import emoji_missing_asset_note, emoji_mono_on_colour_note
+from _common.drawtext import shaping_refusal
+from _common import (guard_sidecar, refuse_output_is_input, require_filter, aac_args, add_common, brand_caption_style, script_font_for_text, apply_common, cfr_args, cfr_at_input, with_cfr,
                      color_hex, default_output, die, draws_chroma, drawn_chain, emit, escape_drawtext, escape_filter_path,
-                     ffmpeg_base, info, layer_base_chain, load_brand, parse_time, probe, rgb_chain_to_bt709, run, run_keeping_subtitles, video_args,
+                     ffmpeg_base, info, layer_base_chain, load_brand, overlay_format, probe, rgb_chain_to_bt709, run_keeping_subtitles, video_args,
                      drawtext_boxborderw, drawtext_center_align, X264_PRESETS, time_arg, fmt_secs, STATE, drawtext_text_opts,
                      LANGUAGE_NAMES, needs_shaping, detect_script, BIDI_SCRIPTS, font_family_of_file, font_family_for_script, has_emoji,
                      emoji_clusters, emoji_codepoint_name, char_script, emoji_filter_chain, emoji_asset_for, emoji_support, resolve_emoji_assets,
-                     EMOJI_ASSET_HINT, text_width_em, drawtext_shaping, wrap_text, WRAP_MODES,
+                     EMOJI_ASSET_HINT, text_width_em, wrap_text, WRAP_MODES,
                      SAFE_WIDTH_FRACTION, drawtext_draws_newline_glyph, is_multiline, _DRAWTEXT_PENDING)
 from _common.emit import note, warn
 from _common.alpha import (add_alpha_args, audio_line, check_alpha_args, decoder_args_for, default_ext, finish_chain,
-                           report as alpha_report, source_alpha, tag_args, video_line)
-from _common.fonts import font_choice, record_font_choice
+                           report as alpha_report, source_alpha, source_format, tag_args, video_line)
+from _common.fonts import font_choice, record_font_choice, require_font_file
 from _common.probe import display_size, square_pixels, square_pixels_note
 from _ass_overlay import text_overlay_ass, EMOJI_SENTINEL
 from _common import drawtext_fontfile  # noqa: E402
+from _common.decision import window_expr, windowed_overlay_x  # noqa: E402
+from _common.emit import input_length  # noqa: E402
 
 # where the template's text chain goes in a filter_complex it builds (graphics.main fills it in)
 TEXT = "@TEXT@"
 BOX = "@BOX@"  # a box's place in the filter chain, followed by its index (graphics.main fill_box)
 TEMPLATES = ["lower-third", "title", "chapter", "progress", "countdown", "bug", "sticker", "hook", "meme"]
+# --dry-run on an input that does not exist yet, with no --end: how long after --start the planned
+# graphic ends (its length is unknown; the plan says so in a note)
+PENDING_PLACEHOLDER_SECONDS = 10.0
 
 
 def ff_color(hex_rgb: str, alpha: float = 1.0) -> str:
@@ -82,7 +89,7 @@ def main(force_route: Optional[str] = None) -> int:
                      help="which audio stream of the input to keep, 0-based in file order (probe.py lists them under "
                           "audio_streams) -- matters on a multi-track input (dubbed languages, M&E stems); default 0, "
                           "the first track, same as leaving it unset always did")
-    ap.add_argument("--template", choices=TEMPLATES, required=True)
+    ap.add_argument("--template", choices=TEMPLATES, required=True, help="graphic to draw: " + ", ".join(TEMPLATES))
     ap.add_argument("--brand", help="brand.json for colours, font, safe margin")
     ap.add_argument("--name", help="lower-third: name line")
     ap.add_argument("--title", help="title / chapter / bug / hook text, or lower-third second line")
@@ -91,7 +98,7 @@ def main(force_route: Optional[str] = None) -> int:
     ap.add_argument("--bottom", help="meme: lower line")
     ap.add_argument("--duration", type=float, default=3.0, help="hook: seconds the opening card stays up (default 3)")
     ap.add_argument("--subtitle", help="title: smaller second line")
-    ap.add_argument("--from", dest="count_from", type=int, default=5, help="countdown start number (default 5)")
+    ap.add_argument("--from", dest="count_from", type=int, default=5, help="countdown start number, 0..600 (default 5)")
     ap.add_argument("--start", help="show from (default 0)")
     ap.add_argument("--end", help="hide after (default end of clip)")
     ap.add_argument("--position", choices=["top-left", "top-right", "bottom-left", "bottom-right"], default=None, help="corner for chapter/bug/sticker (default bottom-left / top-right / top-right)")
@@ -101,8 +108,8 @@ def main(force_route: Optional[str] = None) -> int:
                          "(TikTok's description bar and like column, the Reels/Shorts chrome). An explicit --margin wins")
     ap.add_argument("--primary", help="override brand primary colour RRGGBB")
     ap.add_argument("--text-color", help="override text colour RRGGBB")
-    ap.add_argument("--font")
-    ap.add_argument("--font-file")
+    ap.add_argument("--font", help="font family (fontconfig name; default DejaVu Sans, or the --brand file's font)")
+    ap.add_argument("--font-file", help="explicit .ttf/.otf/.ttc path (use this for CJK fonts)")
     ap.add_argument("--lang", help="language code of the text (e.g. ja, zh, ko): the hint that says whether Han-only "
                                    "text is Chinese, Japanese or Korean when a font is picked by script")
     ap.add_argument("--scale", type=float, default=1.0, help="size multiplier (default 1)")
@@ -131,11 +138,15 @@ def main(force_route: Optional[str] = None) -> int:
                      help="emoji box as a multiple of the line's font size (default 1.0)")
     emo.add_argument("--emoji-max", type=int, default=60, help="most emoji overlays one run may build (default 60)")
     ap.set_defaults(crf=18)  # --quality's default (the --crf alias was removed in 2.0)
-    ap.add_argument("--preset", default="medium", choices=X264_PRESETS)
+    ap.add_argument("--preset", default="medium", choices=X264_PRESETS, help="x264 preset")
     add_alpha_args(ap)
     add_common(ap)
     args = ap.parse_args()
     apply_common(args)
+    # A176: --from -1 divided by zero (a traceback, no JSON); --from -3 built an empty filter
+    # graph and --scale 0 or below a 0-px or negative box, both refused by ffmpeg (kind ffmpeg)
+    if args.scale <= 0:
+        die(f"--scale must be more than 0 (a size multiplier; 1 is the template's own size), got {args.scale:g}")
     # 2.2.6: whitespace-only text is no text -- stripped before the "needs --title" checks, which
     # used to pass on "  " and burn an empty bar
     for _attr in ("name", "title", "subtitle", "text", "top", "bottom"):
@@ -162,6 +173,9 @@ def main(force_route: Optional[str] = None) -> int:
     if args.brand and style.get("color") and not args.text_color:
         text_c = color_hex(style["color"])
     args.lang = args.lang or (brand.get("lang") if args.brand else None)
+    # checked where text is drawn with it: the progress template draws a bar only (review of #532)
+    if args.template != "progress" and (args.font_file or brand.get("font_file")):
+        require_font_file(args.font_file or brand["font_file"], "--font-file" if args.font_file else "the --brand file's font_file")
     # a font that covers the text before drawtext renders boxes instead of glyphs (1.12)
     _script, script_file, _family = script_font_for_text(
         " ".join(t for t in (args.name, args.title, args.subtitle, args.text, args.top, args.bottom) if t),
@@ -201,10 +215,28 @@ def main(force_route: Optional[str] = None) -> int:
         info(f"--platform {args.platform}: safe margins top {m_top} / bottom {m_bottom} / left {m_left} / right {m_right} px")
     fps = meta["video"].get("fps")
     s = time_arg(args.start, "--start", fps) if args.start else 0.0
-    e = time_arg(args.end, "--end", fps) if args.end else dur
+    if args.end:
+        e = time_arg(args.end, "--end", fps)
+    elif meta.get("dry_run"):
+        # #466 A202: an input an earlier --dry-run stage would write is probe()'s stub, whose
+        # length is unknown, not 0 s: planning to "the clip's end" refused with "--end must be
+        # after --start". The plan ends the graphic at a stated placeholder instead
+        e = s + PENDING_PLACEHOLDER_SECONDS
+        note(f"{args.input} does not exist yet, so its length is unknown: the planned graphic ends at a placeholder "
+             f"{e:g} s; a real run ends it at the clip's end (or pass --end)")
+    else:
+        e = input_length(meta)  # no --end is the clip's end (#491)
+    # the picture's own length first: sound that runs on keeps the container open past the last frame
+    picture_len = meta["video"].get("duration") or dur
+    if picture_len and s >= picture_len:
+        # A172: a graphic that starts after the picture ends draws nothing (verified: true before)
+        die(f"--start {s:g} is at or after the end of the video ({picture_len:.3f} s): nothing would be drawn",
+            hint="give a --start inside the clip")
     if e <= s:
         die("--end must be after --start")
-    en = f"enable='between(t,{s:.3f},{e:.3f})'"
+    # the window's bounds sit half a frame from the frames they select (window_expr): `{:.3f}`
+    # put the frame at 1.234567 s of a 30000/1001 picture after a --start of "1.235"
+    en = f"enable='{window_expr(s, e, meta)}'"
     base = min(W, H) * args.scale  # scale everything from the short side
     filters: List[str] = []
     rate = f"{meta['video'].get('fps') or 30:g}"
@@ -225,6 +257,12 @@ def main(force_route: Optional[str] = None) -> int:
         filters.append(f"{BOX}{len(boxes)}")
         boxes.append((colour, alpha, drawbox_geo, x, y, w, h, enable, x_expr))
 
+    def layer_at(x, y, enable: str) -> str:
+        """An overlay's `x=...:y=...` for a layer shown inside `enable`'s window: the window is in
+        the layer's position, which is evaluated on the picture's frames, where overlay's own
+        enable is evaluated on the layer's frames too (windowed_overlay_x)."""
+        return f"x={windowed_overlay_x(str(x).strip(chr(39)), enable[len('enable='):].strip(chr(39)))}:y={y}"
+
     def layer_src(colour: str, alpha: float, w: int, h: int, left: int = 0, top: int = 0) -> str:
         """A colour source to overlay (a box, the lower-third bar, the progress fill), converted when it
         has chroma. overlay places a 4:2:0 picture on even rows and columns only: a box that starts on
@@ -236,7 +274,20 @@ def main(force_route: Optional[str] = None) -> int:
         edge = f",pad={w + left}:{h + top}:{left}:{top}:color=black@0" if left or top else ""
         return (f"color=c=0x{colour}" + (f"@{alpha:g}" if alpha < 1 else "") + f":s={w}x{h}:r={rate},format=rgba"
                 + edge + conv)
-    fade_a = f"if(lt(t,{s:.3f}+0.3),(t-{s:.3f})/0.3,if(gt(t,{e:.3f}-0.3),({e:.3f}-t)/0.3,1))"
+    # Every template fades its text in and out over 0.3 s, cut to half the window when the window
+    # is shorter than the two together (#539): with a fixed 0.3 s a window under 0.3 s never
+    # reached its fade-out and vanished part way up, and one between 0.3 and 0.6 s jumped down in
+    # brightness where the fade-out took over, on drawtext and on the ASS route (\fad) alike. The
+    # emoji PNGs ride the same envelope (emoji_overlays below), as overlay.py cuts its fade-out.
+    fade_s = min(0.3, (e - s) / 2.0)
+    fade_ms = (round(fade_s * 1000), round(fade_s * 1000))
+    # Held in 0..1 for every t: the window selects frames by their own times, half a frame either
+    # side, so a frame a hair before --start (1.234567 s for "1.235" at 30000/1001) gave a
+    # negative alpha. FFmpeg 6.1.1 draws nothing for it; FFmpeg 9.0.2 drew the window's first
+    # frame far brighter than any other in #554's CI (drawtext only, one window; the cause was not
+    # established there, and no FFmpeg 9 was run here)
+    fade_a = (f"max(0,min(1,if(lt(t,{s:.3f}+{fade_s:g}),(t-{s:.3f})/{fade_s:g},"
+              f"if(gt(t,{e:.3f}-{fade_s:g}),({e:.3f}-t)/{fade_s:g},1))))")
 
     # --- which renderer draws the text (1.15) --------------------------------------------------
     # drawtext does bidi and Arabic joining on a fribidi build, but it never reorders or
@@ -262,8 +313,7 @@ def main(force_route: Optional[str] = None) -> int:
                 f"({support['detail']}), so they would come out as empty boxes -- pass --emoji-assets DIR "
                 "for colour, or --emoji none", kind="input")
     if args.text_render == "drawtext" and shaping:
-        die(f"{LANGUAGE_NAMES.get(_script, _script)} text cannot be shaped by drawtext on any ffmpeg "
-            "build (the marks are reordered by harfbuzz, which drawtext does not use): drop "
+        die(f"{LANGUAGE_NAMES.get(_script, _script)} text {shaping_refusal(_script)}: drop "
             "--text-render drawtext to render it through libass, or draw it with caption.py",
             kind="input")
     route = "ass" if (args.text_render == "ass" or
@@ -275,14 +325,26 @@ def main(force_route: Optional[str] = None) -> int:
     # mode "mono" from the drawtext route is a claim the frame does not keep. libass DOES have a
     # fallback chain, so an auto run routes there instead; a run that pinned --text-render
     # drawtext degrades to "none" (strip) and says so rather than drawing tofu.
-    if emoji_mode == "mono" and route == "drawtext":
+    # "color" as much as "mono" (#403): an auto run on a build whose libass draws colour reported
+    # mode color from the drawtext route, which drew the empty box.
+    emoji_count = len(emoji_clusters(all_text))
+    emoji_names = sorted({emoji_codepoint_name(cl) for _i, cl in emoji_clusters(all_text)})
+    not_drawn = None
+    mono_in_colour = emoji_mode == "mono" and args.emoji == "mono" and bool(support.get("libass_color"))
+    if mono_in_colour:
+        emoji_mode = "color"
+    if emoji_mode in ("mono", "color") and route == "drawtext":
         if args.text_render == "auto":
             route = "ass"
         else:
             emoji_mode = "none"
-            info("emoji: --text-render drawtext has no font fallback chain, so the cluster would "
-                 "be drawn as an empty box -- stripped from the text instead "
-                 "(--text-render auto renders it monochrome through libass)")
+            not_drawn = "--text-render drawtext has no font fallback chain, so each would be an empty box (--text-render auto draws them through libass)"
+    elif emoji_mode == "none" and args.emoji == "auto":
+        not_drawn = ("libass draws no emoji glyph on this build (an empty box at best)"
+                     if support.get("libass_glyph") is False else "no face here draws them")
+    if mono_in_colour and emoji_mode == "color":
+        # said once the route is final: a pinned drawtext route strips them instead (mode none)
+        warn(emoji_mono_on_colour_note(support), "emoji_mono_drawn_in_colour")
     if emoji_mode == "mono":
         warn("emoji rendered monochrome (no colour path on this ffmpeg; "
              "--emoji-assets DIR for colour). " + support["detail"], "emoji_monochrome")
@@ -303,7 +365,13 @@ def main(force_route: Optional[str] = None) -> int:
             setattr(args, _attr, _strip_emoji(getattr(args, _attr, None)))
         all_text = " ".join(t for t in (args.name, args.title, args.subtitle, args.text,
                                         args.top, args.bottom) if t)
-        info("emoji: stripped from the drawn text (--emoji none)")
+        if not_drawn:
+            # an auto or rerouted run did not get --emoji none: it says what it left out and why,
+            # as caption.py does (emoji_not_drawn), and counts what it left out
+            warn(f"emoji: {emoji_count} left out of the drawn text: {not_drawn} -- pass --emoji-assets DIR to draw them as PNGs",
+                 "emoji_not_drawn", count=emoji_count, reason=support.get("detail"))
+        else:
+            info("emoji: stripped from the drawn text (--emoji none)")
     elements: List[dict] = []
 
     def ass_font_family() -> "Optional[str]":
@@ -375,7 +443,6 @@ def main(force_route: Optional[str] = None) -> int:
         el["text"] = text
         elements.append(el)
 
-    extra_inputs: List[str] = []
     fc: List[str] = []  # filter_complex chains (used by templates that need animated boxes)
     if 0 < min(W, H) < 64:  # 0x0 is a dry-run probe of an intermediate that does not exist yet
         die(f"the frame is {W}x{H}; the templates are sized from it and need at least 64 px on the short side")
@@ -401,12 +468,23 @@ def main(force_route: Optional[str] = None) -> int:
         # it did)
         bar_w = max(1, min(room, max(int(base * 0.62), int(widest + 0.999) + 2 * tx_pad)))
         y0 = H - m_bottom - bar_h
-        # slide in from the left over 0.4 s, slide out over 0.3 s (overlay evaluates x per frame)
-        x_expr = f"if(lt(t,{s:.3f}+0.4),-{bar_w}+({bar_w}+{m_left})*((t-{s:.3f})/0.4),if(gt(t,{e:.3f}-0.3),{m_left}-({bar_w}+{m_left})*(1-({e:.3f}-t)/0.3),{m_left}))"
+        # slide in from the left over 0.4 s, slide out over 0.3 s (overlay evaluates x per frame);
+        # a window shorter than the two together shares itself between them 4:3, so the bar still
+        # ends off the frame and does not jump where the slide-out takes over (#539)
+        in_s, out_s = min(0.4, (e - s) * 4 / 7), min(0.3, (e - s) * 3 / 7)
+        if in_s + out_s >= e - s:
+            # the two meet at one instant, which the ASS route writes in centiseconds: put it on
+            # one for both routes, or the text's slide-out started up to 5 ms before the bar's
+            # and sat ahead of it for the whole exit (11 px at 640 px wide, 60 fps; #554 review)
+            meet = round((s + in_s) * 100) / 100
+            if s < meet < e:
+                in_s, out_s = meet - s, e - meet
+        x_expr = (f"if(lt(t,{s:.3f}+{in_s:g}),-{bar_w}+({bar_w}+{m_left})*((t-{s:.3f})/{in_s:g}),"
+                  f"if(gt(t,{e:.3f}-{out_s:g}),{m_left}-({bar_w}+{m_left})*(1-({e:.3f}-t)/{out_s:g}),{m_left}))")
         fc.append(f"{layer_src(bg, 0.85, bar_w, bar_h)}[bar]")
         fc.append(f"{layer_src(primary, 1.0, int(base * 0.012), bar_h)}[acc]")
-        fc.append(f"[0:v][bar]overlay=x='{x_expr}':y={y0}:{en}:eof_action=pass[v1]")
-        fc.append(f"[v1][acc]overlay=x='{x_expr}':y={y0}:{en}:eof_action=pass[v2]")
+        fc.append(f"[0:v][bar]overlay={layer_at(x_expr, y0, en)}:eof_action=pass[v1]")
+        fc.append(f"[v1][acc]overlay={layer_at(x_expr, y0, en)}:eof_action=pass[v2]")
         tx = f"({x_expr})+{tx_pad}"
         x_rest, x_off = m_left + tx_pad, -bar_w + tx_pad
         draws = []
@@ -420,16 +498,20 @@ def main(force_route: Optional[str] = None) -> int:
                 # the same three phases the bar itself slides through, as \move Dialogues
                 elements.append(dict(text=text, size=fs, color=colour, font=ass_font_family(),
                                      align=7, x=x_rest, y=ty, outline=max(1.0, fs / 16.0),
-                                     outline_color="000000", start=s, end=min(e, s + 0.4),
-                                     move=(x_off, ty, x_rest, ty, 0, 400), x_expr=tx))
+                                     outline_color="000000", start=s, end=s + in_s,
+                                     move=(x_off, ty, x_rest, ty, 0, round(in_s * 1000)), x_expr=tx))
+                if e - out_s > s + in_s:
+                    # no rest phase in a window the two slides fill: a line of no length drew
+                    # nothing, but its emoji PNG, which has no fade, showed for the one frame at
+                    # that instant between the other two phases' faded ones (#554 review)
+                    elements.append(dict(text=text, size=fs, color=colour, font=ass_font_family(),
+                                         align=7, x=x_rest, y=ty, outline=max(1.0, fs / 16.0),
+                                         outline_color="000000", start=s + in_s, end=e - out_s,
+                                         x_expr=tx))
                 elements.append(dict(text=text, size=fs, color=colour, font=ass_font_family(),
                                      align=7, x=x_rest, y=ty, outline=max(1.0, fs / 16.0),
-                                     outline_color="000000", start=min(e, s + 0.4), end=max(s, e - 0.3),
-                                     x_expr=tx))
-                elements.append(dict(text=text, size=fs, color=colour, font=ass_font_family(),
-                                     align=7, x=x_rest, y=ty, outline=max(1.0, fs / 16.0),
-                                     outline_color="000000", start=max(s, e - 0.3), end=e,
-                                     move=(x_rest, ty, x_off, ty, 0, 300), x_expr=tx))
+                                     outline_color="000000", start=e - out_s, end=e,
+                                     move=(x_rest, ty, x_off, ty, 0, round(out_s * 1000)), x_expr=tx))
         fc.append(f"[v2]{TEXT}[vout]" if route != "ass" else "[v2]null[vout]")
         if route != "ass":
             filters.extend(draws)  # the text chain, which drawn_chain() places at TEXT
@@ -459,7 +541,7 @@ def main(force_route: Optional[str] = None) -> int:
                  f"drawtext={drawtext_text_opts(title_t)}:{fo}:fontsize={h1}:fontcolor={ff_color(text_c)}{drawtext_center_align()}:x=(w-text_w)/2:y=(h-text_h)/2-{h2 if sub_t else 0}:alpha='{fade_a}':{en}",
                  size=h1, color=text_c, font=ass_font_family(), align=5, x=W / 2,
                  y=H / 2 - (h2 if sub_t else 0), outline=max(1.0, h1 / 20.0),
-                 outline_color="000000", start=s, end=e, fade=(300, 300))
+                 outline_color="000000", start=s, end=e, fade=fade_ms)
         acc_w, acc_h = int(base * 0.12), max(2, int(base * 0.006))
         fill_box(primary, 1.0, f"x=(iw-{acc_w})/2:y=(ih)/2+{title_h // 2}:w={acc_w}:h={acc_h}",
                  (W - acc_w) // 2, H // 2 + title_h // 2, acc_w, acc_h, en)
@@ -468,7 +550,7 @@ def main(force_route: Optional[str] = None) -> int:
                      f"drawtext={drawtext_text_opts(sub_t)}:{fo}:fontsize={h2}:fontcolor={ff_color(primary)}{drawtext_center_align()}:x=(w-text_w)/2:y=(h-text_h)/2+{sub_y + sub_extra // 2}:alpha='{fade_a}':{en}",
                      size=h2, color=primary, font=ass_font_family(), align=5, x=W / 2,
                      y=H / 2 + sub_y + sub_extra // 2, outline=max(1.0, h2 / 20.0),
-                     outline_color="000000", start=s, end=e, fade=(300, 300))
+                     outline_color="000000", start=s, end=e, fade=fade_ms)
 
     elif args.template in ("chapter", "bug"):
         if not args.title:
@@ -491,19 +573,20 @@ def main(force_route: Optional[str] = None) -> int:
                  x=(m_left if "left" in pos else W - m_right),
                  y=(m_top if "top" in pos else H - m_bottom),
                  box=True, box_color=box_hex, box_alpha=(0x19 if args.template == "chapter" else 0x4C),
-                 outline=float(pady), outline_color=box_hex, start=s, end=e, fade=(300, 300))
+                 outline=float(pady), outline_color=box_hex, start=s, end=e, fade=fade_ms)
 
     elif args.template == "progress":
         h = max(3, int(base * 0.008))
         fps = meta['video'].get('fps') or 30
         fc.append(f"{layer_src(primary, 1.0, W, h)}[pb]")
-        if draws_chroma([bg], meta) or alpha_codec:
-            # a layer (overlay composites the alpha too; drawbox leaves it as it was)
+        if draws_chroma([bg], meta) or alpha_codec or overlay_format(meta):
+            # a layer (overlay composites the alpha too; drawbox leaves it as it was, and takes a
+            # 10-bit picture to 8 bits)
             fc.append(f"{layer_src(bg, 0.5, W, h, 0, (H - h) % 2)}[pbg]")
-            fc.append(f"[0:v][pbg]overlay=x=0:y={(H - h) // 2 * 2}:{en}:eof_action=pass[v1]")
+            fc.append(f"[0:v][pbg]overlay={layer_at(0, (H - h) // 2 * 2, en)}:eof_action=pass[v1]")
         else:
             fc.append(f"[0:v]drawbox=x=0:y=ih-{h}:w=iw:h={h}:color={ff_color(bg, 0.5)}:t=fill:{en}[v1]")
-        fc.append(f"[v1][pb]overlay=x='-w+w*min(1,max(0,(t-{s:.3f})/{e - s:.3f}))':y={H - h}:{en}:eof_action=pass[vout]")
+        fc.append(f"[v1][pb]overlay={layer_at(f'-w+w*min(1,max(0,(t-{s:.3f})/{e - s:.3f}))', H - h, en)}:eof_action=pass[vout]")
 
     elif args.template == "sticker":
         # A social sticker: a filled chip of text that pops in. drawtext's box gives the chip
@@ -516,9 +599,15 @@ def main(force_route: Optional[str] = None) -> int:
         fs = int(base * 0.05)
         padx, pady = int(fs * 0.7), int(fs * 0.45)
         rise = int(fs * 0.5)
-        pop = f"min(1,(t-{s:.3f})/0.25)"
+        # the pop is cut to the fade's length in a short window, on both routes: drawtext kept
+        # its 0.25 s while the ASS \fad was cut, so the chip reached half the brightness there
+        # (#554 review)
+        pop_s = min(0.25, fade_s)
+        pop = f"max(0,min(1,(t-{s:.3f})/{pop_s:g}))"  # held in 0..1, as fade_a is, for a frame selected before --start
         xe = f"{m_left}" if "left" in pos else f"w-text_w-{m_right}"
-        ye = (f"{m_top}+{rise}*(1-{pop})" if "top" in pos else f"h-text_h-{m_bottom}-{rise}*(1-{pop})")
+        # every position rises into place, on both routes: a bottom chip started `rise` px above
+        # its rest on drawtext and dropped, where the ASS \move below rises (A177)
+        ye = (f"{m_top}+{rise}*(1-{pop})" if "top" in pos else f"h-text_h-{m_bottom}+{rise}*(1-{pop})")
         alpha = f"min({pop},{fade_a})"
         align = (7 if "left" in pos else 9) if "top" in pos else (1 if "left" in pos else 3)
         y_rest = m_top if "top" in pos else H - m_bottom
@@ -533,9 +622,9 @@ def main(force_route: Optional[str] = None) -> int:
                  size=fs, color=bg, font=ass_font_family(), align=align,
                  x=(m_left if "left" in pos else W - m_right), y=y_rest,
                  box=True, box_color=primary, box_alpha=0x0D, outline=float(pady),
-                 outline_color=primary, start=s, end=e, fade=(250, 250),
+                 outline_color=primary, start=s, end=e, fade=(round(pop_s * 1000), min(250, fade_ms[1])),
                  move=(m_left if "left" in pos else W - m_right, y_start,
-                       m_left if "left" in pos else W - m_right, y_rest, 0, 250))
+                       m_left if "left" in pos else W - m_right, y_rest, 0, round(pop_s * 1000)))
 
     elif args.template == "hook":
         # The opener: a full-width card over the first --duration seconds with a thin bar along
@@ -545,7 +634,7 @@ def main(force_route: Optional[str] = None) -> int:
         if args.duration <= 0:
             die(f"--duration must be > 0, got {args.duration:g}")
         he = min(e, s + args.duration)
-        hen = f"enable='between(t,{s:.3f},{he:.3f})'"
+        hen = f"enable='{window_expr(s, he, meta)}'"
         h1 = int(base * 0.085)
         bar_h = max(3, int(base * 0.01))
         hook_title = wrapped(args.title, h1)
@@ -594,7 +683,7 @@ def main(force_route: Optional[str] = None) -> int:
             ke = ks + seg
             pulse = f"1-0.15*min(1,(t-{ks:.3f})/{seg * 0.5:.3f})"
             add_text(str(k),
-                     f"drawtext=text='{k}':{fo}:fontsize={fs}:fontcolor={ff_color(primary)}:borderw={max(2, fs // 40)}:bordercolor={ff_color(bg)}:x=(w-text_w)/2:y=(h-text_h)/2:alpha='{pulse}':enable='between(t,{ks:.3f},{ke:.3f})'",
+                     f"drawtext=text='{k}':{fo}:fontsize={fs}:fontcolor={ff_color(primary)}:borderw={max(2, fs // 40)}:bordercolor={ff_color(bg)}:x=(w-text_w)/2:y=(h-text_h)/2:alpha='{pulse}':enable='{window_expr(ks, ke, meta, half_open=k > 0)}'",
                      size=fs, color=primary, font=ass_font_family(), align=5, x=W / 2, y=H / 2,
                      outline=float(max(2, fs // 40)), outline_color=bg, start=ks, end=ke,
                      scale_t=(0, seg * 500, 115))
@@ -614,6 +703,9 @@ def main(force_route: Optional[str] = None) -> int:
              "through libass, or upgrade FFmpeg", "drawtext_newline_glyph", text_render="drawtext")
 
     output = args.output or default_output(args.input, "gfx", default_ext(alpha_codec) if alpha_codec else None)
+    # the brand file and the font file are read here and by drawtext's fontfile=, never as an -i, so
+    # run()'s guard did not see them (#522's sweep)
+    refuse_output_is_input(output, *[q for q in (args.brand, args.font_file or brand.get("font_file")) if isinstance(q, str) and q])
     ass_path = None
     emoji_result = None
     if route == "ass":
@@ -685,26 +777,28 @@ def main(force_route: Optional[str] = None) -> int:
                 f"(limit {_max}, --emoji-max raises it); ffmpeg's filter graph and the "
                 "per-frame cost both grow linearly -- split the job, or use --emoji none", kind="input")
         if missing:
-            warn("no PNG in the assets directory for " + ", ".join(missing), "emoji_assets_missing", missing=list(missing))
+            warn(emoji_missing_asset_note(list(missing), support), "emoji_assets_missing", missing=list(missing))
         if emoji_mode:
-            emoji_result = {"mode": emoji_mode, "count": len(emoji_clusters(all_text)),
-                            "clusters": sorted(seen) or sorted({emoji_codepoint_name(cl) for _i, cl in emoji_clusters(all_text)}),
+            emoji_result = {"mode": emoji_mode, "count": emoji_count,
+                            "clusters": sorted(seen) or emoji_names,
                             "assets": emoji_assets, "missing": missing,
                             "overlays": len(emoji_overlays)}
         ass_path = args.write_ass or os.path.splitext(output)[0] + "_gfx.ass"
         require_filter("ass", "drawing this text through libass")  # before the sidecar is written
         # a file this run writes itself: never the input or the video, a missing directory or an
         # existing file without --overwrite is refused before anything is written (#408)
-        guard_sidecar(ass_path, *[q for q in (args.input, getattr(args, "brand", None), getattr(args, "font_file", None))
-                                  if isinstance(q, str)], siblings=(output,))
+        # the font the text is drawn with, a brand file's font_file included (review of #534: only
+        # --font-file was here, and --write-ass naming the brand's font replaced it with ASS text)
+        guard_sidecar(ass_path, *[q for q in (args.input, getattr(args, "brand", None), args.font_file or brand.get("font_file"))
+                                  if isinstance(q, str) and q], siblings=(output,))
         if STATE.dry_run:
             info(f"[dry-run] would write {ass_path} ({len(elements)} text elements)")
         else:
             text_overlay_ass(elements, play_w=W, play_h=H, path=ass_path, fonts_dir=ass_fonts_dir())
             info(f"wrote {ass_path} ({len(elements)} text elements, rendered through libass)")
     elif emoji_mode:
-        emoji_result = {"mode": emoji_mode, "count": len(emoji_clusters(all_text)),
-                        "clusters": sorted({emoji_codepoint_name(cl) for _i, cl in emoji_clusters(all_text)}),
+        emoji_result = {"mode": emoji_mode, "count": emoji_count,
+                        "clusters": emoji_names,
                         "assets": emoji_assets, "missing": [], "overlays": 0}
 
     # The boxes with chroma (layers) go under the text, and the picture they and a converted colour
@@ -712,12 +806,13 @@ def main(force_route: Optional[str] = None) -> int:
     # converts neither picture to the other's matrix. The text is drawn in BT.709 (drawn_chain).
     # On an alpha line every box is a layer: overlay composites the box's alpha over the picture's,
     # while drawbox paints the colour and leaves the alpha as it was (a box on a transparent canvas
-    # stayed invisible)
-    as_layers = bool(alpha_codec) or any(draws_chroma([b[0]], meta) for b in boxes)
+    # stayed invisible). On a 10-bit picture too: drawbox is 8-bit only on 6.1, so FFmpeg took the
+    # whole picture to 8 bits around it (overlay_format)
+    as_layers = bool(alpha_codec) or bool(overlay_format(meta)) or any(draws_chroma([b[0]], meta) for b in boxes)
     drawboxes = []
     for colour, alpha, geo, x, y, w, h, enable, x_expr in boxes:
         if as_layers:
-            layers.append((layer_src(colour, alpha, w, h, x % 2, y % 2), f"x={x_expr or x - x % 2}:y={y - y % 2}:{enable}"))
+            layers.append((layer_src(colour, alpha, w, h, x % 2, y % 2), layer_at(x_expr or x - x % 2, y - y % 2, enable)))
         drawboxes.append(f"drawbox={geo}:color={ff_color(colour, alpha)}:t=fill:{enable}")
     filters = [("" if as_layers else drawboxes[int(f[len(BOX):])]) if f.startswith(BOX) else f for f in filters]
     filters = [f for f in filters if f]
@@ -741,8 +836,11 @@ def main(force_route: Optional[str] = None) -> int:
         # 4:4:4 (overlay's default is 4:2:0); drawtext and libass (alpha=1) draw into the alpha too
         fc = [c.replace(":eof_action=pass", ":eof_action=pass:format=yuv444") for c in fc]
         if fc:
-            fc = ["[0:v]format=yuva444p[ka0]"] + [c.replace("[0:v]", "[ka0]") for c in fc]
-        square = "format=yuva444p" + ("," + square if square else "")
+            fc = [f"[0:v]{source_format(meta)}[ka0]"] + [c.replace("[0:v]", "[ka0]") for c in fc]
+        square = source_format(meta) + ("," + square if square else "")
+    elif overlay_format(meta):
+        # a 10-bit picture on a 10-bit line is composited at 10 bits (overlay's default is 8-bit)
+        fc = [c.replace(":eof_action=pass", ":eof_action=pass" + overlay_format(meta)) for c in fc]
     finish = finish_chain(alpha_codec, args.alpha_mode, meta) if alpha_codec else ""
 
     cmd = ffmpeg_base() + (decoder_args_for(meta, args.input) if alpha_codec else []) + ["-i", args.input]
@@ -762,7 +860,7 @@ def main(force_route: Optional[str] = None) -> int:
             last = "vtxt"
         eo, emoji_inputs = emoji_filter_chain({"overlays": emoji_overlays}, last, "vfinal", first_input=1,
                                               to_yuv=rgb_chain_to_bt709(meta),
-                                              base_chain=layer_base_chain(meta))
+                                              base_chain=layer_base_chain(meta), overlay_opts=overlay_format(meta))
         for spec in emoji_inputs:
             cmd += spec
             asset = spec[-1]
@@ -777,14 +875,17 @@ def main(force_route: Optional[str] = None) -> int:
         if finish:
             chains.append(f"[{last}]{finish}[ka_v]")
             last = "ka_v"
-        cmd += ["-filter_complex", ";".join(chains), "-map", f"[{last}]",
+        # the conform of a VFR source is the fps filter on the picture as it is decoded (#512)
+        cmd += ["-filter_complex", cfr_at_input(";".join(chains), meta), "-map", f"[{last}]",
                 "-map", f"0:a:{args.audio_stream}?"]
     elif fc:
         if finish:
             fc.append(f"[vout]{finish}[ka_v]")
-        cmd += ["-filter_complex", ";".join(fc), "-map", "[ka_v]" if finish else "[vout]", "-map", f"0:a:{args.audio_stream}?"]
+        cmd += ["-filter_complex", cfr_at_input(";".join(fc), meta), "-map", "[ka_v]" if finish else "[vout]",
+                "-map", f"0:a:{args.audio_stream}?"]
     else:
-        cmd += ["-vf", ",".join(p for p in (square, text, finish) if p) if finish else (square + "," if square else "") + text,
+        vf = ",".join(p for p in (square, text, finish) if p) if finish else (square + "," if square else "") + text
+        cmd += ["-vf", with_cfr(vf, meta),
                 "-map", "0:v:0", "-map", f"0:a:{args.audio_stream}?"]
     if alpha_codec:
         cmd += video_line(alpha_codec) + tag_args(meta) + cfr_args(meta)

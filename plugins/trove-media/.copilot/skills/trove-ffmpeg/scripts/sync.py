@@ -7,7 +7,9 @@ reduced to a loudness envelope, cross-correlated with an FFT implemented in
 Python (coarse, 20 ms), then refined by direct correlation at 1 ms.
 
 Offset semantics: a positive offset means the SECOND input starts LATER
-than the reference, i.e. `second` must be shifted earlier by that amount.
+than the reference (it began recording after it), so its sound is delayed by
+that amount (its head padded) to line up; a negative offset means it started
+earlier, and its first -offset seconds are dropped.
 
 This aligns two AUDIO tracks to each other; it does not check or guarantee
 lip sync (mouth movement matching the audio). It assumes each recording's
@@ -25,17 +27,18 @@ Examples:
   python3 sync.py cam.mp4 recorder.wav --fix-drift --replace-audio   # long takes: fix clock drift too
 """
 import argparse
-import cmath
-import json
 import math
 import os
 import sys
 from typing import Dict, List
 
-from _common.runner import fail_if_classified
-from _common import video_args, add_common, apply_common, emit, aac_args, audio_codec_for, default_output, die, ffmpeg_base, info, probe, require_tool, run, run_analysis, x264_args, decode_pcm_mono, rms_envelope
+from _common.runner import fail_if_classified, refuse_output_is_input
+from _common import STATE, video_args, add_common, apply_common, emit, aac_args, audio_codec_for, default_output, die, ffmpeg_base, info, probe, run, decode_pcm_mono, rms_envelope
 from _common.emit import record_skip, warn
-from _common.decision import stream_starts
+from _common.decision import SEEK_MARGIN, frame_rate, grid_at_or_after, length_output_t, silence_filter, stream_starts
+from _common.timeline import output_timecode_args
+from _common.runner import default_selection_maps
+from _common.emit import input_length
 
 SR = 8000  # decode sample rate
 
@@ -158,9 +161,14 @@ def cross_correlate(ref: List[float], other: List[float], max_lag: int):
 
         scores.append((val, lag))
         if val > best_val:
-            second = best_val
             best_val, best_lag = val, lag
-        elif val > second and abs(lag - best_lag) > 5:
+    # The runner-up is the best other PEAK more than 5 lags from the winner (A126). The running
+    # "previous best" this used to take was usually the winner's own neighbour, one lag away and
+    # on the same slope, so an exact match read 0.59 and could not be told from a tie (0.50).
+    by_lag = dict((lag, val) for val, lag in scores)
+    for val, lag in scores:
+        if abs(lag - best_lag) > 5 and val > second and \
+                val >= by_lag.get(lag - 1, -float("inf")) and val >= by_lag.get(lag + 1, -float("inf")):
             second = val
     # confidence: peak similarity, penalised when a distant runner-up is nearly as good
     conf = max(0.0, min(1.0, best_val))
@@ -225,8 +233,8 @@ def measure_one(reference: str, path: str, args) -> Dict:
     # the head to measure over) or low_confidence (the tail did not correlate); None when applied
     skipped_reason = None
     if args.fix_drift:
-        ref_dur = probe(reference)["duration"] or 0.0
-        sec_dur = probe(path)["duration"] or 0.0
+        ref_dur = input_length(probe(reference))
+        sec_dur = input_length(probe(path))
         overlap_end = min(ref_dur, sec_dur + offset)
         head_len = min(args.analyze_seconds, overlap_end)
         tail_start = overlap_end - args.drift_window
@@ -256,8 +264,13 @@ def measure_one(reference: str, path: str, args) -> Dict:
                 offset = offset + (drift_ratio - 1.0) * head_mid
                 drift_info = {"residual_at_end_seconds": round(residual, 4), "measured_over_seconds": round(elapsed, 2),
                               "drift_ppm": round((drift_ratio - 1) * 1e6, 1),
-                              "meaning": "second file runs %.1f ppm %s (%.3fs over %.0fs); it will be resampled to match" % (
-                                  abs(drift_ratio - 1) * 1e6, "long/slow" if drift_ratio > 1 else "short/fast", abs(residual), elapsed),
+                              # a measure-only run writes nothing (#403: it said "will be resampled")
+                              "meaning": "second file runs %.1f ppm %s (%.3fs over %.0fs); %s" % (
+                                  abs(drift_ratio - 1) * 1e6, "long/slow" if drift_ratio > 1 else "short/fast", abs(residual), elapsed,
+                                  ("it would be resampled to match in the file this run plans (--dry-run writes nothing)" if STATE.dry_run
+                                   else "it is resampled to match in the file this run writes")
+                                  if args.replace_audio or args.trim_second else
+                                  "nothing is resampled in this measure-only run (--replace-audio or --trim-second writes the corrected file)"),
                               "confidence": round(end_score, 3)}
             else:
                 skipped_reason = "low_confidence"
@@ -296,6 +309,12 @@ def main() -> int:
     add_common(ap)
     args = ap.parse_args()
     apply_common(args)
+    # A190: with a search range of 0 or below no lag is tried, and the run reported an offset
+    # (0.012 s at confidence 0) for a correlation it never made
+    if args.max_offset <= 0:
+        die(f"--max-offset must be more than 0 seconds (the largest offset searched), got {args.max_offset:g}")
+    if args.analyze_seconds <= 0:
+        die(f"--analyze-seconds must be more than 0 seconds, got {args.analyze_seconds:g}")
     if args.analyze_seconds > 900:
         die(f"--analyze-seconds {args.analyze_seconds:g}: the window is decoded into memory; 900 s is the ceiling")
     args.sources = [args.second] + list(args.more_sources)
@@ -346,6 +365,9 @@ def main() -> int:
 
     if args.replace_audio or args.trim_second:
         output = args.output or default_output(args.reference if args.replace_audio else args.second, "synced", "mp4")
+        # --trim-second's command takes only SECOND as -i, so run()'s guard never saw the reference:
+        # REF named SECOND_synced.mp4 (the default name) or `-o REF` was replaced (#522)
+        refuse_output_is_input(output, args.reference, args.second)
         # second started later (offset > 0)  -> delay it by `offset` (pad the head)
         # second started earlier (offset < 0) -> drop its first `-offset` seconds
         delay_ms = int(round(offset * 1000))
@@ -374,9 +396,17 @@ def main() -> int:
             # its length instead of -shortest, which cut the reference's tail whenever the second
             # file started earlier (head_trim > 0) or was simply shorter
             ref_dur = probe(args.reference).get("duration")
-            af_parts = on_clock + drift_af + ([f"adelay={delay_ms}:all=1"] if delay_ms > 0 else []) + ["apad"]
+            # the delay is the measured offset to the sample of the second's rate: at the default
+            # --fine-ms 1 without --fix-drift the offset is a whole millisecond and the text is the
+            # one it was; a finer step (0.25 ms: 0.23425 s) or a drift-adjusted offset (kept to
+            # 0.1 ms) was rounded to `adelay=234` (silence_filter)
+            lead = [silence_filter(sec_sr, lead=offset)] if offset > 0 and round(offset * sec_sr) else []
+            af_parts = on_clock + drift_af + lead + ["apad"]
             cmd += ["-af", ",".join(af_parts)]
-            cmd += aac_args() + (["-t", f"{ref_dur:.3f}"] if ref_dur else ["-shortest"]) + [output]
+            # to the sample of the rate the second's sound is written at, not to the millisecond:
+            # the endless apad is ended by this -t alone (length_output_t)
+            ref_t = length_output_t(ref_dur, (second_meta.get("audio") or {}).get("sample_rate"), runs_on=True) if ref_dur else None
+            cmd += aac_args() + (["-t", ref_t] if ref_dur else ["-shortest"]) + [output]
             proc = run(cmd, check=False)
             fail_if_classified(proc)  # a cause the re-encode would hit too is reported, not retried (#415)
             if proc.returncode != 0:
@@ -385,24 +415,46 @@ def main() -> int:
                 cmd = cmd[:-1] + video_args(probe(args.reference) if args.replace_audio else probe(args.second), args.crf) + [output]
                 run(cmd)
         else:
-            if head_trim > 0 and not drift_af:
-                cmd = ffmpeg_base() + ["-ss", f"{head_trim:.4f}", "-i", args.second, "-c", "copy"]
+            # A picture is never stream-copied here: a copy starts at the keyframe at or before -ss
+            # and -avoid_negative_ts make_zero shows the frames from it, so the output started
+            # early by up to a GOP (a 5 s GOP: nothing trimmed at all) and was reported as synced.
+            # Even a keyframe on the trim point moved the picture by its B-frame delay (+69 ms).
+            # The re-encode below starts on the frame itself; a sound-only file is still copied.
+            if head_trim > 0 and not drift_af and not has_video:
+                # the second file's first audio track: the one decode_pcm_mono() measured
+                cmd = ffmpeg_base() + ["-ss", f"{head_trim:.4f}", "-i", args.second] + default_selection_maps(second_meta, output) + ["-c", "copy"]
                 if os.path.splitext(output)[1].lower() in (".mp4", ".mov", ".m4v"):
                     cmd += ["-movflags", "+faststart"]
                 cmd += ["-avoid_negative_ts", "make_zero", output]
                 proc = run(cmd, check=False)
                 fail_if_classified(proc)
                 if proc.returncode != 0:
-                    cmd = ffmpeg_base() + ["-ss", f"{head_trim:.4f}", "-i", args.second] + (video_args(probe(args.reference) if args.replace_audio else probe(args.second), args.crf) if has_video else []) + audio_codec_for(output) + [output]
+                    cmd = ffmpeg_base() + ["-ss", f"{head_trim:.4f}", "-i", args.second] + default_selection_maps(second_meta, output) + (video_args(probe(args.reference) if args.replace_audio else probe(args.second), args.crf) if has_video else []) + audio_codec_for(output) + [output]
                     run(cmd)
             else:
+                # Seek SEEK_MARGIN early and drop the margin on the output side, as cut.py's
+                # re-encode does: an input seek straight to head_trim can land (the MP4 demuxer
+                # seeks over raw decode times) on a keyframe whose picture comes after it, and a
+                # B-frame HEVC file lost the frames before it. The output-side -ss decodes and
+                # drops the margin from both streams alike; it counts on the output's clock, which
+                # a drift fix runs faster by drift_ratio (setpts and asetrate alike).
                 cmd = ffmpeg_base()
+                out_seek: List[str] = []
                 if head_trim > 0:
-                    cmd += ["-ss", f"{head_trim:.4f}"]
-                cmd += ["-i", args.second]
+                    m = min(SEEK_MARGIN, head_trim)
+                    cmd += ["-ss", f"{head_trim - m:.6f}"]
+                    if m > 0:
+                        out_seek = ["-ss", f"{m / (drift_ratio if drift_af else 1.0):.6f}"]
+                # -map after the output-side -ss: both are output options, so the order is the
+                # same command, and the seek stays next to the -i it drops the margin from
+                cmd += ["-i", args.second] + out_seek + default_selection_maps(second_meta, output)
                 af_parts = on_clock + drift_af
-                if delay_ms > 0:
-                    af_parts.append(f"adelay={delay_ms}:all=1")
+                # one sound is written here (the default selection, or the probed track of a file
+                # with several: default_selection_maps), the one sec_sr is the rate of, so the delay
+                # is counted in its samples as --replace-audio's is. A whole millisecond (the
+                # default --fine-ms 1 without --fix-drift) keeps `adelay=<ms>:all=1`
+                if offset > 0 and round(offset * sec_sr):
+                    af_parts.append(silence_filter(sec_sr, lead=offset))
                 if has_video:
                     vf = []
                     if delay_ms > 0:
@@ -412,6 +464,14 @@ def main() -> int:
                     if vf:
                         cmd += ["-vf", ",".join(vf)]
                     cmd += video_args(probe(args.reference) if args.replace_audio else probe(args.second), args.crf)
+                    # the output's first frame is the second file's frame at head_trim, or (padded)
+                    # one `offset` before its first: its start timecode moves with it
+                    v0, rate = stream_starts(second_meta)[0], frame_rate(second_meta)
+                    # (a trim before a picture that starts after the file's origin starts on its
+                    # first frame; only the padded head counts back before it)
+                    first = (grid_at_or_after(max(round(head_trim, 4), v0), v0, rate) - v0 if head_trim > 0
+                             else -offset if delay_ms > 0 else 0.0)
+                    cmd += output_timecode_args(second_meta, first)
                 if af_parts:
                     cmd += ["-af", ",".join(af_parts)]
                 cmd += audio_codec_for(output) + [output]

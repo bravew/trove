@@ -23,7 +23,11 @@ from _platforms import TP_TOLERANCE_DB
 
 AUDIO_LENGTH_TOLERANCE = 0.03  # seconds: one AAC frame at 48 kHz is 0.021 s
 LUFS_TOLERANCE = 1.0  # LU: a normalised file within this of the requested -I is on target
-from _common import STATE, add_common, apply_common, emit, AUDIO_CODECS, audio_codec_for, default_output, die, ffmpeg_base, info, probe, require_tool, run, run_analysis, run_keeping_subtitles, dry_run_input_pending
+from _common.probe import PROBED_AUDIO, probed_maps, shorter_than_a_loudness_block
+from _common.emit import own_length, refuse
+from _common.runner import ffmpeg_failure_extra
+from _common.decision import LOSSLESS_AUDIO_EXT, PAD_SOUND_FROM_ZERO, late_sound_lead
+from _common import STATE, add_common, apply_common, emit, AUDIO_CODECS, refuse_unwritten_output, audio_codec_for, default_output, die, ffmpeg_base, info, probe, require_tool, run, run_analysis, run_keeping_subtitles, dry_run_input_pending
 
 
 
@@ -65,33 +69,60 @@ def measure(path: str, I: float, tp: float, lra: float) -> dict:
     if dry_run_input_pending(path):
         return {"input_i": "-20.0", "input_tp": "-3.0", "input_lra": "8.0", "input_thresh": "-30.0", "target_offset": "0.0", "silent": False, "placeholder": True}
     ffmpeg = require_tool("ffmpeg")
-    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-vn", "-af", f"loudnorm=I={I}:TP={tp}:LRA={lra}:print_format=json", "-f", "null", "-"]
+    # the first audio track, the one pass 2 normalises and probe() describes: without a -map,
+    # FFmpeg measured the track with the default disposition or the most channels, and the gain
+    # for that track was applied to a:0 (A110)
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-i", path, "-map", f"0:{PROBED_AUDIO}", "-vn",
+           "-af", f"aresample=async=1:min_hard_comp=0.01,loudnorm=I={I}:TP={tp}:LRA={lra}:print_format=json", "-f", "null", "-"]
     # Pass 1 is a measurement: it runs under --dry-run too, so the planned pass-2 command and
     # the reported input_i are real (before 1.4.6 a dry run returned a made-up -20 LUFS).
     proc = run_analysis(cmd, check=False, record=True)
     m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr, re.S)
     if proc.returncode != 0 or not m:
-        die(f"loudness measurement failed:\n{proc.stderr.strip()[-1500:]}", kind="ffmpeg")
+        die(f"loudness measurement failed:\n{proc.stderr.strip()[-1500:]}", kind="ffmpeg", **ffmpeg_failure_extra(proc.stderr))
     data = json.loads(m.group(0))
+    data["too_short"] = False
     for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset"):
         if data.get(k) in (None, "-inf", "inf", "nan"):
-            data["silent"] = True
+            # A257: a clip shorter than one 400 ms gating block has no integrated loudness but a
+            # true peak; that is not silence, and telling the caller to replace the audio was wrong.
+            # The length decides it, not the peak: a long track under the absolute gate has a
+            # finite peak and no integrated loudness as well, and stays "silent" as before.
+            data["too_short"] = (data.get("input_tp") not in (None, "-inf", "inf", "nan")
+                                 and shorter_than_a_loudness_block(audio_length(probe(path))))
+            data["silent"] = not data["too_short"]
             return data
     data["silent"] = False
     return data
 
 
+def loudnorm_mode(stats: dict, lufs: float, tp: float, lra: float) -> str:
+    """The mode loudnorm runs pass 2 in, by its own rule (af_loudnorm.c init): linear only when the
+    measured values are all usable and the linear gain keeps the true peak under the ceiling and
+    the range within --lra; otherwise it falls back to dynamic, which compresses the range and can
+    land away from the target on its own (A111). The values are the strings pass 1 printed, which
+    are the ones pass 2 is given, so the comparison is ffmpeg's own. Checked against loudnorm's
+    print_format=json normalization_type by test_loudnorm_mode_matches_what_ffmpeg_reports."""
+    try:
+        mi, mtp, mlra, mth = (float(stats[k]) for k in ("input_i", "input_tp", "input_lra", "input_thresh"))
+    except (KeyError, TypeError, ValueError):
+        return "dynamic"
+    if mtp == 99 or mth == -70 or mlra == 0 or mi == 0:
+        return "dynamic"
+    return "linear" if mtp + (lufs - mi) <= tp and mlra <= lra else "dynamic"
+
+
 def _normalize(args, meta: dict, stats: dict, lufs: float, tp_max: float, output: str) -> dict:
     """One normalised file at `lufs` / `tp_max`, measured after: the keys emit() takes for it."""
-    af = (
-        f"loudnorm=I={lufs}:TP={tp_max}:LRA={args.lra}"
-        f":measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:measured_LRA={stats['input_lra']}"
-        f":measured_thresh={stats['input_thresh']}:offset={stats['target_offset']}:linear=true:print_format=summary"
-    )
     sr = args.sample_rate or meta["audio"].get("sample_rate") or 48000
     ext = os.path.splitext(output)[1].lower()
     bitrate_pinned = args.audio_bitrate is not None
-    bitrate = args.audio_bitrate or "192k"
+    # an AAC audio extension starts at its own rate (256k for .m4a/.aac), which is what it was
+    # written at: a pinned --audio-bitrate and the raised retries below never reached it, so the
+    # retries re-encoded at 256k and audio_bitrate_used said 192k, then 256k and 320k (A143)
+    codec = AUDIO_CODECS.get(ext, [])
+    own_rate = codec[codec.index("-b:a") + 1] if "aac" in codec and "-b:a" in codec else None
+    bitrate = args.audio_bitrate or own_rate or "192k"
 
     dropped_streams = False
     # loudnorm emits its last block whole, and through the AAC encoder that came out as 0.1 s more
@@ -100,21 +131,41 @@ def _normalize(args, meta: dict, stats: dict, lufs: float, tp_max: float, output
     # so sound that starts late keeps its end (`end=` is a timestamp, and cut it). atrim follows
     # loudnorm directly: an aresample between them fails channel-layout negotiation on FFmpeg 5.1
     in_audio = audio_length(meta)
+    # A sound-only output of a source whose sound starts after the file's origin (late against its
+    # picture) carries that lead as silence: .wav and .flac have no start time and lost it, .m4a
+    # kept it as an edit a decoder does not pad, so the file played that much early (#539). Beside
+    # a copied picture the container holds the start, and nothing is padded.
+    sound_only = ext in AUDIO_CODECS or not meta.get("video")
+    lead = late_sound_lead(meta) if sound_only else 0.0
 
     def encode(tp: float, bitrate: str) -> None:
         nonlocal dropped_streams
         af = (
-            f"loudnorm=I={lufs}:TP={tp}:LRA={args.lra}"
+            f"aresample=async=1:min_hard_comp=0.01,loudnorm=I={lufs}:TP={tp}:LRA={args.lra}"
             f":measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:measured_LRA={stats['input_lra']}"
             f":measured_thresh={stats['input_thresh']}:offset={stats['target_offset']}:linear=true:print_format=summary"
         )
+        if loudnorm_mode(stats, lufs, tp, args.lra) == "dynamic":
+            # In dynamic mode loudnorm stamps the frames it buffers itself, and they jumped about
+            # 0.1 s after a stretch of digital silence (FFmpeg 6.1) while the samples ran on: every
+            # sound after the jump played 89 ms late against a copied picture, and atrim, which
+            # counts time, cut as much off the end. The samples are restamped in order from the
+            # first one's time (a late start keeps its lead). A gap in the source's sound is
+            # filled with silence before loudnorm (aresample=async=1, both modes; from 10 ms
+            # up, swresample's own threshold of 100 ms left an 80 ms gap closed): the restamp
+            # closed it, and everything after the gap played that much early (review of #636).
+            af += ",asetpts=N/SR/TB+STARTPTS"
         if in_audio:
             af += f",atrim=duration={float(in_audio):.6f}"
+        if lead:
+            af += "," + PAD_SOUND_FROM_ZERO  # after the trim, which counts from the first sample
         cmd = ffmpeg_base() + ["-i", args.input, "-af", af, "-ar", str(sr)]
         if ext in AUDIO_CODECS or not meta.get("video"):
-            cmd += ["-vn"] + audio_codec_for(output, bitrate)
+            # the rate reaches an audio extension's codec when it was pinned or is AAC's (an
+            # .mp3/.ogg/.opus left alone keeps its own setting, as it always has)
+            cmd += ["-map", f"0:{PROBED_AUDIO}", "-vn"] + audio_codec_for(output, bitrate if ext not in AUDIO_CODECS or bitrate_pinned or own_rate else None)
         else:
-            cmd += ["-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", bitrate]
+            cmd += probed_maps(meta) + ["-c:v", "copy", "-c:a", "aac", "-b:a", bitrate]
             if ext in (".mp4", ".mov", ".m4v"):
                 cmd += ["-movflags", "+faststart"]
             dropped_streams = run_keeping_subtitles(cmd, output)
@@ -125,7 +176,8 @@ def _normalize(args, meta: dict, stats: dict, lufs: float, tp_max: float, output
     encode(tp_max, bitrate)
     if STATE.dry_run:
         # pass 1 measured the input for real; there is no output to measure
-        return {"output": output, "measured": {k: stats[k] for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset", "silent")}}
+        return {"output": output, "measured": {k: stats[k] for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset", "silent")},
+                "loudnorm_mode": loudnorm_mode(stats, lufs, tp_max, args.lra)}
     after = measure(output, lufs, tp_max, args.lra)
     # loudnorm holds the ceiling on the float samples it outputs; the lossy encoder then adds
     # its own overshoot. ffmpeg's native AAC at 192k turned one transient of a 12-minute film
@@ -154,33 +206,56 @@ def _normalize(args, meta: dict, stats: dict, lufs: float, tp_max: float, output
         info(f"result:   {float(after['input_i']):.1f} LUFS, TP {float(after['input_tp']):.1f} dBTP (target {lufs} LUFS, TP <= {tp_max:g})")
     result = {k: after[k] for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset", "silent")}
     result["tp_ceiling_used"] = round(ceiling, 2)
-    if ext not in AUDIO_CODECS or "aac" in AUDIO_CODECS[ext]:
+    if ext not in AUDIO_CODECS or "aac" in AUDIO_CODECS[ext] or bitrate_pinned:
+        # a pinned rate reaches an .mp3/.ogg/.opus codec too (A143); unpinned, those keep their own
         result["audio_bitrate_used"] = bitrate
     result["encodes"] = rounds + 1
-    if not after.get("silent") and abs(float(after["input_i"]) - lufs) > LUFS_TOLERANCE:
-        result["note"] = (f"integrated loudness is {float(after['input_i']) - lufs:+.1f} LU from the target because the "
-                          f"true-peak ceiling had to absorb the encoder's overshoot; a lossless delivery (wav/flac) or a pinned "
-                          f"higher --audio-bitrate keeps both")
+    # the mode of the last encode: its ceiling is the one the file was made with
+    result["loudnorm_mode"] = loudnorm_mode(stats, lufs, ceiling, args.lra)
+    if not after.get("silent") and not after.get("too_short") and abs(float(after["input_i"]) - lufs) > LUFS_TOLERANCE:
+        if result["loudnorm_mode"] == "dynamic":
+            # A111: the miss is loudnorm's dynamic mode, not an encoder overshoot (it happens on a
+            # lossless output too): a linear gain to the target would have put the true peak over
+            # the ceiling, or the range is wider than --lra
+            result["note"] = (f"integrated loudness is {float(after['input_i']) - lufs:+.1f} LU from the target because "
+                              f"loudnorm could not apply one linear gain (the input's true peak {float(stats['input_tp']):.1f} dBTP "
+                              f"plus the gain would pass the {ceiling:.2f} dBTP ceiling, or its range "
+                              f"{float(stats['input_lra']):.1f} LU is outside 0 < LRA <= --lra {args.lra:g}) and fell back to "
+                              f"dynamic mode, which compresses the range; a lower -I, a higher --tp or a wider --lra keeps it linear")
+        else:
+            result["note"] = (f"integrated loudness is {float(after['input_i']) - lufs:+.1f} LU from the target because the "
+                              f"true-peak ceiling had to absorb the encoder's overshoot; a lossless delivery (wav/flac) or a pinned "
+                              f"higher --audio-bitrate keeps both")
     if not after.get("silent") and float(after["input_tp"]) > tp_max + TP_TOLERANCE_DB:
         die(f"true peak is still {float(after['input_tp']):.2f} dBTP after {rounds + 1} encodes (requested <= {tp_max:g}); "
             f"the encoder overshoots more than the loudnorm ceiling can absorb at this bitrate",
             kind="verification", output=output, result=result,
             hint="raise --audio-bitrate (e.g. 256k) or deliver a lossless format (wav/flac) and let the platform encode")
-    verification = [{"step": "loudness",
-                     "ok": bool(after.get("silent")) or (abs(float(after["input_i"]) - lufs) <= LUFS_TOLERANCE and float(after["input_tp"]) <= tp_max + TP_TOLERANCE_DB),
-                     "lufs": float(after["input_i"]), "tp": float(after["input_tp"]), "target_lufs": lufs, "target_tp": tp_max,
-                     "property": "loudness", "expected": {"lufs": lufs, "tp_max": tp_max},
-                     "measured": {"lufs": float(after["input_i"]), "tp": float(after["input_tp"])},
-                     "delta": {"lufs": round(float(after["input_i"]) - lufs, 2), "tp": round(float(after["input_tp"]) - tp_max, 2)},
-                     "tolerance": {"lufs": LUFS_TOLERANCE, "tp": TP_TOLERANCE_DB}, "provenance": "user_specified"}]
+    if after.get("silent") or after.get("too_short"):
+        # an output with no integrated loudness was not measured against the target: through
+        # 3.6 a silent one passed this step (ok: true) with -inf in its numbers
+        verification = [{"step": "loudness", "ok": False, "target_lufs": lufs, "target_tp": tp_max,
+                         "property": "loudness", "expected": {"lufs": lufs, "tp_max": tp_max},
+                         "reason": "not_measured: the output has no integrated loudness ("
+                                   + ("silent" if after.get("silent") else "shorter than one 400 ms block") + ")",
+                         "provenance": "user_specified"}]
+    else:
+        verification = [{"step": "loudness",
+                         "ok": abs(float(after["input_i"]) - lufs) <= LUFS_TOLERANCE and float(after["input_tp"]) <= tp_max + TP_TOLERANCE_DB,
+                         "lufs": float(after["input_i"]), "tp": float(after["input_tp"]), "target_lufs": lufs, "target_tp": tp_max,
+                         "property": "loudness", "expected": {"lufs": lufs, "tp_max": tp_max},
+                         "measured": {"lufs": float(after["input_i"]), "tp": float(after["input_tp"])},
+                         "delta": {"lufs": round(float(after["input_i"]) - lufs, 2), "tp": round(float(after["input_tp"]) - tp_max, 2)},
+                         "tolerance": {"lufs": LUFS_TOLERANCE, "tp": TP_TOLERANCE_DB}, "provenance": "user_specified"}]
     written = probe(output, role="output")
     out_audio = audio_length(written)
     if in_audio and out_audio:
         # a levels pass changes no timing: the sound is as long as the input's, to one AAC frame
         tol = max(1024.0 / float(sr), AUDIO_LENGTH_TOLERANCE)
-        verification.append({"step": "duration", "property": "audio_duration", "ok": abs(out_audio - in_audio) <= tol,
-                             "expected": round(float(in_audio), 3), "measured": round(float(out_audio), 3),
-                             "delta": round(float(out_audio) - float(in_audio), 3), "tolerance": round(tol, 3),
+        want = float(in_audio) + lead  # the padded lead is part of a sound-only output's length
+        verification.append({"step": "duration", "property": "audio_duration", "ok": abs(out_audio - want) <= tol,
+                             "expected": round(want, 3), "measured": round(float(out_audio), 3),
+                             "delta": round(float(out_audio) - want, 3), "tolerance": round(tol, 3),
                              "provenance": "input_premeasurement"})
     else:
         # a length that could not be read is not a length that matched
@@ -199,6 +274,10 @@ def _versions(args, meta: dict, plan: list) -> int:
     for label, lufs, tp in plan:
         out = default_output(args.input, f"loudnorm_{label}")
         stats = measure(args.input, lufs, tp, args.lra)
+        if stats.get("too_short"):
+            refuse("input", "audio_too_short",
+               f"input audio peaks at {stats.get('input_tp')} dBTP but is shorter than one 400 ms loudness block, so it has "
+               "no integrated loudness to normalise from (this is not silence)", input_tp=stats.get("input_tp"))
         if stats.get("silent"):
             die("input audio is silent; loudness normalisation is meaningless (use audio.py --replace to add a track)")
         doc = _normalize(args, meta, stats, lufs, tp, out)
@@ -206,7 +285,8 @@ def _versions(args, meta: dict, plan: list) -> int:
         versions.append({"target": label, "output": out, "targets": {"lufs": lufs, "tp": tp, "lra": args.lra},
                          **({"result": doc["result"]} if "result" in doc else {})})
         steps += [dict(st, version=label) for st in doc.get("verification") or []]
-    emit(None, versions=versions, outputs=[v["output"] for v in versions], dropped_non_av_streams=dropped,
+    outputs = [v["output"] for v in versions]
+    emit(None, versions=versions, outputs=outputs, verification_paths=outputs, dropped_non_av_streams=dropped,
          **({"verification": steps} if steps else {}))
     if not STATE.json and not STATE.plan:
         print("\n".join(v["output"] for v in versions))  # one path per line, as a single run prints its one
@@ -217,11 +297,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input")
     ap.add_argument("-o", "--output", help="output file (default: <name>_loudnorm.<ext>)")
-    ap.add_argument("-I", "--lufs", type=float, default=-14.0, help="integrated loudness target in LUFS (default -14)")
-    ap.add_argument("--tp", type=float, default=-1.0, help="true peak ceiling in dBTP (default -1)")
+    ap.add_argument("-I", "--lufs", "--target", type=float, default=-14.0, help="integrated loudness target in LUFS (default -14)")
+    ap.add_argument("--tp", "--true-peak", type=float, default=-1.0, help="true peak ceiling in dBTP (default -1)")
     ap.add_argument("--lra", type=float, default=11.0, help="loudness range target in LU (default 11)")
     ap.add_argument("--measure-only", action="store_true", help="print the measured stats as JSON and exit")
-    ap.add_argument("--audio-bitrate", default=None, help="AAC bitrate when the container is video (default 192k; raised to 256k/320k only when the encoder overshoots the true-peak ceiling and you did not pin it)")
+    ap.add_argument("--audio-bitrate", default=None, help="audio bitrate: AAC's in a video container (default 192k), and the codec's of a lossy audio output (.m4a/.aac default 256k, .mp3/.ogg/.opus their own setting); "
+                         "refused for .wav/.flac/.aif/.aiff/.caf/.mka. Raised to 256k/320k for AAC only when the encoder overshoots the true-peak ceiling and you did not pin it")
     ap.add_argument("--versions", metavar="LIST",
                     help="write one normalised file per target from this master, each measured after: a comma list of "
                          + ", ".join(f"{n} ({i:g} LUFS / {t:g} dBTP)" for n, (i, t) in VERSION_TARGETS.items())
@@ -233,18 +314,46 @@ def main() -> int:
     # parsed before anything is measured, and an explicitly empty --versions ('' or ',') is refused
     # by parse_versions rather than read as "not given", which wrote one default file instead
     plan = parse_versions(args.versions) if args.versions is not None else None
+    # A124/A185: loudnorm's own ranges, checked here as --versions checks its items. Outside them
+    # the measurement pass failed inside ffmpeg (kind ffmpeg, with a page of stderr)
+    for flag, value, lo, hi, unit in (("-I/--lufs", args.lufs, -70.0, -5.0, "LUFS"), ("--tp", args.tp, -9.0, 0.0, "dBTP"),
+                                      ("--lra", args.lra, 1.0, 50.0, "LU")):
+        if not lo <= value <= hi:
+            die(f"{flag} must be {lo:g}..{hi:g} {unit} (loudnorm's range), got {value:g}")
+    if args.sample_rate is not None and args.sample_rate <= 0:
+        die(f"--sample-rate must be a positive number of Hz, got {args.sample_rate}")
     if plan is not None and args.output:
         die("--versions writes one file per target, named <name>_loudnorm_<target>.<ext>; it does not take -o")
 
     meta = probe(args.input)
     if not meta.get("audio"):
         die("input has no audio stream")
+    out_ext = os.path.splitext(args.output or default_output(args.input, "loudnorm"))[1].lower()
+    if not args.measure_only:
+        # loudnorm encodes the sound: a .wma name (an -o, or a .wma input's default) is refused
+        # before the measuring pass, not after it (#517)
+        refuse_unwritten_output(args.output or default_output(args.input, "loudnorm"))
+    if args.audio_bitrate is not None and not args.measure_only and out_ext in LOSSLESS_AUDIO_EXT:
+        # A143: the rate was dropped without a word; a lossless codec has none to set
+        die(f"--audio-bitrate has no effect on a lossless {out_ext} output; drop it, or write a lossy one (.m4a, .mp3, ...)")
     if plan is not None and not args.measure_only:
         # each version measures the master against its own target (loudnorm's offset depends on
         # it): a pass against -I/--tp first would be one more full decode whose result is unused
         return _versions(args, meta, plan)
 
     stats = measure(args.input, args.lufs, args.tp, args.lra)
+    if stats.get("too_short"):
+        info(f"audio is shorter than one 400 ms loudness block: no integrated loudness (true peak {stats.get('input_tp')} dBTP)")
+        if args.measure_only:
+            measured = {"silent": False, "too_short": True, "input_i": None, "input_tp": stats.get("input_tp")}
+            if STATE.json:
+                emit(None, measured=measured)
+            else:
+                print(json.dumps(measured, indent=2))
+            return 0
+        refuse("input", "audio_too_short",
+               f"input audio peaks at {stats.get('input_tp')} dBTP but is shorter than one 400 ms loudness block, so it has "
+               "no integrated loudness to normalise from (this is not silence)", input_tp=stats.get("input_tp"))
     if stats.get("silent"):
         info("audio is silent (integrated loudness -inf); nothing to normalise")
         if args.measure_only:
@@ -273,8 +382,7 @@ def audio_length(meta: dict) -> "Optional[float]":
     """The sound's own length: the stream's duration, else Matroska's DURATION tag. Never the
     container's, which is the picture's when the picture runs longer (and would fail a correct
     output against an expected length the sound never had)."""
-    audio = meta.get("audio") or {}
-    return audio.get("duration") or audio.get("tagged_duration")
+    return own_length(meta.get("audio"))
 
 
 def _kbps(value: str) -> int:

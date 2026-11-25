@@ -14,6 +14,7 @@ import base64
 import html
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from _common import guard_sidecar, STATE, add_common, apply_common, child_args, die, emit, info, probe, read_text_or_die, run_tool
 from _common.emit import record_skip, warn
+from _common.runner import file_arg
 
 HERE = Path(__file__).resolve().parent
 
@@ -43,7 +45,7 @@ def sheet_b64(path: str, tiles: str = "4x2", width: int = 1200) -> "Tuple[Option
         return None, {"reason": "dry_run", "message": "a dry run draws no contact sheet"}
     with tempfile.TemporaryDirectory(prefix="ffskill_report_") as tmp:
         png = os.path.join(tmp, "sheet.png")
-        proc = run_tool([str(HERE / "look.py"), path, "--tiles", tiles, "--width", str(width), "-o", png, "--json"] + child_args())
+        proc = run_tool([str(HERE / "look.py"), file_arg(path), "--tiles", tiles, "--width", str(width), "-o", png, "--json"] + child_args())
         try:
             doc = json.loads(proc.stdout)
         except ValueError:
@@ -55,7 +57,7 @@ def sheet_b64(path: str, tiles: str = "4x2", width: int = 1200) -> "Tuple[Option
 
 def loudness(path: str) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
     """(lufs/tp/lra, or {}; why there is no measurement)."""
-    proc = run_tool([str(HERE / "loudness.py"), path, "--measure-only"] + child_args())
+    proc = run_tool([str(HERE / "loudness.py"), file_arg(path), "--measure-only"] + child_args())
     try:
         d = json.loads(proc.stdout)
     except ValueError:
@@ -68,7 +70,7 @@ def loudness(path: str) -> "Tuple[Dict[str, Any], Dict[str, Any]]":
 
 def check(path: str, platform: str) -> "Tuple[Optional[Dict[str, Any]], Dict[str, Any]]":
     """(check.py's document, or None when it could not run at all; why)."""
-    proc = run_tool([str(HERE / "check.py"), path, "--platform", platform, "--json"] + child_args())
+    proc = run_tool([str(HERE / "check.py"), file_arg(path), "--platform", platform, "--json"] + child_args())
     try:
         doc = json.loads(proc.stdout)
     except ValueError:
@@ -119,6 +121,36 @@ PACK_CSS = """
 """
 
 
+def md_cells(line: str) -> List[str]:
+    """The cells of one GFM table row, as render.py's md_cell() writes them: a '|' preceded by a
+    backslash is part of the cell, and a doubled backslash is one. Splitting on every '|' moved a
+    file name such as `a | b.mp4` into the next column (A263)."""
+    cells: List[str] = []
+    cur: List[str] = []
+    body = line.strip()
+    body = body[1:] if body.startswith("|") else body
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and i + 1 < len(body) and body[i + 1] in "\\|":
+            cur.append(body[i + 1])
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    if "".join(cur).strip():
+        cells.append("".join(cur).strip())
+    return cells
+
+
+# the columns of render.py's render_pack() table, in its order
+PACK_HEADER = ["platform", "file", "size", "duration", "check"]
+
+
 def pack_report(args) -> int:
     """render.py --template all writes <stem>_pack.md: one row per destination. This renders the
     same rows as HTML, so a pack can be handed over the way a single delivery report is -- no
@@ -126,19 +158,37 @@ def pack_report(args) -> int:
     text = read_text_or_die(args.pack, "--pack")
     rows: List[List[str]] = []
     header: List[str] = []
-    for line in text.splitlines():
+    delimiter: Optional[List[str]] = None
+    for line in text.split("\n"):
         line = line.strip()
         if not line.startswith("|"):
+            if header:
+                break  # the table ended: a later table in the file is not the pack's
             continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if all(set(c) <= set("-: ") for c in cells):
-            continue
+        cells = md_cells(line)
         if not header:
             header = cells
+        elif delimiter is None:
+            delimiter = cells  # the line under the header, whatever it is: checked below
         else:
+            # every later line is a row, a separator-like one too: `| | |` after a row was skipped
+            # as a delimiter and never counted (review of #532)
             rows.append(cells)
+    # the table render.py --template all writes, and only that one: any Markdown table was taken
+    # and handed over as a pack report with `verified: true` (#510)
+    if header and header != PACK_HEADER:
+        die(f"{args.pack}: its table's columns are {' | '.join(header)}, not the pack table's "
+            f"({' | '.join(PACK_HEADER)}) that render.py --template all writes", kind="input")
+    # a header with a row under it and no delimiter line is no Markdown table (review of #532)
+    if header and delimiter is not None and not (
+            len(delimiter) == len(PACK_HEADER) and all(re.fullmatch(r":?-+:?", c) for c in delimiter)):
+        die(f"{args.pack}: the line under the pack table's header is not its delimiter row "
+            f"(|---|---|---|---|---|), so it is no Markdown table", kind="input")
+    bad = next((i for i, r in enumerate(rows) if len(r) != len(PACK_HEADER)), None)
+    if bad is not None:
+        die(f"{args.pack}: row {bad + 1} of the pack table has {len(rows[bad])} cells, not {len(PACK_HEADER)}", kind="input")
     if not rows:
-        die(f"{args.pack}: no pack table found (expected the Markdown table render.py --template all writes)")
+        die(f"{args.pack}: no pack table found (expected the Markdown table render.py --template all writes)", kind="input")
     title = args.title or f"Social pack — {Path(args.pack).stem.replace('_pack', '')}"
     output = args.output or str(Path(args.pack).with_suffix(".html"))
     guard_sidecar(output, args.pack)
@@ -165,7 +215,7 @@ def pack_report(args) -> int:
         except OSError as e:
             die(f"cannot write {output}: {e}", kind="output")
         info(f"wrote {output} ({os.path.getsize(output) / 1024:.0f} KB)")
-    emit(None, report=output, pack=[dict(zip(header, r)) for r in rows], check=None,
+    emit(None, report=output, pack=[dict(zip(header, r)) for r in rows], check=None, verification_paths=(output,),
          verification=([{"step": "exists", "ok": True}] if not STATE.dry_run else []))
     if not args.json:
         print(output)
@@ -233,7 +283,9 @@ def main() -> int:
             if meta and meta.get("video"):
                 sheets[which], why = sheet_b64(path)
                 section("contact_sheet", which, why, f"{which} contact sheet")
-    commands = read_text_or_die(args.commands, "--commands").splitlines() if args.commands else []
+    # one per line, split at "\n" only (a command may hold U+2028 or \f; splitlines() split it)
+    command_text = read_text_or_die(args.commands, "--commands") if args.commands else ""
+    commands = command_text.removesuffix("\n").split("\n") if command_text else []
     notes = read_text_or_die(args.notes, "--notes") if args.notes else ""
     title = args.title or f"Delivery report — {Path(args.after).name}"
 
@@ -291,7 +343,8 @@ def main() -> int:
         except OSError as e:
             die(f"cannot write {output}: {e}", kind="output")
         info(f"wrote {output} ({os.path.getsize(output) / 1024:.0f} KB)")
-    emit(None, report=output, check=chk, verification=([{"step": "exists", "ok": True}] + verification if not STATE.dry_run else []))
+    emit(None, report=output, check=chk, verification_paths=(output,),
+         verification=([{"step": "exists", "ok": True}] + verification if not STATE.dry_run else []))
     if not args.json:
         print(output)
     return 0

@@ -15,13 +15,19 @@ import os
 import platform
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .cookie_paths import path_is_dir, path_is_file
 from .sqlite_snapshot import copy_snapshot
 
 logger = logging.getLogger(__name__)
+_SQLITE_TEMP_SIDECARS = ("", "-wal", "-shm", "-journal")
+
+
+class CookieDatabaseReadError(RuntimeError):
+    """A browser database could not be read to check for a login."""
 
 
 def has_complete_pair(result: Optional[Dict[str, str]], cookie_names) -> bool:
@@ -249,70 +255,198 @@ def _fallback_find_profile(
     return None
 
 
-def _query_cookies_db(
-    db_path: Path, domain: str, cookie_names: List[str]
+def _unlink_sqlite_temp_files(path: Optional[str]) -> None:
+    """Remove a temporary SQLite copy and any WAL/SHM/journal sidecars."""
+    if not path:
+        return
+    for suffix in _SQLITE_TEMP_SIDECARS:
+        try:
+            Path(path + suffix).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _select_scoped_firefox_cookies(
+    rows: List[tuple[Any, ...]],
+    wanted: str,
+    preferred_host: str,
+    cookie_names: List[str],
+    now_unix: int,
+    *,
+    schema_version: int = 0,
 ) -> Optional[Dict[str, str]]:
-    """Snapshot the cookies database to a temp file and query it.
+    """Select cookie values from a single non-expired Firefox scope without mixing."""
+    allowed_hosts = (wanted, f".{wanted}")
+    scopes: Dict[tuple[str, str, str], Dict[str, List[tuple[int, int, bool, int, str]]]] = {}
+    for name, value, host, path, expiry, is_secure, is_httponly, origin_attrs in rows:
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            expiry_val = int(expiry) if expiry is not None else 0
+        except (TypeError, ValueError):
+            continue
+        if expiry_val != 0:
+            # Firefox 142+ (PRAGMA user_version >= 16) stores moz_cookies.expiry
+            # in Unix milliseconds instead of Unix seconds.
+            if schema_version >= 16 or (schema_version == 0 and expiry_val >= 10**11):
+                expiry_val //= 1000
+            if expiry_val <= now_unix:
+                continue
+        host_norm = str(host or "").strip().lower()
+        if host_norm not in allowed_hosts:
+            continue
+        path_norm = path if isinstance(path, str) and path else "/"
+        partition_norm = str(origin_attrs or "").strip()
+        secure_flag = 1 if is_secure else 0
+        httponly_flag = 1 if is_httponly else 0
+        # Host-only (x.com) and domain (.x.com) cookies apply to the same apex
+        # origin per RFC 6265; pair them within one (path, partition).
+        scope_key = (host_norm.lstrip("."), path_norm, partition_norm)
+        scopes.setdefault(scope_key, {}).setdefault(str(name), []).append(
+            (secure_flag, httponly_flag, host_norm == preferred_host, expiry_val, value)
+        )
+
+    if not scopes:
+        return None
+
+    requested = list(dict.fromkeys(cookie_names))
+    resolved_scopes: List[tuple[tuple[Any, ...], Dict[str, str]]] = []
+    for scope_key, by_name in scopes.items():
+        host_base, path_norm, partition_norm = scope_key
+        jar: Dict[str, str] = {}
+        all_secure = True
+        all_httponly = True
+        for name, candidates in by_name.items():
+            candidates.sort(
+                key=lambda item: (
+                    item[0] == 0,
+                    item[1] == 0,
+                    not item[2],
+                    0 if item[3] == 0 else -item[3],
+                )
+            )
+            best = candidates[0]
+            jar[name] = best[4]
+            if best[0] == 0:
+                all_secure = False
+            if best[1] == 0:
+                all_httponly = False
+        if not jar:
+            continue
+        complete = all(name in jar for name in requested)
+        rank = (
+            not complete,
+            partition_norm != "",
+            path_norm != "/",
+            not all_secure,
+            not all_httponly,
+            path_norm,
+            host_base,
+            partition_norm,
+        )
+        resolved_scopes.append((rank, jar))
+
+    if not resolved_scopes:
+        return None
+    resolved_scopes.sort(key=lambda item: item[0])
+    return resolved_scopes[0][1]
+
+
+def _query_cookies_db(
+    db_path: Path, domain: str, cookie_names: List[str], *, windows_wsl: bool = False,
+) -> Optional[Dict[str, str]]:
+    """Snapshot the cookies database to a private temp dir and query it.
 
     The snapshot includes committed WAL updates while Firefox is running.
-    Returns {name: value} dict or None if no matching cookies found.
+    Returns {name: value} dict from a single non-expired scope, or None if no
+    matching cookies are found.
     """
     if not path_is_file(db_path):
         return None
+    wanted = domain.strip().lstrip(".").lower()
+    if not wanted or not cookie_names:
+        return None
+    preferred_host = domain.strip().lower()
+    if preferred_host not in (wanted, f".{wanted}"):
+        preferred_host = f".{wanted}"
 
-    tmp_fd = None
-    tmp_path = None
     try:
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".sqlite")
-        # Snapshot content only; preserve mkstemp's 0600 permissions.
-        copy_snapshot(db_path, tmp_path)
-        _lock_temp_cookie_copy(tmp_path)
+        with tempfile.TemporaryDirectory(prefix="last30days-cookies-") as tmp_dir:
+            if os.name != "nt":
+                os.chmod(tmp_dir, 0o700)
+            tmp_path = str(Path(tmp_dir) / "cookies.sqlite")
+            # Pre-create with 0600 on POSIX and close the fd immediately so
+            # Windows never holds an open descriptor when SQLite writes or
+            # cleanup unlinks the temp database and its WAL/SHM sidecars.
+            tmp_fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(tmp_fd)
+            conn: Optional[sqlite3.Connection] = None
+            schema_version = 0
+            try:
+                if windows_wsl:
+                    copy_snapshot(db_path, tmp_path, wsl_wal_fallback=True)
+                else:
+                    copy_snapshot(db_path, tmp_path)
+                _lock_temp_cookie_copy(tmp_path)
 
-        conn = sqlite3.connect(tmp_path)
-        try:
-            # Build parameterized query — SQLite doesn't support array params,
-            # so we build the IN clause with individual placeholders.
-            placeholders = ",".join("?" for _ in cookie_names)
-            query = (
-                f"SELECT name, value FROM moz_cookies "
-                f"WHERE host LIKE ? AND name IN ({placeholders})"
-            )
-            # domain pattern: match .x.com, x.com, etc.
-            domain_pattern = f"%{domain}"
-            params = [domain_pattern] + list(cookie_names)
+                conn = sqlite3.connect(tmp_path)
+                uv_row = conn.execute("PRAGMA user_version").fetchone()
+                schema_version = int((uv_row or (0,))[0] or 0)
+                col_rows = conn.execute("PRAGMA table_info(moz_cookies)").fetchall()
+                col_map = {str(row[1]).lower(): str(row[1]) for row in col_rows}
+                if not {"name", "value", "host"}.issubset(col_map):
+                    return None
 
-            cursor = conn.execute(query, params)
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
+                path_expr = col_map["path"] if "path" in col_map else "'/'"
+                expiry_expr = col_map["expiry"] if "expiry" in col_map else "0"
+                secure_expr = col_map["issecure"] if "issecure" in col_map else "1"
+                httponly_expr = col_map["ishttponly"] if "ishttponly" in col_map else "1"
+                partition_expr = (
+                    col_map["originattributes"] if "originattributes" in col_map else "''"
+                )
+
+                placeholders = ",".join("?" for _ in cookie_names)
+                query = (
+                    f"SELECT name, value, host, {path_expr}, {expiry_expr}, "
+                    f"{secure_expr}, {httponly_expr}, {partition_expr} "
+                    f"FROM moz_cookies "
+                    f"WHERE LOWER(host) IN (?, ?) AND name IN ({placeholders})"
+                )
+                params = [wanted, f".{wanted}"] + list(cookie_names)
+                rows = conn.execute(query, params).fetchall()
+            finally:
+                if conn is not None:
+                    conn.close()
+                _unlink_sqlite_temp_files(tmp_path)
 
         if not rows:
             return None
-        return {name: value for name, value in rows}
+        return _select_scoped_firefox_cookies(
+            rows,
+            wanted,
+            preferred_host,
+            cookie_names,
+            int(time.time()),
+            schema_version=schema_version,
+        )
 
-    except PermissionError as exc:
-        if exc.filename == str(db_path):
-            raise
-        logger.debug("Failed to query cookies database %s: %s", db_path, exc)
-        return None
     except (sqlite3.Error, OSError) as exc:
+        if isinstance(exc, PermissionError):
+            if exc.filename == str(db_path):
+                raise
+            if windows_wsl:
+                source = db_path.resolve()
+                if exc.filename in (str(source), f"{source}-wal"):
+                    raise
         logger.debug("Failed to query cookies database %s: %s", db_path, exc)
+        if windows_wsl:
+            raise CookieDatabaseReadError("Could not read Windows Firefox cookies") from exc
         return None
-    finally:
-        if tmp_path:
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-        if tmp_fd is not None:
-            try:
-                import os
-                os.close(tmp_fd)
-            except OSError:
-                pass
 
 
-def _try_firefox_dir(profiles_dir: Path, domain: str, cookie_names: List[str]) -> Optional[Dict[str, str]]:
+def _try_firefox_dir(
+    profiles_dir: Path, domain: str, cookie_names: List[str], *, windows_wsl: bool = False,
+) -> Optional[Dict[str, str]]:
     """Try to extract cookies from a Firefox profiles directory.
 
     Tries the default profile first, then falls back to scanning all
@@ -322,15 +456,22 @@ def _try_firefox_dir(profiles_dir: Path, domain: str, cookie_names: List[str]) -
     default-profile result is kept only as a fallback.
     """
     denials: list[PermissionError] = []
+    read_errors: list[CookieDatabaseReadError] = []
+
+    def query(db: Path) -> Optional[Dict[str, str]]:
+        try:
+            return _query_cookies_db(db, domain, cookie_names, windows_wsl=windows_wsl)
+        except PermissionError as exc:
+            denials.append(exc)
+        except CookieDatabaseReadError as exc:
+            read_errors.append(exc)
+        return None
+
     default_profile = _find_default_profile(profiles_dir, denials)
     profiles_tried = 0
     fallback: Optional[Dict[str, str]] = None
     if default_profile is not None:
-        try:
-            result = _query_cookies_db(default_profile / "cookies.sqlite", domain, cookie_names)
-        except PermissionError as exc:
-            denials.append(exc)
-            result = None
+        result = query(default_profile / "cookies.sqlite")
         if result is not None:
             if has_complete_pair(result, cookie_names):
                 return result
@@ -346,7 +487,7 @@ def _try_firefox_dir(profiles_dir: Path, domain: str, cookie_names: List[str]) -
                     continue
                 db = child / "cookies.sqlite"
                 if path_is_file(db):
-                    result = _query_cookies_db(db, domain, cookie_names)
+                    result = query(db)
                     if result is not None:
                         if has_complete_pair(result, cookie_names):
                             return result
@@ -363,6 +504,8 @@ def _try_firefox_dir(profiles_dir: Path, domain: str, cookie_names: List[str]) -
         raise denials[0]
     if fallback is not None:
         return fallback
+    if read_errors:
+        raise read_errors[0]
     logger.debug("No matching cookies found in %d Firefox profile(s)", profiles_tried)
     return None
 
@@ -376,54 +519,18 @@ def extract_firefox_cookies(
     (to avoid lock conflicts), and queries for the requested cookies.
 
     On WSL2, falls back to Windows Firefox if native Linux Firefox has no
-    matching cookies. Windows Firefox cookies are unencrypted, so this works
-    without DPAPI or any Windows-side helpers.
+    matching cookies. If that database cannot be read, raises
+    CookieDatabaseReadError so callers can distinguish failure from no match.
 
     Args:
         domain: The cookie domain to match (e.g. ".x.com"). Matched with LIKE %domain.
         cookie_names: List of cookie names to extract (e.g. ["auth_token", "ct0"]).
 
     Returns:
-        Dict of {cookie_name: cookie_value} or None if extraction fails.
+        Dict of {cookie_name: cookie_value} or None if no match.
     """
-    denied = None
-    try:
-        profiles_dir = _get_firefox_profiles_dir()
-    except PermissionError as exc:
-        denied = exc
-        profiles_dir = None
-    if profiles_dir is not None:
-        try:
-            result = _try_firefox_dir(profiles_dir, domain, cookie_names)
-        except PermissionError as exc:
-            denied = exc
-            result = None
-        if result is not None:
-            return result
-
-    if platform.system() == "Linux" and _is_wsl():
-        try:
-            wsl_dir = _get_wsl_firefox_profiles_dir()
-        except PermissionError as exc:
-            if denied is None:
-                denied = exc
-            wsl_dir = None
-        if wsl_dir is not None:
-            logger.debug("Trying Windows Firefox via WSL: %s", wsl_dir)
-            try:
-                result = _try_firefox_dir(wsl_dir, domain, cookie_names)
-            except PermissionError as exc:
-                if denied is None:
-                    denied = exc
-                result = None
-            if result is not None:
-                return result
-
-    if denied is not None:
-        raise denied
-    if profiles_dir is None:
-        logger.debug("Firefox profiles directory not found")
-    return None
+    result = _extract_firefox_with_source(domain, cookie_names)
+    return result[0] if result is not None else None
 
 
 def extract_chrome_cookies(
@@ -555,6 +662,8 @@ def extract_cookies(
 ) -> Optional[dict[str, str]]:
     """Extract cookies from the specified browser.
 
+    See extract_cookies_with_source() for selection and permission-error behavior.
+
     Args:
         browser: One of 'firefox', 'chrome', 'brave', 'edge', 'vivaldi',
             'opera', 'arc', 'dia', 'chromium', 'safari', or 'auto'.
@@ -607,16 +716,22 @@ def _extract_firefox_with_source(
         if wsl_dir is not None:
             logger.debug("Trying Windows Firefox via WSL: %s", wsl_dir)
             try:
-                result = _try_firefox_dir(wsl_dir, domain, cookie_names)
+                result = _try_firefox_dir(wsl_dir, domain, cookie_names, windows_wsl=True)
             except PermissionError as exc:
                 if denied is None:
                     denied = exc
                 result = None
+            except CookieDatabaseReadError:
+                if denied is not None:
+                    raise denied from None
+                raise
             if result is not None:
                 return (result, "firefox-wsl")
 
     if denied is not None:
         raise denied
+    if profiles_dir is None:
+        logger.debug("Firefox profiles directory not found")
     return None
 
 
@@ -628,15 +743,26 @@ def extract_cookies_with_source(
     Same as extract_cookies() but returns a (cookies, browser_name) tuple
     so callers can track the source.
 
+    Auto mode tries browsers in platform order until one supplies every requested
+    cookie with a nonempty value. If none does, it returns the first partial
+    result without combining cookies from different browsers. A browser's
+    access or database read error does not stop later candidates from being tried.
+
     Args:
         browser: One of 'firefox', 'chrome', 'brave', 'edge', 'vivaldi',
             'opera', 'arc', 'dia', 'chromium', 'safari', or 'auto'.
-        domain: The cookie domain to match (e.g. ".x.com").
+        domain: Bare or dot-prefixed cookie domain (e.g. "x.com" or ".x.com").
         cookie_names: List of cookie names to extract.
 
     Returns:
         Tuple of ({cookie_name: cookie_value}, browser_name) or None.
         browser_name is "firefox-wsl" when cookies came from Windows Firefox via WSL2.
+
+    Raises:
+        PermissionError: The explicitly selected browser denies access, or auto
+            mode encounters a denial and no browser returns even a partial result.
+        CookieDatabaseReadError: Windows Firefox cannot be read and no other
+            candidate supplies cookies or reports a permission denial.
     """
     extractors = {
         "firefox": extract_firefox_cookies,
@@ -674,14 +800,36 @@ def extract_cookies_with_source(
     else:
         order = ["firefox"]
 
+    fallback = None
+    first_denial = None
+    first_read_error = None
     for name in order:
-        if name == "firefox":
-            result = _extract_firefox_with_source(domain, cookie_names)
-            if result is not None:
+        try:
+            if name == "firefox":
+                result = _extract_firefox_with_source(domain, cookie_names)
+            else:
+                cookies = extractors[name](domain, cookie_names)
+                result = (cookies, name) if cookies is not None else None
+        except PermissionError as exc:
+            if first_denial is None:
+                first_denial = exc
+            continue
+        except CookieDatabaseReadError as exc:
+            if first_read_error is None:
+                first_read_error = exc
+            continue
+
+        if result is not None:
+            if has_complete_pair(result[0], cookie_names):
                 return result
-        else:
-            result = extractors[name](domain, cookie_names)
-            if result is not None:
-                return (result, name)
+            if fallback is None:
+                fallback = result
+
+    if fallback is not None:
+        return fallback
+    if first_denial is not None:
+        raise first_denial
+    if first_read_error is not None:
+        raise first_read_error
 
     return None

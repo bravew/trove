@@ -10,16 +10,30 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import (
+    HTTPDefaultErrorHandler,
+    HTTPErrorProcessor,
+    HTTPHandler,
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+    UnknownHandler,
+    getproxies,
+)
 
-from . import brightdata
-from .private_files import write_private_text
+from . import brightdata, health, private_files, providers
+from .private_files import replace_private_text, write_private_text
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +56,7 @@ Auto setup gives you the core sources free in about 30 seconds:
 - YouTube search + transcripts - installs yt-dlp (open source, 190K+ GitHub stars).
 - Digg - trending news, GitHub stars, and pipeline feeds - installs the free, keyless Digg CLI.
 - arXiv (papers) + Techmeme (tech-news) - install free, keyless Printing Press CLIs and run on any topic (arXiv is relevance + recency gated to research topics).
+- Yahoo Finance - the share-price move over your 30 days - installs the free, keyless Yahoo Finance CLI; shows only when your topic is a listed company or the person who leads one.
 - StockTwits - retail trader sentiment - auto-on when your topic is a ticker or crypto (e.g. "$NVDA earnings", "bitcoin"), off for everything else.
 - Trustpilot - brand/company review sentiment - opt-in (add trustpilot to INCLUDE_SOURCES), off by default.
 - Hacker News + Polymarket + GitHub (auto-on if the gh CLI is installed) - always on, zero config.
@@ -90,7 +105,9 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
           ytdlp_installed: bool
           ytdlp_action: already_installed | installed | install_failed | no_homebrew
           digg_installed: bool (True when the engine can resolve digg-pp-cli on PATH)
-          digg_action: already_installed | installed | installed_off_path | install_failed | no_npx
+          digg_action: already_installed | installed | upgraded | installed_off_path | install_failed | no_npx
+              (install_failed / no_npx with digg_installed True: an older CLI on
+              PATH could not be upgraded and is still the one in use)
           env_written: bool (always False here — caller writes config separately)
           ytdlp_stderr: present when ytdlp_action is install_failed
           digg_stderr: present when digg_action is install_failed
@@ -128,6 +145,9 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
         browsers = cookie_extraction_browsers(cookie_config)
 
         for source_name, spec in COOKIE_DOMAINS.items():
+            if spec.get("consent_key"):
+                # The Reddit login has its own consent: setup --reddit-session.
+                continue
             domain = spec["domain"]
             cookie_names = spec["cookies"]
 
@@ -190,12 +210,13 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
             if scan_attempted and "x" not in cookies_found else []
         ),
         "browser_cookie_scan_attempted": scan_attempted,
+        "firefox_scanned": scan_attempted and "firefox" in browsers,
         "ytdlp_installed": ytdlp_installed,
         "ytdlp_action": ytdlp_action,
         "digg_installed": digg_installed,
         "digg_action": digg_action,
         # Per-CLI status for the additional default-on Printing Press sources
-        # (arxiv, techmeme, trustpilot): {source: {installed, action, ...}}.
+        # (arxiv, techmeme, yahoo_finance): {source: {installed, action, ...}}.
         "pp_sources": pp_sources,
         # Reported, never installed: this CLI spends the user's own metered
         # credits, so acquiring it stays their decision. Passing
@@ -220,10 +241,9 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
 # Printing Press package and build the Go binary over the network.
 DIGG_INSTALL_TIMEOUT = 300
 DIGG_CLI_BIN = "digg-pp-cli"
-# Pin the catalog installer; matches printing-press-library npm 0.1.16 default
-# ($HOME/.local/bin on macOS/Linux).
-PRINTING_PRESS_NPM = "@mvanhorn/printing-press-library@0.1.16"
-DIGG_INSTALL_CMD = f"npx -y {PRINTING_PRESS_NPM} install digg --cli-only"
+# The pinned catalog installer lives in health so setup and doctor share it.
+PRINTING_PRESS_NPM = health.PRINTING_PRESS_NPM
+DIGG_INSTALL_CMD = health.helper_upgrade_cmd("digg")
 
 
 def _digg_bin_candidate_paths() -> list[Path]:
@@ -237,8 +257,6 @@ def _digg_bin_candidate_paths() -> list[Path]:
     ``shutil.which`` resolves on PATH — probing these dirs is for setup
     verification and honest off-PATH messaging, not engine activation.
     """
-    from . import health
-
     win_dir = health.windows_printing_press_bin_dir()
     candidates: list[Path] = []
     for directory in health.installer_bin_dirs():
@@ -320,7 +338,57 @@ def _run_npx_install(slug: str) -> Tuple[str, str]:
         stderr = proc.stderr or f"npx install {slug} exited {proc.returncode}"
         logger.warning("npx install %s failed (rc=%s): %s", slug, proc.returncode, stderr)
         return "install_failed", stderr
+    # On a fresh Windows setup the managed Printing Press bin dir only exists
+    # now, so the engine's startup PATH append skipped it. Add it before the
+    # caller's shutil.which check, or setup asks for a PATH edit the next
+    # engine run would not need.
+    health.add_managed_bin_dir_to_path()
     return "", (proc.stderr or "")
+
+
+def _install_failed_line(name: str, install_cmd: str, stderr: str) -> str:
+    """Summary line for a failed Printing Press install.
+
+    The installer names a missing prerequisite (Go) on stderr; re-running the
+    same command fails the same way, so lead with that cause (#1434).
+    """
+    prereq = next(
+        (line.strip() for line in stderr.splitlines() if "Go is required" in line),
+        "",
+    )
+    if prereq:
+        return f"  - {name} CLI install failed: {prereq} Then run `{install_cmd}`"
+    return f"  - {name} CLI install failed — run `{install_cmd}` manually"
+
+
+def _upgrade_helper(slug: str, bin_name: str) -> Tuple[bool, str, str, str]:
+    """Re-run the catalog install over a helper on PATH that is too old.
+
+    The older binary stays on PATH whatever happens, so ``engine_active``
+    stays True on failure. Returns ``(engine_active, action, stderr, "")``
+    with ``action`` one of: upgraded | install_failed | no_npx. ``upgraded``
+    is claimed only when the helper PATH resolves afterwards reads at or above
+    its minimum; an older copy earlier on PATH would otherwise still answer.
+    """
+    action, stderr = _run_npx_install(slug)
+    if action:
+        return True, action, stderr, ""
+    resolved = shutil.which(bin_name)
+    if resolved is None:
+        stderr_msg = stderr or f"upgrade completed but {bin_name} was not found"
+        logger.warning("npx upgrade %s failed verification: %s", slug, stderr_msg)
+        return False, "install_failed", stderr_msg, ""
+    outdated = health.helper_outdated(bin_name, resolved)
+    if outdated is not False:
+        stderr_msg = (
+            f"upgrade completed but {resolved} is still older than the engine "
+            "needs; an older copy may sit earlier on PATH"
+            if outdated
+            else f"upgrade completed but the version of {resolved} could not be read"
+        )
+        logger.warning("npx upgrade %s: %s", slug, stderr_msg)
+        return True, "install_failed", stderr_msg, ""
+    return True, "upgraded", "", ""
 
 
 def _install_digg_cli() -> Tuple[bool, str, str, str]:
@@ -334,12 +402,19 @@ def _install_digg_cli() -> Tuple[bool, str, str, str]:
     Returns ``(engine_active, action, stderr, off_path_binary)`` where
     ``engine_active`` is True only when ``shutil.which`` resolves the binary
     (matching ``pipeline.available_sources()``). ``action`` is one of:
-      already_installed | installed | installed_off_path | install_failed | no_npx
-    ``stderr`` is populated on ``install_failed``. ``off_path_binary`` is set
-    when the binary exists on disk but is not PATH-visible to this process.
+      already_installed | installed | upgraded | installed_off_path |
+      install_failed | no_npx
+    ``upgraded`` means a binary on PATH older than
+    ``health.MIN_HELPER_VERSIONS`` allows was replaced; when that upgrade
+    fails (``install_failed``/``no_npx``) the older binary is still on PATH,
+    so ``engine_active`` stays True. ``stderr`` is populated on
+    ``install_failed``. ``off_path_binary`` is set when the binary exists on
+    disk but is not PATH-visible to this process.
     """
     on_path = _digg_on_path()
     if on_path:
+        if health.helper_outdated(DIGG_CLI_BIN, on_path):
+            return _upgrade_helper("digg", DIGG_CLI_BIN)
         return True, "already_installed", "", ""
     off_path = _digg_off_path_binary()
     if off_path:
@@ -371,6 +446,9 @@ def _install_digg_cli() -> Tuple[bool, str, str, str]:
 PP_DEFAULT_SOURCES: list[tuple[str, str, str]] = [
     ("arxiv", "arxiv", "arxiv-pp-cli"),
     ("techmeme", "techmeme", "techmeme-pp-cli"),
+    # Not a search source: it adds the share-price line when a topic resolves
+    # to a listed company (lib/yahoo_finance.py gates on the same binary).
+    ("yahoo_finance", "yahoo-finance", "yahoo-finance-pp-cli"),
 ]
 
 # Bright Data is deliberately absent from PP_DEFAULT_SOURCES: it is not a
@@ -484,11 +562,13 @@ def _install_pp_cli(slug: str, bin_name: str) -> Tuple[bool, str, str, str]:
     Slug-parameterized mirror of ``_install_digg_cli``: never raises, degrades
     to recommend-only when the installer is unavailable. Returns
     ``(engine_active, action, stderr, off_path_binary)`` with the same action
-    taxonomy: already_installed | installed | installed_off_path |
+    taxonomy: already_installed | installed | upgraded | installed_off_path |
     install_failed | no_npx.
     """
     on_path = shutil.which(bin_name)
     if on_path:
+        if health.helper_outdated(bin_name, on_path):
+            return _upgrade_helper(slug, bin_name)
         return True, "already_installed", "", ""
     off_path = _pp_off_path_binary(bin_name)
     if off_path:
@@ -532,18 +612,28 @@ def install_default_pp_sources() -> Dict[str, Dict[str, Any]]:
 def _open_secret_append(path: Path):
     """Open ``path`` for appending as a 0o600 secret file with no readable window.
 
-    ``os.open`` with ``O_CREAT|O_WRONLY|O_APPEND`` and mode ``0o600`` sets
-    restrictive permissions at creation (umask can only further restrict, never
-    widen, so the file is never world-readable even transiently). An explicit
-    ``chmod`` afterwards also tightens a pre-existing loose file. This matters
-    because the .env stores API keys, cookies, and tokens.
+    Uses ``O_NOFOLLOW`` and parent verification on POSIX (and junction/symlink
+    checks on Windows), tightens the open file descriptor with ``os.fchmod``,
+    and closes the descriptor if post-open setup or ``os.fdopen`` raises.
     """
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    path = Path(path)
+    flags = os.O_CREAT | os.O_WRONLY | os.O_APPEND
+    if os.name == "posix":
+        path = private_files._resolve_parent_only(path)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    else:
+        private_files._reject_symlink_or_nonregular(path)
+    fd = os.open(path, flags, 0o600)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return os.fdopen(fd, "a", encoding="utf-8")
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"Expected a regular private file: {path}")
+        if os.name == "posix" and hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "a", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _env_line_key(stripped: str) -> str:
@@ -553,13 +643,23 @@ def _env_line_key(stripped: str) -> str:
     return _env.env_line_key(stripped.split("=", 1)[0])
 
 
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# All characters that Python's str.splitlines() splits on.
+_ENV_LINE_BREAKS_RE = re.compile(r"[\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+# Line breaks plus NUL are disallowed in persisted secret values.
+_ENV_DISALLOWED_KEY_CHARS_RE = re.compile(r"[\x00\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
 def _replace_env_line(env_path: Path, content: str, key_name: str, value: str) -> bool:
     """Rewrite every ``key_name=`` line of ``content`` with ``value`` as a 0o600 secret.
 
-    The new file is written to a sibling temp path opened at 0o600 and moved
-    over the original, so the secret never has a readable window and a
+    The new file is written to an owner-only sibling temp path and atomically
+    moved over the original, so the secret never has a readable window and a
     crash mid-write leaves the old file intact.
     """
+    if not isinstance(key_name, str) or not _ENV_KEY_RE.fullmatch(key_name):
+        return False
+
     def _is_key(stripped: str) -> bool:
         return bool(
             stripped and not stripped.startswith("#") and "=" in stripped
@@ -586,15 +686,12 @@ def _replace_env_line(env_path: Path, content: str, key_name: str, value: str) -
         lines.append(line)
     if not replaced:
         lines.append(new_line)
-    tmp_path = env_path.with_name(env_path.name + ".tmp")
-    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    os.replace(tmp_path, env_path)
-    try:
-        os.chmod(env_path, 0o600)
-    except OSError:
-        pass
+    replace_private_text(env_path, "\n".join(lines) + "\n")
+    if os.name != "posix":
+        try:
+            os.chmod(env_path, 0o600)
+        except OSError:
+            pass
     return True
 
 
@@ -603,15 +700,21 @@ def _format_env_value(value: str) -> str:
 
     env.load_env_file strips a single layer of matching surrounding quotes but
     does NOT process backslash escapes, so we wrap (never escape):
-      - plain tokens (no whitespace, no leading quote): returned unchanged;
-      - values with whitespace/leading quote and no double-quote: double-quoted;
+      - plain tokens (no whitespace, no leading quote or ``#``): returned unchanged;
+      - values with whitespace/leading quote/``#`` and no double-quote: double-quoted;
       - values containing a double-quote but no single-quote: single-quoted;
       - values containing both quote types: returned as-is (best effort; no
         wrapper round-trips through the loader, and tokens never hit this).
-    Newlines are not valid in a single-line env value and are stripped.
+    All characters split by ``str.splitlines()`` and NUL are removed/collapsed
+    so a single value can never inject a second ``KEY=value`` line.
     """
-    value = value.replace("\r", "").replace("\n", " ")
-    needs_quoting = (not value) or value[0] in ("'", '"') or any(c.isspace() for c in value)
+    value = value.replace("\r", "").replace("\x00", "")
+    value = _ENV_LINE_BREAKS_RE.sub(" ", value)
+    needs_quoting = (
+        (not value)
+        or value[0] in ("'", '"', "#")
+        or any(c.isspace() for c in value)
+    )
     if not needs_quoting:
         return value
     if '"' not in value:
@@ -622,7 +725,7 @@ def _format_env_value(value: str) -> str:
 
 
 def write_setup_config(
-    env_path: Path,
+    env_path: Optional[Path],
     from_browser: str | None = None,
     *,
     browser_consent: bool | None = None,
@@ -649,9 +752,12 @@ def write_setup_config(
     Returns:
         True if config was written successfully, False on error.
     """
+    if not env_path or not isinstance(env_path, (str, os.PathLike)):
+        return False
     try:
         env_path = Path(env_path)
-        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private_files._reject_symlink_or_nonregular(env_path)
         if browser_consent is not None:
             if not write_api_key(
                 env_path, "true" if browser_consent else "false",
@@ -669,7 +775,7 @@ def write_setup_config(
         existing_keys: set = set()
         existing_content = ""
         if env_path.exists():
-            existing_content = env_path.read_text(encoding="utf-8")
+            existing_content = env_path.read_text(encoding="utf-8-sig")
             for line in existing_content.splitlines():
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#") and "=" in stripped:
@@ -700,7 +806,7 @@ def write_setup_config(
 
 
 def write_api_key(
-    env_path: Path,
+    env_path: Optional[Path],
     api_key: str,
     key_name: str = "SCRAPECREATORS_API_KEY",
     *,
@@ -725,17 +831,26 @@ def write_api_key(
 
     Returns:
         True if the key was written or already present, False on error or when
-        ``api_key`` is empty.
+        ``api_key`` is empty or malformed.
     """
-    if not api_key:
+    if (
+        not env_path
+        or not isinstance(env_path, (str, os.PathLike))
+        or not api_key
+        or not isinstance(api_key, str)
+        or not isinstance(key_name, str)
+        or not _ENV_KEY_RE.fullmatch(key_name)
+        or _ENV_DISALLOWED_KEY_CHARS_RE.search(api_key)
+    ):
         return False
     try:
         env_path = Path(env_path)
-        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private_files._reject_symlink_or_nonregular(env_path)
 
         existing_content = ""
         if env_path.exists():
-            existing_content = env_path.read_text(encoding="utf-8")
+            existing_content = env_path.read_text(encoding="utf-8-sig")
             for line in existing_content.splitlines():
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#") and "=" in stripped:
@@ -799,6 +914,19 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
             f"{', '.join(denied_browsers)}. {X_COOKIE_ACCESS_FIX}"
         )
 
+    if (results.get("browser_cookie_scan_attempted")
+            and "x" not in cookies_found and not denied_browsers):
+        lines.append("  - No complete X login was found in the scanned browser profiles.")
+        if results.get("firefox_scanned"):
+            lines.append(
+                "    Firefox permanent private browsing or clearing cookies on exit can "
+                "prevent saved cookies from being found."
+            )
+        lines.append(
+            "    Sign in with persistent browser cookies, or set AUTH_TOKEN and CT0 "
+            "manually in ~/.config/last30days/.env."
+        )
+
     ytdlp_action = results.get("ytdlp_action", "")
     if ytdlp_action == "installed":
         lines.append("  - Installed yt-dlp via Homebrew")
@@ -820,9 +948,9 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
 
     digg_action = results.get("digg_action", "")
     if digg_action == "installed":
-        lines.append("  - Installed Digg CLI (free AI-news clusters source now active)")
+        lines.append("  - Installed Digg CLI (free Digg story source now active)")
     elif digg_action == "already_installed":
-        lines.append("  - Digg CLI already installed (AI-news clusters active)")
+        lines.append("  - Digg CLI already installed (Digg stories active)")
     elif digg_action == "installed_off_path":
         digg_path = results.get("digg_path", "")
         if digg_path:
@@ -838,8 +966,21 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
                 "directory to PATH and restart your agent session/gateway for "
                 "Digg to activate"
             )
+    elif digg_action == "upgraded":
+        lines.append("  - Upgraded Digg CLI to a release the engine can call (Digg stories active)")
+    elif digg_action == "install_failed" and results.get("digg_installed"):
+        # The older CLI is still on PATH; its searches fail until upgraded.
+        lines.append(
+            "  - Digg CLI upgrade failed; the older Digg CLI is still in use and "
+            f"its searches fail — run `{DIGG_INSTALL_CMD}` manually"
+        )
     elif digg_action == "install_failed":
-        lines.append(f"  - Digg CLI install failed — run `{DIGG_INSTALL_CMD}` manually")
+        lines.append(_install_failed_line("Digg", DIGG_INSTALL_CMD, results.get("digg_stderr", "")))
+    elif digg_action == "no_npx" and results.get("digg_installed"):
+        lines.append(
+            "  - Digg CLI is older than the engine can call. Install Node/npx, "
+            f"then upgrade it: {DIGG_INSTALL_CMD}"
+        )
     elif digg_action == "no_npx":
         lines.append(
             "  - Digg CLI not installed (free, optional). Install Node/npx, then: "
@@ -847,12 +988,33 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
         )
 
     pp_sources = results.get("pp_sources", {})
-    pp_name: dict[str, str] = {"arxiv": "arXiv", "techmeme": "Techmeme"}
+    pp_name: dict[str, str] = {
+        "arxiv": "arXiv", "techmeme": "Techmeme", "yahoo_finance": "Yahoo Finance",
+    }
+    # The catalog install takes the slug, which is not always the source key
+    # (yahoo_finance installs as yahoo-finance).
+    pp_slug = {key: slug for key, slug, _bin in PP_DEFAULT_SOURCES}
     for source_key, entry in sorted(pp_sources.items()):
         name = pp_name.get(source_key, source_key.title())
+        install_cmd = health.helper_upgrade_cmd(pp_slug.get(source_key, source_key))
         action = entry.get("action", "")
+        # install_failed / no_npx with the helper still on PATH: an older
+        # copy that could not be upgraded.
+        stale = bool(entry.get("installed"))
         if action == "installed":
             lines.append(f"  - Installed {name} CLI ({name} source now active)")
+        elif action == "upgraded":
+            lines.append(f"  - Upgraded {name} CLI to a release the engine can call ({name} active)")
+        elif action == "install_failed" and stale:
+            lines.append(
+                f"  - {name} CLI upgrade failed; the older {name} CLI is still in "
+                f"use — run `{install_cmd}` manually"
+            )
+        elif action == "no_npx" and stale:
+            lines.append(
+                f"  - {name} CLI is older than the engine can call. Install "
+                f"Node/npx, then upgrade it: `{install_cmd}`"
+            )
         elif action == "already_installed":
             lines.append(f"  - {name} CLI already installed ({name} active)")
         elif action == "installed_off_path":
@@ -870,14 +1032,11 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
                     f"{name} to activate"
                 )
         elif action == "install_failed":
-            lines.append(
-                f"  - {name} CLI install failed — run "
-                f"`npx -y {PRINTING_PRESS_NPM} install {source_key} --cli-only` manually"
-            )
+            lines.append(_install_failed_line(name, install_cmd, entry.get("stderr", "")))
         elif action == "no_npx":
             lines.append(
                 f"  - {name} CLI not installed (free, optional). Install Node/npx, "
-                f"then: `npx -y {PRINTING_PRESS_NPM} install {source_key} --cli-only`"
+                f"then: `{install_cmd}`"
             )
 
     # Bright Data / Amazon. Reported but never installed (it spends the user's
@@ -990,11 +1149,192 @@ def run_openclaw_setup(config: Dict[str, Any]) -> Dict[str, Any]:
 
 _DEVICE_BASE = "https://api.scrapecreators.com/v1/github/device"
 
+
+def _device_base() -> str:
+    if _DEVICE_BASE != "https://api.scrapecreators.com/v1/github/device":
+        return _DEVICE_BASE
+    from . import env
+    return f"{env.get_scrapecreators_base_url()}/v1/github/device"
+
 # A GitHub device code is always XXXX-XXXX (uppercase alphanumerics). We validate
 # user_code against this before copying, labeling, or emitting it so a malformed
 # or key-shaped value (e.g. a returning-account server response) is never
 # mislabeled as a device code or leaked to stdout/clipboard.
 _DEVICE_CODE_RE = re.compile(r"^[0-9A-Z]{4}-[0-9A-Z]{4}$")
+_AUTH_HEADER_RE = re.compile(r"\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+_GITHUB_TOKEN_RE = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b"
+)
+_SECRET_FIELD_NAMES = frozenset(
+    {
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "token",
+        "secret",
+        "authorization",
+        "password",
+        "cookie",
+    }
+)
+_SAFE_ERROR_SUMMARY_KEYS = ("error", "error_description", "message", "detail")
+_SECRET_FIELD_RE = re.compile(
+    r"""(["']?(?:access_token|refresh_token|api_key|apikey|token|secret|authorization|password|cookie)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,}&;]+)""",
+    re.IGNORECASE,
+)
+_UNCLOSED_SECRET_QUOTE_RE = re.compile(
+    r"""["']?(?:access_token|refresh_token|api_key|apikey|token|secret|authorization|password|cookie)["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*\\?$|'(?:\\.|[^'\\])*\\?$)""",
+    re.IGNORECASE,
+)
+_URL_USERINFO_RE = re.compile(r"(https?://)[^\s/?#]+@", re.IGNORECASE)
+_MAX_DEVICE_RESPONSE_BYTES = 64 * 1024
+
+
+class _DeviceNoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if fp is not None:
+            try:
+                fp.close()
+            except Exception:
+                pass
+        raise HTTPError(
+            req.full_url,
+            403,
+            "redirect refused for device auth endpoint",
+            headers,
+            None,
+        )
+
+
+def _build_device_opener(*, loopback_http: bool = False) -> OpenerDirector:
+    """Build a no-redirect opener for device-auth endpoints.
+
+    Omits FileHandler, FTPHandler, and DataHandler. Remote targets are HTTPS-only
+    (honoring only the ``https`` proxy entry); loopback HTTP test targets bypass
+    ambient proxies directly.
+    """
+    opener = OpenerDirector()
+    if loopback_http:
+        handlers = [
+            ProxyHandler({}),
+            UnknownHandler(),
+            HTTPHandler(),
+            HTTPDefaultErrorHandler(),
+            _DeviceNoRedirectHandler(),
+            HTTPErrorProcessor(),
+        ]
+    else:
+        https_proxy = getproxies().get("https")
+        proxies = {"https": https_proxy} if https_proxy else {}
+        handlers = [
+            ProxyHandler(proxies),
+            UnknownHandler(),
+            HTTPSHandler(),
+            HTTPDefaultErrorHandler(),
+            _DeviceNoRedirectHandler(),
+            HTTPErrorProcessor(),
+        ]
+    for handler in handlers:
+        opener.add_handler(handler)
+    return opener
+
+
+def _default_urlopen(req: Request, timeout: int = 15):
+    url = getattr(req, "full_url", None) or str(req)
+    if not isinstance(url, str) or not url or url != url.strip():
+        raise URLError("unsupported URL scheme: <empty>")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        raise URLError("unsupported URL control characters")
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise URLError(f"invalid URL: {exc}") from exc
+    scheme = parts.scheme.lower()
+    if scheme == "https" and parts.hostname:
+        return _build_device_opener(loopback_http=False).open(req, timeout=timeout)
+    if scheme == "http" and providers.is_loopback_http_endpoint(url):
+        return _build_device_opener(loopback_http=True).open(req, timeout=timeout)
+    raise URLError(f"unsupported URL scheme or non-loopback http: {scheme or '<empty>'}")
+
+
+# Sole test compatibility seam for patches targeting ``lib.setup_wizard.urlopen``;
+# production requests always use the dedicated no-redirect opener above and never
+# delegate to ``urllib.request.urlopen``.
+urlopen = _default_urlopen
+
+
+def _open_device_request(req: Request, *, timeout: int = 15):
+    return urlopen(req, timeout=timeout)
+
+
+def _close_http_error(exc: HTTPError) -> None:
+    close = getattr(exc, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _read_bounded_json_dict(resp: Any) -> Optional[Dict[str, Any]]:
+    try:
+        raw = resp.read(_MAX_DEVICE_RESPONSE_BYTES + 1)
+    except TypeError:
+        raw = resp.read()
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) > _MAX_DEVICE_RESPONSE_BYTES:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _is_valid_verification_uri(uri: Any) -> bool:
+    """Return True only for exact HTTPS ``github.com`` device-login verification URIs."""
+    if not isinstance(uri, str) or not uri:
+        return False
+    if "\\" in uri or any(ord(ch) <= 0x20 or ord(ch) >= 0x7F for ch in uri):
+        return False
+    try:
+        parts = urlsplit(uri)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https":
+        return False
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        return False
+    if port not in (None, 443):
+        return False
+    if (parts.hostname or "").lower() != "github.com":
+        return False
+    if parts.query or parts.fragment or "?" in uri or "#" in uri:
+        return False
+    path = parts.path
+    if path != "/login/device" and not path.startswith("/login/device/"):
+        return False
+    lowered_path = path.lower()
+    if ".." in path.split("/") or "%2e" in lowered_path or "%2f" in lowered_path or "%5c" in lowered_path:
+        return False
+    return True
+
+
+def _scrub_error_text(text: str, *, secrets: Tuple[str, ...] = ()) -> str:
+    """Redact known secrets, bearer tokens, and URL credentials from error text."""
+    scrubbed = text
+    for secret in secrets:
+        if not isinstance(secret, str):
+            continue
+        for candidate in {secret, secret.strip()}:
+            if candidate and candidate.strip():
+                scrubbed = scrubbed.replace(candidate, "[REDACTED]")
+    scrubbed = _URL_USERINFO_RE.sub(r"\1", scrubbed)
+    scrubbed = _AUTH_HEADER_RE.sub(r"\1 [REDACTED]", scrubbed)
+    scrubbed = _GITHUB_TOKEN_RE.sub("[REDACTED]", scrubbed)
+    scrubbed = _SECRET_FIELD_RE.sub(r'\1"[REDACTED]"', scrubbed)
+    return scrubbed
 
 
 def _existing_scrapecreators_key() -> Optional[str]:
@@ -1035,12 +1375,22 @@ def run_device_auth() -> Optional[Tuple[str, str, str, int]]:
     """
     try:
         body = json.dumps({}).encode()
-        req = Request(f"{_DEVICE_BASE}/code", data=body, method="POST")
+        req = Request(f"{_device_base()}/code", data=body, method="POST")
         req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except (HTTPError, URLError, OSError) as exc:
-        logger.warning("Device auth code request failed: %s", exc)
+        with _open_device_request(req, timeout=15) as resp:
+            data = _read_bounded_json_dict(resp)
+    except HTTPError as exc:
+        try:
+            logger.warning("Device auth code request failed: %s", _scrub_error_text(str(exc)))
+        finally:
+            _close_http_error(exc)
+        return None
+    except (URLError, OSError) as exc:
+        logger.warning("Device auth code request failed: %s", _scrub_error_text(str(exc)))
+        return None
+
+    if data is None:
+        logger.warning("Device auth code request returned invalid or oversized JSON.")
         return None
 
     device_code = data.get("device_code")
@@ -1056,7 +1406,13 @@ def run_device_auth() -> Optional[Tuple[str, str, str, int]]:
         )
         return None
 
-    return (device_code, user_code, verification_uri or "", interval)
+    if verification_uri is None:
+        verification_uri = ""
+    elif verification_uri != "" and not _is_valid_verification_uri(verification_uri):
+        logger.warning("Device auth returned an untrusted verification_uri; aborting.")
+        return None
+
+    return (device_code, user_code, verification_uri, interval)
 
 
 def poll_device_auth(
@@ -1108,17 +1464,28 @@ def poll_device_auth(
 
         try:
             body = json.dumps({"device_code": device_code}).encode()
-            req = Request(f"{_DEVICE_BASE}/token", data=body, method="POST")
+            req = Request(f"{_device_base()}/token", data=body, method="POST")
             req.add_header("Content-Type", "application/json")
-            with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
+            with _open_device_request(req, timeout=15) as resp:
+                data = _read_bounded_json_dict(resp)
         except HTTPError as exc:
-            if exc.code in (400, 403, 428):
-                continue
-            logger.warning("Device auth poll error: %s", exc)
-            return None
+            try:
+                reason = str(getattr(exc, "reason", "") or "").lower()
+                if exc.code in (400, 403, 428) and "redirect refused" not in reason:
+                    continue
+                logger.warning(
+                    "Device auth poll error: %s",
+                    _scrub_error_text(str(exc), secrets=(device_code,)),
+                )
+                return None
+            finally:
+                _close_http_error(exc)
         except (URLError, OSError):
             continue
+
+        if data is None:
+            logger.warning("Device auth poll returned invalid or oversized JSON.")
+            return None
 
         if data.get("access_token"):
             return data["access_token"]
@@ -1142,22 +1509,98 @@ _PROFILE_FETCH_RETRY_SLEEP_S = 1.0
 _PROFILE_ERROR_BODY_LIMIT = 200
 
 
-def _http_error_detail(exc: HTTPError, *, body_limit: int = _PROFILE_ERROR_BODY_LIMIT) -> str:
-    """Build a diagnosable HTTPError string including a truncated body.
+_PROFILE_ERROR_READ_LIMIT = 65536
 
-    The body is capped and never treated as a secret source of truth; callers
-    still must not log bearer tokens. Used so a 5xx is not a black box.
+
+_MAX_JSON_REDACT_DEPTH = 8
+
+
+def _redact_json_value(
+    value: Any,
+    *,
+    secrets: Tuple[str, ...] = (),
+    depth: int = 0,
+) -> Any:
+    """Recursively redact sensitive keys/names and scrub string values in parsed JSON."""
+    if depth >= _MAX_JSON_REDACT_DEPTH:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for k, v in value.items():
+            is_secret_key = isinstance(k, str) and k.strip().lower() in _SECRET_FIELD_NAMES
+            safe_key = _scrub_error_text(str(k), secrets=secrets)
+            redacted[safe_key] = (
+                "[REDACTED]"
+                if is_secret_key
+                else _redact_json_value(v, secrets=secrets, depth=depth + 1)
+            )
+        return redacted
+    if isinstance(value, list):
+        return [_redact_json_value(item, secrets=secrets, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        return _scrub_error_text(value, secrets=secrets)
+    return value
+
+
+def _http_error_detail(
+    exc: HTTPError,
+    *,
+    body_limit: int = _PROFILE_ERROR_BODY_LIMIT,
+    secrets: Tuple[str, ...] = (),
+) -> str:
+    """Build a diagnosable HTTPError string including a scrubbed, truncated body.
+
+    JSON dict bodies are parsed, recursively redacted (keys and values), and
+    reduced to safe summary fields before serialization. Deeply nested JSON
+    that triggers ``RecursionError`` or non-JSON bodies with unclosed secret
+    quotes fall back to the scrubbed HTTP status/reason alone.
     """
-    base = f"HTTP Error {exc.code}: {getattr(exc, 'reason', '') or ''}".rstrip(": ")
+    base = _scrub_error_text(
+        f"HTTP Error {exc.code}: {getattr(exc, 'reason', '') or ''}".rstrip(": "),
+        secrets=secrets,
+    )
     try:
-        raw = exc.read() or b""
+        try:
+            raw = exc.read(_PROFILE_ERROR_READ_LIMIT) or b""
+        except TypeError:
+            raw = exc.read() or b""
     except Exception:
         return base
+    finally:
+        _close_http_error(exc)
     if not raw:
         return base
     text = raw.decode("utf-8", errors="replace").strip()
     if not text:
         return base
+    try:
+        parsed = json.loads(text)
+    except RecursionError:
+        return base
+    except (json.JSONDecodeError, ValueError, TypeError):
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        try:
+            redacted = _redact_json_value(parsed, secrets=secrets)
+            if isinstance(redacted, dict):
+                summary = {
+                    key: redacted[key]
+                    for key in _SAFE_ERROR_SUMMARY_KEYS
+                    if key in redacted
+                }
+                payload = summary or redacted
+            else:
+                payload = redacted
+            text = _scrub_error_text(
+                json.dumps(payload, ensure_ascii=False),
+                secrets=secrets,
+            )
+        except (RecursionError, ValueError, TypeError):
+            return base
+    else:
+        if _UNCLOSED_SECRET_QUOTE_RE.search(text):
+            return base
+        text = _scrub_error_text(text, secrets=secrets)
     if len(text) > body_limit:
         text = text[:body_limit] + "…"
     return f"{base} body={text!r}"
@@ -1181,19 +1624,42 @@ def fetch_api_key(access_token: str) -> Dict[str, Any]:
       - ``{"ok": False, "reason": "request_failed", "detail": str}`` on
         network/OS failures
     """
+    if (
+        not isinstance(access_token, str)
+        or not access_token.strip()
+        or any(ord(ch) < 0x20 or ord(ch) >= 0x7F for ch in access_token)
+    ):
+        logger.warning("Failed to fetch API key: invalid access token")
+        return {
+            "ok": False,
+            "reason": "request_failed",
+            "detail": "Invalid access token",
+        }
+
     data: Optional[Dict[str, Any]] = None
     last_upstream: Optional[Dict[str, Any]] = None
 
     for attempt in range(_PROFILE_FETCH_ATTEMPTS):
         try:
-            req = Request(f"{_DEVICE_BASE}/profile")
+            req = Request(f"{_device_base()}/profile")
             req.add_header("Authorization", f"Bearer {access_token}")
-            with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
+            with _open_device_request(req, timeout=15) as resp:
+                data = _read_bounded_json_dict(resp)
+            if data is None:
+                logger.warning("Failed to fetch API key: invalid or oversized JSON response")
+                return {
+                    "ok": False,
+                    "reason": "request_failed",
+                    "detail": "Invalid or oversized profile response",
+                }
             break
         except HTTPError as exc:
-            detail = _http_error_detail(exc)
-            if 500 <= int(exc.code) <= 599:
+            try:
+                detail = _http_error_detail(exc, secrets=(access_token,))
+                status_code = int(exc.code)
+            finally:
+                _close_http_error(exc)
+            if 500 <= status_code <= 599:
                 logger.warning(
                     "Device auth /profile upstream error (attempt %s/%s): %s",
                     attempt + 1,
@@ -1203,7 +1669,7 @@ def fetch_api_key(access_token: str) -> Dict[str, Any]:
                 last_upstream = {
                     "ok": False,
                     "reason": "upstream_error",
-                    "http_status": int(exc.code),
+                    "http_status": status_code,
                     "detail": detail,
                 }
                 if attempt + 1 < _PROFILE_FETCH_ATTEMPTS:
@@ -1214,12 +1680,20 @@ def fetch_api_key(access_token: str) -> Dict[str, Any]:
             return {
                 "ok": False,
                 "reason": "http_error",
-                "http_status": int(exc.code),
+                "http_status": status_code,
                 "detail": detail,
             }
         except (URLError, OSError) as exc:
-            logger.warning("Failed to fetch API key: %s", exc)
-            return {"ok": False, "reason": "request_failed", "detail": str(exc)}
+            detail = _scrub_error_text(str(exc), secrets=(access_token,))
+            logger.warning("Failed to fetch API key: %s", detail)
+            return {"ok": False, "reason": "request_failed", "detail": detail}
+        except ValueError:
+            logger.warning("Failed to fetch API key: invalid request configuration")
+            return {
+                "ok": False,
+                "reason": "request_failed",
+                "detail": "Invalid request configuration",
+            }
 
     if data is None:
         # Defensive: loop exited without success or an explicit return.
@@ -1243,11 +1717,24 @@ def fetch_api_key(access_token: str) -> Dict[str, Any]:
     return {"ok": True, "api_key": api_key}
 
 
+def _device_handle_fallback_dir() -> Path:
+    """Return a per-user private fallback directory for the GitHub device handle."""
+    if os.name == "posix":
+        uid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
+        return Path(tempfile.gettempdir()) / f"last30days-{uid}"
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "last30days"
+    raw_user = os.environ.get("USERNAME") or os.environ.get("USER") or "user"
+    safe_user = re.sub(r"[^A-Za-z0-9._-]", "_", raw_user).strip("._-") or "user"
+    return Path(tempfile.gettempdir()) / f"last30days-{safe_user}"
+
+
 def _device_handle_path() -> Path:
     """Where run_github_start persists the device_code/interval for run_github_poll.
 
-    Kept next to the .env in the config dir; falls back to the OS temp dir when
-    no config dir is resolvable (clean/no-config mode).
+    Kept next to the .env in the config dir; falls back to a per-user private
+    directory when no config dir is resolvable (clean/no-config mode).
     """
     try:
         from . import env as _env
@@ -1256,21 +1743,104 @@ def _device_handle_path() -> Path:
             return _env.CONFIG_FILE.parent / ".github-device-handle.json"
     except Exception:
         pass
-    import tempfile
-
-    return Path(tempfile.gettempdir()) / "last30days-github-device-handle.json"
+    return _device_handle_fallback_dir() / "github-device-handle.json"
 
 
-def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
+def _ensure_private_handle_dir(directory: Path) -> None:
+    """Create and verify a private directory for persisting the device handle."""
+    directory = Path(directory)
+    is_junction = getattr(os.path, "isjunction", None)
+    if is_junction is not None and is_junction(directory):
+        raise OSError(f"Refusing to use junction directory: {directory}")
+    try:
+        st = os.lstat(directory)
+    except FileNotFoundError:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = os.lstat(directory)
+    if stat.S_ISLNK(st.st_mode):
+        raise OSError(f"Refusing to use symlink directory: {directory}")
+    if not stat.S_ISDIR(st.st_mode):
+        raise OSError(f"Expected a directory for device handle: {directory}")
+    if os.name == "posix":
+        euid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
+        if st.st_uid != euid:
+            raise OSError(f"Refusing to use device handle directory owned by another user: {directory}")
+        if directory == _device_handle_fallback_dir() and stat.S_IMODE(st.st_mode) != 0o700:
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            fd = os.open(directory, flags)
+            try:
+                fd_st = os.fstat(fd)
+                if not stat.S_ISDIR(fd_st.st_mode) or fd_st.st_uid != euid:
+                    raise OSError(f"Refusing to tighten untrusted device handle directory: {directory}")
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o700)
+            finally:
+                os.close(fd)
+
+
+def _persist_device_handle(handle: Dict[str, Any]) -> Path:
+    """Atomically persist the private GitHub device-flow handle with 0o600 permissions."""
+    path = _device_handle_path()
+    _ensure_private_handle_dir(path.parent)
+    replace_private_text(path, json.dumps(handle))
+    if os.name != "posix":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return path
+
+
+def _read_device_handle(path: Path) -> Dict[str, Any]:
+    """Read a persisted device handle without following symlinks or trusting foreign files."""
+    path = Path(path)
+    if os.name == "posix":
+        path = private_files._resolve_parent_only(path)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(path, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise OSError(f"Expected a regular device handle file: {path}")
+            euid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
+            if st.st_uid != euid:
+                raise OSError(f"Refusing device handle owned by another user: {path}")
+            if private_files._is_writable_by_others(st, euid):
+                raise OSError(f"Refusing device handle writable by other users: {path}")
+            with os.fdopen(fd, "r", encoding="utf-8") as stream:
+                fd = -1
+                raw = stream.read(65536)
+        finally:
+            if fd != -1:
+                os.close(fd)
+    else:
+        private_files._reject_symlink_or_nonregular(path)
+        raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, dict) or not data.get("device_code"):
+        raise ValueError("Invalid device handle payload")
+    return data
+
+
+def _start_device_flow(
+    *,
+    persist_handle: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
     """Submit the GitHub device flow and surface the code, without polling.
 
     Returns ``(public_result, handle)``. ``handle`` is None for the
     already-registered and error cases (nothing to poll); otherwise it carries
     the private poll state (``device_code``/``interval``/``user_code``/
     ``clipboard_ok``) that never belongs in the public, stdout-printed result.
-    Callers either persist the handle to a file (``run_github_start``, for a
-    separate poll process) or hand it straight to ``run_github_poll`` in-memory
-    (``run_full_device_auth``, so a failed file write can't strand the one-shot).
+    Callers either supply ``persist_handle`` (``run_github_start``, persisting
+    before printing the code or opening the browser so a write failure never
+    strands ``--github-poll``) or hand the handle straight to ``run_github_poll``
+    in-memory (``run_full_device_auth``).
     """
     import sys
     import webbrowser
@@ -1298,7 +1868,7 @@ def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
     # Validate the code shape BEFORE copying, labeling, or emitting it. A
     # non-conforming user_code (e.g. a key-shaped value) is never surfaced as a
     # GitHub device code; we stop rather than instruct the user to paste garbage.
-    if not _DEVICE_CODE_RE.match(user_code):
+    if not isinstance(user_code, str) or not _DEVICE_CODE_RE.match(user_code):
         logger.warning("Device auth returned a non-device-shaped user_code; aborting.")
         return (
             {
@@ -1307,6 +1877,52 @@ def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
             },
             None,
         )
+
+    if verification_uri is None:
+        verification_uri = ""
+    if verification_uri != "" and not _is_valid_verification_uri(verification_uri):
+        logger.warning("Device auth returned an untrusted verification_uri; aborting.")
+        return (
+            {
+                "status": "error",
+                "message": "ScrapeCreators returned an unexpected verification URI.",
+            },
+            None,
+        )
+
+    # Copy the code to the clipboard BEFORE opening the browser.
+    clipboard_ok = False
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(["pbcopy"], input=user_code.encode(), check=True, timeout=5)
+            clipboard_ok = True
+        except Exception:
+            pass  # pbcopy unavailable or failed, fall through
+
+    public = {
+        "status": "awaiting_authorization",
+        "user_code": user_code,
+        "verification_uri": verification_uri,
+        "clipboard_ok": clipboard_ok,
+    }
+    handle = {
+        "device_code": device_code,
+        "interval": interval,
+        "user_code": user_code,
+        "clipboard_ok": clipboard_ok,
+    }
+    if persist_handle is not None:
+        try:
+            persist_handle(handle)
+        except Exception as exc:
+            logger.warning("Could not persist device handle: %s", exc)
+            return (
+                {
+                    "status": "error",
+                    "message": "Could not persist GitHub device flow handle.",
+                },
+                None,
+            )
 
     # Structured stdout line for machine consumers.
     print(
@@ -1319,15 +1935,6 @@ def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
         ),
         flush=True,
     )
-
-    # Copy the code to the clipboard BEFORE opening the browser.
-    clipboard_ok = False
-    if sys.platform == "darwin":
-        try:
-            subprocess.run(["pbcopy"], input=user_code.encode(), check=True, timeout=5)
-            clipboard_ok = True
-        except Exception:
-            pass  # pbcopy unavailable or failed, fall through
 
     # Print the code as a plain HUMAN line on stdout too, so a foreground caller
     # sees it in the returned output even without reading the JSON. The clipboard
@@ -1357,38 +1964,31 @@ def _start_device_flow() -> "Tuple[Dict[str, Any], Optional[Dict[str, Any]]]":
         except Exception:
             print(f"Open: {verification_uri}", file=sys.stderr)
 
-    public = {
-        "status": "awaiting_authorization",
-        "user_code": user_code,
-        "verification_uri": verification_uri,
-        "clipboard_ok": clipboard_ok,
-    }
-    handle = {
-        "device_code": device_code,
-        "interval": interval,
-        "user_code": user_code,
-        "clipboard_ok": clipboard_ok,
-    }
     return (public, handle)
 
 
 def run_github_start() -> Dict[str, Any]:
     """Start the device flow and persist the poll handle for a later
     ``run_github_poll`` process. Returns the public result (never the private
-    device_code). See ``_start_device_flow`` for the returned statuses."""
-    public, handle = _start_device_flow()
-    if handle is not None:
-        # Persist the poll handle (0o600) so a separate --github-poll process can
-        # resume it. Best-effort: the in-memory one-shot path does not depend on
-        # this write succeeding.
-        path = _device_handle_path()
+    device_code). Fails closed with ``status="error"`` if handle persistence
+    fails so ``--github-poll`` is never stranded."""
+    persisted = False
+
+    def _persist(handle: Dict[str, Any]) -> None:
+        nonlocal persisted
+        _persist_device_handle(handle)
+        persisted = True
+
+    public, handle = _start_device_flow(persist_handle=_persist)
+    if handle is not None and not persisted:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            write_private_text(path, json.dumps(handle), encoding="utf-8")
-            if os.name != "posix":
-                os.chmod(path, 0o600)
+            _persist_device_handle(handle)
         except Exception as exc:
             logger.warning("Could not persist device handle: %s", exc)
+            return {
+                "status": "error",
+                "message": "Could not persist GitHub device flow handle.",
+            }
     return public
 
 
@@ -1406,7 +2006,7 @@ def run_github_poll(timeout: int = 300, *, _handle: Optional[Dict[str, Any]] = N
         data = _handle
     else:
         try:
-            data = json.loads(_device_handle_path().read_text(encoding="utf-8"))
+            data = _read_device_handle(_device_handle_path())
         except Exception:
             return {
                 "status": "error",
@@ -1427,8 +2027,15 @@ def run_github_poll(timeout: int = 300, *, _handle: Optional[Dict[str, Any]] = N
     )
 
     def _cleanup() -> None:
+        if _handle is not None:
+            return
         try:
-            _device_handle_path().unlink()
+            target = _device_handle_path()
+            if os.name == "posix":
+                target = private_files._resolve_parent_only(target)
+            else:
+                private_files._reject_symlink_or_nonregular(target)
+            target.unlink()
         except Exception:
             pass
 
@@ -1509,3 +2116,81 @@ def run_github_auth(timeout: int = 300) -> Dict[str, Any]:
     tokens.
     """
     return run_full_device_auth(timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Opt-in logged-in Reddit session (setup --reddit-session / --no-reddit-session)
+# ---------------------------------------------------------------------------
+
+REDDIT_SESSION_NOTE = (
+    "With a Reddit login, research reads Reddit as your own account (search, "
+    "comment search, communities, threads; never posts, votes, your feed, inbox "
+    "or saved items). Automated use of a logged-in account may breach Reddit's "
+    "terms and puts that account at risk."
+)
+
+
+def _reddit_scan_order(config: Dict[str, Any]) -> list[str]:
+    from . import env as _env
+
+    recorded = str(config.get(_env.REDDIT_FROM_BROWSER_VAR) or "").strip().lower()
+    order = [recorded] if recorded in _env.COOKIE_BROWSER_NAMES else []
+    return order + [b for b in _env.REDDIT_SETUP_BROWSERS if b not in order]
+
+
+def run_reddit_session_setup(
+    config: Dict[str, Any],
+    env_path: Optional[Path],
+    *,
+    consent: bool,
+    reader: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Record the user's Reddit-session answer and, on yes, find the login.
+
+    The answer itself is the consent, so this is the one place that reads the
+    reddit.com cookie outside a research run, and only on a yes. It reads
+    browsers in order (the recorded one, then Chrome, then the rest), stops at
+    the first with a ``reddit_session`` cookie, records that browser as
+    ``REDDIT_FROM_BROWSER`` and never prints or saves the cookie.
+    ``FROM_BROWSER=off`` and a Grok Bot host read nothing; a
+    ``BROWSER_CONSENT=false`` saved for X does not block this explicit yes. Either answer writes ``REDDIT_SESSION_OFFERED=true``
+    so a returning user is asked once.
+    """
+    from . import env as _env
+
+    host = str(config.get(_env.X_HOST_VAR) or os.environ.get(_env.X_HOST_VAR) or "").strip().lower()
+    if host == _env.GROK_BOT_HOST:
+        return {"status": "unavailable", "note": "The Reddit session is never used on a Grok Bot host."}
+    if env_path:
+        written = write_api_key(env_path, "true", key_name=_env.REDDIT_OFFERED_VAR, replace=True)
+        written = write_api_key(
+            env_path, "true" if consent else "false", key_name=_env.REDDIT_CONSENT_VAR, replace=True,
+        ) and written
+    else:
+        written = False
+    if not consent:
+        return {"status": "declined", "consent": False, "env_written": written}
+    result: Dict[str, Any] = {"consent": True, "env_written": written, "note": REDDIT_SESSION_NOTE}
+    probe = dict(config)
+    probe["_BROWSER_COOKIE_MODE"] = "read"
+    # This setup call is the Reddit yes itself, so only FROM_BROWSER=off vetoes it.
+    refusal = _env.global_cookie_refusal(probe, reddit_consent=True)
+    if refusal:
+        result.update(status="vetoed", reason=refusal, checked=[])
+        return result
+    checked = []
+    for browser in _reddit_scan_order(config):
+        cookie, state = (reader or _env.read_reddit_session_cookie)(config, browser)
+        checked.append({"browser": browser, "result": state})
+        if cookie:
+            result["env_written"] = bool(
+                env_path
+                and write_api_key(
+                    env_path, browser, key_name=_env.REDDIT_FROM_BROWSER_VAR, replace=True,
+                )
+                and written
+            )
+            result.update(status="found", browser=browser, checked=checked)
+            return result
+    result.update(status="not-found", checked=checked)
+    return result

@@ -25,6 +25,21 @@ release process.
   overseas opt-in, and a `login <platform>` flow that stores a session the user
   creates in its own config directory. It does not read the browser's cookie
   store. The hot-board image is excluded.
+- **`trove-pulse` is now upstream 4.6.0.** Upstream adds a brief-capture hook
+  installer and transcript harvesting. Trove vendors the code but does not
+  install hooks or read transcripts; the wrapper says so, and the local patch
+  keeps the sidecar and CDP lanes out, including the references upstream added
+  in preflight, doctor, and the runtime spec.
+- **`trove-ffmpeg` moves to upstream `c7dad34`.** It adds a review-page
+  generator and expands the template set. The upstream repo now also carries an
+  installer, an MCP server, and demo media; the vendoring whitelist excludes all
+  of them.
+- **`trove-diagram-design` moves to upstream `67dbb00`.** Adds PDF export,
+  seven diagram-type references, and a render-and-look step. The new example
+  HTML assets are not vendored.
+- **`trove-pulse-cn` moves to upstream `f560345`.** Hardens cookie-directory
+  handling and adds a temp-dir fallback for login state. Trove tightens the
+  cookie directory to owner-only on every use.
 - **New sound effects need a provenance record.** `trove-product-video`,
   `trove-beat-sync`, and `trove-video-review` follow upstream's retirement of its
   shared effect library. CC0 is the default, CC BY only when the credit ships with
