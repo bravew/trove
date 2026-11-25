@@ -145,22 +145,22 @@ sources:
           # Only the backtick-quoted invocation form, one entry per file that
           # contains it. The bare token also matches repository URLs, config
           # paths, and script names, so a wider pattern would corrupt them.
-          - {kind: replace-literal, path: references/agent-mode.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - { kind: replace-literal, path: references/agent-mode.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
           # Status lines the model is told to print verbatim.
-          - {kind: replace-literal, path: references/research-runbook.md, from: "/last30days - ", to: "/trove-research:trove-pulse - ", minimum_occurrences: 2}
+          - { kind: replace-literal, path: references/research-runbook.md, from: "/last30days - ", to: "/trove-research:trove-pulse - ", minimum_occurrences: 2 }
           # A suggested follow-up the model is told to offer the user.
-          - {kind: replace-literal, path: references/comparison.md, from: "with /last30days ", to: "with /trove-research:trove-pulse ", minimum_occurrences: 1}
-          - {kind: replace-literal, path: references/discovery.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3}
-          - {kind: replace-literal, path: references/followups.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3}
-          - {kind: replace-literal, path: references/hiring-signals.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: references/library-queue.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: references/runtime.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: references/save-html-brief.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2}
-          - {kind: replace-literal, path: references/setup-wizard.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2}
-          - {kind: replace-literal, path: references/synthesis.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: scripts/lib/doctor.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: scripts/lib/reddit_arctic.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
-          - {kind: replace-literal, path: scripts/lib/render.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1}
+          - { kind: replace-literal, path: references/comparison.md, from: "with /last30days ", to: "with /trove-research:trove-pulse ", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: references/discovery.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3 }
+          - { kind: replace-literal, path: references/followups.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 3 }
+          - { kind: replace-literal, path: references/hiring-signals.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: references/library-queue.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: references/runtime.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: references/save-html-brief.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2 }
+          - { kind: replace-literal, path: references/setup-wizard.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 2 }
+          - { kind: replace-literal, path: references/synthesis.md, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: scripts/lib/doctor.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: scripts/lib/reddit_arctic.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
+          - { kind: replace-literal, path: scripts/lib/render.py, from: "`/last30days", to: "`/trove-research:trove-pulse", minimum_occurrences: 1 }
         # Spec is 229 KB today and the selection is ~2.5 MB; both grow weekly.
         # Raising the globals would weaken the guard for the Vercel artifacts.
         policy:
@@ -179,14 +179,14 @@ sources:
       - id: trove-pulse-cn
         upstream_path: skills/last30days
         local_path: skills/research/trove-pulse-cn
-        base_sha: e0e41410de18466aceb505faee5ef998cacee1e8
-        base_tree_digest: sha256:204c56b0758a487de0985ef1821e7a277581a20e3def57c9d74ef84b9251d4fe
-        local_tree_digest: sha256:43317975716cc0168803745d38a4a8c6a0052bdc83cf538f15886c31d6a6a5b4
+        base_sha: f560345767af3ff89733d2c2b15714eac6a8f436
+        base_tree_digest: sha256:40630199a77f145c745f44755b43223c81ce0f732d6d2b47111206f73895c67e
+        local_tree_digest: sha256:f16927d0ecad94a61d428afec4572ca24513218db17647c85a321bb515bac25d
         patch_digest: sha256:34701c40acd25c0c8dd6d84841915a4b507580f10100f5a10c51084083e94ea1
-        checked_sha: e0e41410de18466aceb505faee5ef998cacee1e8
-        checked_at: "2026-11-03T06:58:38Z"
+        checked_sha: f560345767af3ff89733d2c2b15714eac6a8f436
+        checked_at: "2026-11-17T04:20:34Z"
         candidate_sha: null
-        imported_at: "2026-11-03T06:58:38Z"
+        imported_at: "2026-11-17T04:20:34Z"
         include:
           - SKILL.md
           - scripts/**
@@ -490,23 +490,23 @@ skills:
   - local_path: skills/media/trove-beat-sync
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [references/music-beat-sync.md, references/sound-design.md, references/sfx-sourcing.md]
+    upstream_paths: [ references/music-beat-sync.md, references/sound-design.md, references/sfx-sourcing.md ]
     evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   # Also reviewed: references/aesthetic-rules.md, gallery/ resolution rules.
   - local_path: skills/media/trove-shot-recipes
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [references/aesthetic-rules.md, references/shots]
+    upstream_paths: [ references/aesthetic-rules.md, references/shots ]
     evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   - local_path: skills/media/trove-video-review
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [references/final-review.md, references/aesthetic-rules.md]
+    upstream_paths: [ references/final-review.md, references/aesthetic-rules.md ]
     evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   - local_path: skills/media/trove-product-video
     origin: adapted
     source_id: video-shotcraft
-    upstream_paths: [SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md, template/public/audio/ATTRIBUTION.md]
+    upstream_paths: [ SKILL.md, references/pipeline.md, references/guided-free-creation.md, references/sequences/promo-energy-arc.md, template/TEMPLATE.md, template/THEMES.md, template/public/audio/ATTRIBUTION.md ]
     evidence_sha: 3ac67b75dd0b3bc2fd807c17f6b7ce35373eef3d
   - { local_path: skills/media/trove-broll-ingest, origin: original }
   - { local_path: skills/media/trove-take-cut, origin: original }
